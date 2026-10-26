@@ -138,23 +138,19 @@ sealed class MainForm : Form
         frontendStop.Click += delegate { StopFrontend(); };
         card.Controls.Add(frontendStop);
 
-        Button allStart = MakeButton("全部启动", new Point(24, 244), 150, 44, ButtonKind.Primary);
+        Button allStart = MakeButton("全部启动", new Point(24, 244), 186, 44, ButtonKind.Primary);
         allStart.Click += delegate { StartAll(); };
         Controls.Add(allStart);
 
-        Button allStop = MakeButton("全部关闭", new Point(186, 244), 150, 44, ButtonKind.Danger);
+        Button allStop = MakeButton("全部关闭", new Point(226, 244), 186, 44, ButtonKind.Danger);
         allStop.Click += delegate { StopAll(); };
         Controls.Add(allStop);
 
-        Button openDev = MakeButton("打开开发网页", new Point(348, 244), 160, 44, ButtonKind.Secondary);
-        openDev.Click += delegate { OpenUrl("http://localhost:8130"); };
-        Controls.Add(openDev);
+        Button openProduct = MakeButton("打开产品网页", new Point(428, 244), 186, 44, ButtonKind.Secondary);
+        openProduct.Click += delegate { OpenProductPage(); };
+        Controls.Add(openProduct);
 
-        Button openProd = MakeButton("打开生产网页", new Point(520, 244), 160, 44, ButtonKind.Secondary);
-        openProd.Click += delegate { OpenUrl("http://127.0.0.1:8030"); };
-        Controls.Add(openProd);
-
-        Button build = MakeButton("构建前端", new Point(692, 244), 124, 44, ButtonKind.Secondary);
+        Button build = MakeButton("构建前端", new Point(630, 244), 186, 44, ButtonKind.Secondary);
         build.Click += delegate { BuildFrontend(); };
         Controls.Add(build);
 
@@ -345,28 +341,19 @@ sealed class MainForm : Form
     {
         StartBackend();
         StartFrontend();
-        Log("等待服务就绪后自动打开网页...");
+        Log("等待服务就绪后自动打开产品网页...");
         ThreadPool.QueueUserWorkItem(delegate
         {
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < 80; i++)
             {
-                if (IsPortOpen(WebPort))
+                if (IsPortOpen(ApiPort) || IsPortOpen(WebPort))
                 {
-                    OpenUrl("http://localhost:8130");
+                    OpenProductPage();
                     return;
                 }
                 Thread.Sleep(500);
             }
-            for (int i = 0; i < 20; i++)
-            {
-                if (IsPortOpen(ApiPort))
-                {
-                    OpenUrl("http://127.0.0.1:8030");
-                    return;
-                }
-                Thread.Sleep(500);
-            }
-            Log("服务尚未就绪，请查看日志后手动打开网页。");
+            Log("服务尚未就绪，请查看日志后再打开产品网页。");
         });
     }
 
@@ -593,6 +580,21 @@ sealed class MainForm : Form
         {
             Log("打开目录失败：" + ex.Message);
         }
+    }
+
+    void OpenProductPage()
+    {
+        if (IsPortOpen(ApiPort))
+        {
+            OpenUrl("http://127.0.0.1:8030");
+            return;
+        }
+        if (IsPortOpen(WebPort))
+        {
+            OpenUrl("http://localhost:8130");
+            return;
+        }
+        Log("服务尚未启动，请先点击「全部启动」或启动后端/前端。");
     }
 
     void OpenUrl(string url)
