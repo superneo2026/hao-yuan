@@ -107,6 +107,17 @@ start.bat
 stop.bat
 ```
 
+### 桌面控制台（desktop.exe）
+
+双击根目录的 `desktop.exe` 打开图形化控制台（约 20 KB，仅依赖 Windows 自带的 .NET Framework 4.x）：
+
+- **全部启动 / 全部关闭**：一键管理后端与前端开发服务，启动后自动打开网页
+- **启动 / 停止后端**（8030）、**启动 / 停止前端**（8130）
+- **打开开发网页**（`http://localhost:8130`）、**打开生产网页**（`http://127.0.0.1:8030`）
+- **构建前端**、**打开项目目录**、每秒刷新的服务状态与实时运行日志
+
+关闭控制台窗口不会停止服务，如需停止请点击「全部关闭」或对应的停止按钮。源码位于 `desktop/`，修改后运行 `desktop\build.bat` 可重新编译。
+
 ### Linux / macOS
 
 ```bash
@@ -225,7 +236,9 @@ hao-yuan/
 ├── docs/screenshots/              界面截图
 ├── start.bat / stop.bat
 ├── start.sh / stop.sh
-└── dev.bat
+├── dev.bat
+├── desktop.exe                    图形化桌面控制台（启停服务 / 打开网页）
+└── desktop/                       desktop.exe 源码与构建脚本
 ```
 
 ### 数据与边界
@@ -383,7 +396,39 @@ npm run build
 
 ---
 
-## 7. 与 AI 助理的功能对齐
+## 7. Harness 公平评测结果
+
+> 完整报告：[test/testing/index.html](test/testing/index.html)（2026-10-25，deepseek-flash）  
+> 另有硬任务评测（mimo-v2.6-flash）：[test/testing/index-mimo.html](test/testing/index-mimo.html)
+
+**方法**：8 个可自动判分的编码任务（5 基础 + 3 困难）× 每任务 3 轮 × 3 个工具；统一 deepseek-flash、提示词、种子仓库与预算；运行结束后注入隐藏测试，并对 `tests/`、`pyproject.toml` 做 SHA-256 校验，篡改即 0 分。
+
+| 排名 | 工具 | 综合得分（产品加权） | 正确率 | 典型速度 | 尾延迟 | 成本 | 等权得分 |
+|---|---|---|---|---|---|---|---|
+| 1 | **豪源 HaoYuan** | **96.6** | 100.0 | 100.0（中位 30.3s） | 67.6（P90 159.4s） | 82.2（$0.364） | 95.0（第 2） |
+| 2 | OpenCode | 95.1 | 100.0 | 67.6（中位 44.8s） | 100.0（P90 107.7s） | 100.0（$0.299） | 96.8（第 1） |
+| 3 | Claude Code | 90.7 | 100.0 | 70.6（中位 42.9s） | 90.7（P90 118.7s） | 55.4（$0.540） | 91.7（第 3） |
+
+综合 = 0.70 × 正确率 + 0.15 × 典型速度 + 0.05 × 尾延迟 + 0.10 × 成本；等权口径将后两项改为 0.10 / 0.10。
+
+- 三者正确率均为 100%，差异集中在速度、尾延迟与 token 成本；豪源产品加权第一，OpenCode 等权反超。
+- 豪源任务中位耗时 30.3s 最短，T1/T2/T3/H1 四题中位最快；24 次运行完整性 100%。OpenCode 尾延迟与单任务成本最优；Claude Code token 成本最高。
+- 短板：H2 版本迁移中位 159.4s（OpenCode 101.1s），H3 出现过 260s 长尾；后续继续压缩迁移审计与自测回合。
+- 局限：仅覆盖 deepseek-flash、每任务 3 轮，任务为自建，不能替代 SWE-bench 等公开基准。
+- 自迭代：评测期间修复 Windows 管道适配、空回复/未写入保护、迁移验收审计、轻量 git diff 审计、完成态顺序，并回滚一次「过度自测」的负优化。
+
+复现：
+
+```bash
+cd test/bench
+python harness_bench.py run --batch final-r1 --tools haoyuan,claude,opencode --tasks all
+python aggregate.py
+python make_report.py
+```
+
+---
+
+## 8. 与 AI 助理的功能对齐
 
 | 能力 | 豪源 | 说明 |
 |---|---|---|
@@ -400,13 +445,13 @@ npm run build
 | 插件机制 | ✅ 增强 | 清单、依赖、生命周期、工具/Agent/路由/技能/前端元数据 |
 | 飞书远程指挥 | ⏳ 未纳入本版 | 接口层已解耦，可作为插件补充 |
 | ASR / TTS / 视频渲染 | ⏳ 未纳入本版 | 当前聚焦 AI 编程主链路 |
-| 权威 Benchmark | ⏳ 未重跑 | 需要真实模型 Key 与基准数据 |
+| 权威 Benchmark | ⏳ 公开基准未跑 | 已完成自建 8 任务公平评测（见第 7 节）；SWE-bench 等公开基准未重跑 |
 
 ---
 
-## 8. 后续路线（已预留架构）
+## 9. 后续路线（已预留架构）
 
-### 8.1 面向 16GB 显存本地训练的 Skills 库
+### 9.1 面向 16GB 显存本地训练的 Skills 库
 
 计划内置：
 
@@ -417,7 +462,7 @@ npm run build
 
 豪源当前的 Skill 机制已经是文件级、可版本化的，后续可直接把训练方法论文档作为 Skill 注入 Agent。
 
-### 8.2 插件化具身 Harness
+### 9.2 插件化具身 Harness
 
 `plugins/embodied` 已演示：
 
@@ -434,7 +479,7 @@ npm run build
 
 ---
 
-## 9. API 速览
+## 10. API 速览
 
 统一前缀 `/api`，响应格式 `{ code, data, message }`。
 
@@ -457,7 +502,7 @@ npm run build
 
 ---
 
-## 10. 开发与测试
+## 11. 开发与测试
 
 ```bash
 cd api
