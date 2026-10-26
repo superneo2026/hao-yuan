@@ -1,0 +1,27 @@
+{
+  "name": "coding",
+  "title": "Coding Agent",
+  "version": "1.0.0",
+  "description": "Core coding agent: repo-aware reading, symbol search, minimal patches, shell verification, subagents, and plan tracking.",
+  "author": "HaoYuan",
+  "requires": [],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "contributes": {
+    "agents": ["coding", "general"],
+    "tools": [
+      "read_file", "read_range", "search_symbol", "apply_patch", "write_file", "edit_file",
+      "multi_edit", "glob", "grep", "list_dir", "project_scan", "run_shell", "git",
+      "delete_path", "move_path", "web_scaffold", "web_audit", "task"
+    ],
+    "skills": true
+  },
+  "frontend": {
+    "nav": [
+      { "label": "Workbench", "path": "/", "icon": "terminal" }
+    ],
+    "commands": [
+      { "id": "coding.new-session", "title": "New coding session", "shortcut": "Ctrl+N" }
+    ]
+  }
+}

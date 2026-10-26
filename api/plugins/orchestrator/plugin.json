@@ -1,0 +1,17 @@
+{
+  "name": "orchestrator",
+  "title": "Multi-Agent Orchestrator",
+  "version": "1.0.0",
+  "description": "Decompose a goal into a task DAG, run isolated git worktree workers in parallel, then merge and verify.",
+  "author": "HaoYuan",
+  "requires": ["coding"],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "routes": "routes.py",
+  "contributes": {
+    "routes": ["/orchestrations"],
+    "frontend": {
+      "nav": [{ "label": "Orchestrator", "path": "/orchestrator", "icon": "network" }]
+    }
+  }
+}

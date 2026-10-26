@@ -1,0 +1,18 @@
+{
+  "name": "plans",
+  "title": "Plan Authoring",
+  "version": "1.0.0",
+  "description": "Structured execution plans and standalone HTML proposal documents with KPIs, risks and milestones.",
+  "author": "HaoYuan",
+  "requires": ["coding"],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "contributes": {
+    "agents": ["planner"],
+    "tools": ["plan_task", "update_plan", "make_plan"],
+    "skills": true
+  },
+  "frontend": {
+    "nav": [{ "label": "Plans", "path": "/plans", "icon": "document" }]
+  }
+}

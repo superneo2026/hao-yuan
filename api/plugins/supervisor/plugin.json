@@ -1,0 +1,17 @@
+{
+  "name": "supervisor",
+  "title": "AI Supervisor",
+  "version": "1.0.0",
+  "description": "Cross-session health monitoring, stale task watchdog, approvals overview, and supervisor console chat.",
+  "author": "HaoYuan",
+  "requires": ["coding"],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "routes": "routes.py",
+  "contributes": {
+    "routes": ["/supervisor/overview", "/supervisor/console", "/supervisor/act"],
+    "frontend": {
+      "nav": [{ "label": "Console", "path": "/console", "icon": "activity" }]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "video",
+  "title": "Video Storyboard",
+  "version": "1.0.0",
+  "description": "Video planning and shot-by-shot storyboard deliverables (HTML). Rendering is intentionally left to external tools.",
+  "author": "HaoYuan",
+  "requires": ["plans"],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "contributes": {
+    "agents": ["video"],
+    "tools": ["make_storyboard"],
+    "skills": true
+  },
+  "frontend": {
+    "nav": [{ "label": "Storyboards", "path": "/storyboards", "icon": "video" }]
+  }
+}
