@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   { path: '/', name: 'workbench', component: () => import('../views/Workbench.vue') },
+  { path: '/s/:id', name: 'session', component: () => import('../views/Workbench.vue') },
   { path: '/console', name: 'console', component: () => import('../views/Console.vue') },
   { path: '/skills', name: 'skills', component: () => import('../views/Skills.vue') },
   { path: '/plugins', name: 'plugins', component: () => import('../views/Plugins.vue') },

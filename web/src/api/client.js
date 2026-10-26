@@ -46,7 +46,7 @@ export const api = {
   purgeSession: (id) => request(`/api/sessions/${id}/purge`, { method: 'DELETE' }),
   clearSession: (id) => request(`/api/sessions/${id}/clear`, { method: 'POST' }),
   messages: (id) => request(`/api/sessions/${id}/messages`),
-  sendMessage: (id, content) => request(`/api/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify({ content }) }),
+  sendMessage: (id, content, locale = '') => request(`/api/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify({ content, locale }) }),
   events: (id, afterId = 0) => request(`/api/sessions/${id}/events${qs({ after_id: afterId })}`),
   cancel: (id) => request(`/api/sessions/${id}/cancel`, { method: 'POST' }),
   resume: (id) => request(`/api/sessions/${id}/resume`, { method: 'POST' }),

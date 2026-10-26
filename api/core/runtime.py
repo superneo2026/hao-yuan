@@ -72,16 +72,43 @@ _CODE_RE = re.compile(r"(^|\n)\s*(def |class |function |import |from |const |let
 _NEGATION_RE = re.compile(r"(?:不要|无需|不用|不必|禁止|别)[^。；;！!\n]{0,24}")
 _SMALLTALK_RE = re.compile(
     r"^("
-    r"你好|您好|哈喽|哈啰|嗨|hi|hello|hey|在吗|在不在|在么|早上好|中午好|下午好|晚上好|早安|晚安|"
+    r"(?:你|您)+好|哈喽|哈啰|嗨|(?:hi|hello|hey)(?:\s+there)?|howdy|在吗|在不在|在么|"
+    r"早上好|中午好|下午好|晚上好|早安|晚安|good\s+(?:morning|afternoon|evening|night)|"
+    r"最近(?:怎么样|好吗|如何|咋样|忙吗|在干嘛)|这几天(?:怎么样|好吗|如何)|今天(?:怎么样|好吗|如何)|还好吗|在干嘛|忙吗|"
+    r"how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|nice\s+to\s+meet\s+you|"
     r"谢谢(?:你|您)?|感谢(?:你|您)?|多谢|辛苦了|thanks|thank you|thx|3q|再见|拜拜|bye|goodbye|"
     r"你是谁|你是哪位|你叫什么(?:名字)?|你的名字(?:是)?(?:什么|啥)?|你是什么|你能做什么|你会做什么|"
     r"你能干什么|你会干什么|你会啥|你的能力(?:是什么|如何|怎么样)?|介绍一下你自己|自我介绍|介绍下你自己|"
     r"嗯|哦|噢|好的|好|行|ok|okay|收到|明白|了解|哈哈|嘿嘿|嘻嘻"
-    r")[呀啊哦吧啦呢嘛哈哟了的~～!！。，,.?？…\s]*$",
+    r")[呀啊哦吧啦呢嘛哈哟了吗呗喔的~～!！。，,.?？…\s]*$",
     re.I,
 )
 _QA_START_RE = re.compile(r"^(?:请问|可以|能不能|能否|可不可以|是否|如何|怎么|怎样|为什么|为啥|什么|哪些|哪个|多少|多久|会不会|有没有|要不要|该不该|是不是|how|what|why|which|who|when|where|can|could|is|are|do|does|should|would)", re.I)
 _REQUEST_MARK_RE = re.compile(r"(?:帮我|帮忙|请你|麻烦你|给我|替我|代为|执行一下|开始做|直接做|help\s+(?:me|us))", re.I)
+
+CHAT_ACTION_HINTS = (
+    "帮我", "帮忙", "请你", "麻烦你", "给我", "替我", "代为",
+    "执行", "运行", "启动", "停止", "重启", "关闭", "安装", "部署", "构建", "编译",
+    "测试", "修复", "修改", "改成", "改一下", "改下", "调整", "替换", "换成", "重构", "实现", "开发",
+    "创建", "新建", "编写", "写入", "写个", "写一个", "写一下", "添加", "增加", "加上", "补上", "删除",
+    "移除", "删掉", "去掉", "重命名", "移动", "复制", "处理", "弄", "搞", "做个", "做一个", "做一下",
+    "查看", "看看", "看一下", "读取", "打开", "列出", "搜索", "查找", "查一下", "检查", "定位", "分析",
+    "审查", "评审", "优化", "调试", "排查", "提交", "回滚", "合并", "拉取", "推送", "生成", "设计",
+    "规划", "继续", "接着", "下一步", "往下", "开始",
+    "change", "adjust", "replace", "tweak", "improve",
+    "write", "create", "add", "implement", "fix", "debug", "refactor", "update", "modify", "delete",
+    "remove", "rename", "move", "copy", "run", "execute", "build", "compile", "test", "install",
+    "deploy", "start", "stop", "restart", "open", "read", "list", "search", "find", "show", "check",
+    "analyze", "review", "optimize", "generate", "design", "plan", "commit", "push", "pull", "merge",
+    "continue", "proceed",
+)
+CHAT_CONTEXT_HINTS = (
+    "项目", "仓库", "代码", "文件", "目录", "工作区",
+    "日志", "分支", "配置", "函数", "模块", "页面", "前端", "后端", "脚本", "命令",
+    "project", "repo", "code", "file", "directory", "workspace",
+    "branch", "config", "function", "module", "page",
+    "frontend", "backend", "script", "command", "error", "bug",
+)
 
 READONLY_TOOLS = ("read_file", "read_range", "search_symbol", "glob", "grep", "list_dir", "project_scan")
 
@@ -97,6 +124,7 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Use plan_task for multi-step work and update_plan as you progress.
 - Never fabricate results. If something cannot be verified, say exactly what is unverified and why.
 - Answer in the user's language. Be concise and outcome-oriented.
+- If the user only greets you or makes casual conversation, reply naturally and do not inspect the workspace, call tools, or start a task.
 - Do not run destructive commands, do not push to git, and do not touch files outside the workspace.
 """
 
@@ -168,6 +196,29 @@ def is_question(text: str) -> bool:
     return bool(_QA_START_RE.match(value)) and not _PATH_RE.search(value)
 
 
+def is_casual_chat(text: str) -> bool:
+    """Detect greetings, social chat and general questions that need no workspace work."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    if is_smalltalk(value):
+        return True
+    if len(value) > 80:
+        return False
+    if _PATH_RE.search(value) or _CODE_RE.search(value):
+        return False
+    lowered = value.lower()
+    if any(hint in value for hint in CHAT_ACTION_HINTS):
+        return False
+    if any(hint in value for hint in COMPLEX_HINTS):
+        return False
+    if any(hint in lowered for hint in DEBUG_HINTS + TERMINAL_HINTS):
+        return False
+    if any(hint in lowered for hint in CHAT_CONTEXT_HINTS):
+        return False
+    return not _REQUEST_MARK_RE.search(value)
+
+
 SPEC_AUDIT_HINTS = (
     "要求", "必须", "不得", "禁止", "保留", "兼容", "边界", "并发", "幂等", "原子",
     "默认", "补齐", "严格", "所有", "每个", "至少", "不能", "不要修改", "无损",
@@ -197,7 +248,7 @@ READ_ONLY_HINTS = (
 
 
 def needs_write(text: str, qa: bool, kind: str, workspace: bool) -> bool:
-    if not workspace or qa or kind not in ("dev", "coding"):
+    if not workspace or qa or kind not in ("dev", "coding") or is_casual_chat(text):
         return False
     value = (text or "").lower()
     return not any(hint in value for hint in READ_ONLY_HINTS)
@@ -277,6 +328,9 @@ class AgentRuntime:
                 break
 
         requested = self._choose_kind(session, text)
+        casual = is_casual_chat(text)
+        if casual:
+            requested = "general"
         agent = self._choose_agent(session, requested, text)
         provider, model = resolve(session.get("provider"), session.get("model"))
         level = estimate_complexity(text, any(s.get("s") in ("pending", "doing") for s in _plan_steps(session)))
@@ -284,12 +338,12 @@ class AgentRuntime:
         task_type = detect_task_type(text)
         qa = is_question(text)
         audit = needs_spec_audit(text, level, bool(session.get("workspace")), requested, qa)
-        write_required = needs_write(text, qa, requested, bool(session.get("workspace")))
-        thinking = self._thinking(session, provider, lite, level, qa)
+        write_required = level != "simple" and needs_write(text, qa, requested, bool(session.get("workspace")))
+        thinking = self._thinking(session, provider, lite, level, qa or casual)
         run = await self.storage.create_run(session_id, provider, model, text)
         run_id = run["id"]
 
-        matched, skill_how = ([], "no skills") if qa and not session.get("skills") else self.skills.match(
+        matched, skill_how = ([], "no skills") if (qa or casual) and not session.get("skills") else self.skills.match(
             requested, text, self._selected_skills(session)
         )
         payload_skills = [{"name": skill.name, "title": skill.title, "source": skill.source} for skill in matched]
@@ -308,12 +362,30 @@ class AgentRuntime:
                 "kind": requested,
                 "agent": agent.name,
                 "qa": qa,
+                "casual": casual,
             },
             run_id,
         )
 
         try:
-            await self._drive(session, agent, requested, provider, model, thinking, lite, task_type, qa, audit, matched, skill_how, run_id, text, write_required)
+            await self._drive(
+                session,
+                agent,
+                requested,
+                provider,
+                model,
+                thinking,
+                lite,
+                task_type,
+                qa,
+                audit,
+                matched,
+                skill_how,
+                run_id,
+                text,
+                write_required,
+                casual,
+            )
         except asyncio.CancelledError:
             await self.storage.update_session(session_id, status="error", error="用户取消")
             await self.emit(session_id, "session.status", {"status": "error", "error": "用户取消"}, run_id)
@@ -411,6 +483,7 @@ class AgentRuntime:
         run_id: str,
         user_text: str = "",
         write_required: bool = False,
+        casual: bool = False,
     ) -> None:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
@@ -420,7 +493,9 @@ class AgentRuntime:
                 repo_map_text = await asyncio.to_thread(repoindex.repo_map, workspace)
             except Exception:
                 repo_map_text = ""
-        system = self._system_prompt(session, agent, kind, provider, model, task_type, lite, qa, matched, skill_how, repo_map_text)
+        system = self._system_prompt(
+            session, agent, kind, provider, model, task_type, lite, qa, matched, skill_how, repo_map_text, casual
+        )
         recent, summary, cursor = await self.context.load(session)
         if summary:
             system += "\n\n--- Compressed history memory ---\n" + summary
@@ -709,9 +784,10 @@ class AgentRuntime:
         if CHECKPOINT_ENABLED:
             await durability.clear_checkpoints(self.storage, session_id)
         await self.storage.finish_run(run_id, "done", output=state["final_text"], step_count=state["total_steps"])
-        await self.storage.update_session(session_id, status="done", error="")
         await self.emit(session_id, "done", {"summary": "turn complete", "text": state["final_text"]}, run_id)
         await self.emit(session_id, "session.status", {"status": "done"}, run_id)
+        await self.events.flush()
+        await self.storage.update_session(session_id, status="done", error="")
 
     async def _execute_calls(
         self,
@@ -1040,6 +1116,7 @@ class AgentRuntime:
         matched: list,
         skill_how: str,
         repo_map_text: str,
+        casual: bool = False,
     ) -> str:
         workspace = session.get("workspace") or ""
         parts = [SYSTEM_RULES]
@@ -1061,6 +1138,11 @@ class AgentRuntime:
             )
         if qa:
             parts.append("\n# Question mode\nThe user is asking a question, not requesting execution. Answer clearly without starting a task loop.\n")
+        if casual:
+            parts.append(
+                "\n# Conversation mode\nThis is casual conversation or a general question, not a workspace task. "
+                "Answer directly and naturally. Do not inspect the workspace, call tools, or start a task loop.\n"
+            )
         if kind == "plan":
             parts.append(
                 "\n# Plan document mode\nWrite a rigorous proposal. Use make_plan to produce a standalone HTML document with "
@@ -1094,14 +1176,15 @@ class AgentRuntime:
                 )
         if matched:
             parts.append(SkillLibrary.render(matched, skill_how))
-        if repo_map_text:
-            parts.append("\n\n# Repository map (paths and key symbols)\n" + repo_map_text)
-        project_memory = self._read_project_memory(workspace)
-        if project_memory:
-            parts.append("\n\n# Project memory (PROJECT.md / AGENTS.md)\n" + project_memory)
-        plan = self._plan_text(session)
-        if plan:
-            parts.append("\n\n# Current plan\n" + plan)
+        if not casual:
+            if repo_map_text:
+                parts.append("\n\n# Repository map (paths and key symbols)\n" + repo_map_text)
+            project_memory = self._read_project_memory(workspace)
+            if project_memory:
+                parts.append("\n\n# Project memory (PROJECT.md / AGENTS.md)\n" + project_memory)
+            plan = self._plan_text(session)
+            if plan:
+                parts.append("\n\n# Current plan\n" + plan)
         return "\n".join(parts)
 
     @staticmethod

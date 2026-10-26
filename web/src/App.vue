@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { boot, closePalette, openPalette, setTheme, state, toggleSidebar } from './stores/app'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { boot, closePalette, openPalette, selectSession, setTheme, state, toggleSidebar } from './stores/app'
 import { t } from './i18n'
 import CommandPalette from './components/CommandPalette.vue'
 import Icon from './components/Icon.vue'
@@ -11,6 +11,34 @@ import SessionList from './components/SessionList.vue'
 import ToastStack from './components/ToastStack.vue'
 
 const router = useRouter()
+const route = useRoute()
+
+watch(
+  () => state.currentId,
+  (id) => {
+    if (!id) {
+      if (route.name === 'session') router.replace('/')
+      return
+    }
+    if (route.name !== 'workbench' && route.name !== 'session') return
+    const target = `/s/${encodeURIComponent(id)}`
+    if (route.fullPath !== target) router.replace(target)
+  }
+)
+
+watch(
+  () => route.fullPath,
+  () => {
+    const id = typeof route.params.id === 'string' ? route.params.id : ''
+    if (route.name === 'session') {
+      if (id && id !== state.currentId) selectSession(id, false)
+      return
+    }
+    if (route.name === 'workbench' && !id && state.currentId) {
+      router.replace(`/s/${encodeURIComponent(state.currentId)}`)
+    }
+  }
+)
 
 const navItems = [
   { path: '/', labelKey: 'nav.workbench', icon: 'terminal' },
@@ -83,7 +111,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey))
 
       <div class="sidebar-scroll">
         <nav class="nav-section">
-          <router-link v-for="item in navItems" :key="item.path" :to="item.path" class="nav-link" @click="state.mobileNavOpen = false">
+          <router-link
+            v-for="item in navItems"
+            :key="item.path"
+            :to="item.path"
+            class="nav-link"
+            :class="{ 'router-link-active': item.path === '/' && route.name === 'session' }"
+            @click="state.mobileNavOpen = false"
+          >
             <Icon :name="item.icon" :size="16" class="icon" />
             <span>{{ t(item.labelKey) }}</span>
           </router-link>

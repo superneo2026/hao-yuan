@@ -6,6 +6,7 @@ import { i18n, setLocale, t } from '../i18n'
 const LAST_SESSION = 'hy.lastSession'
 const THEME = 'hy.theme.v2'
 const SIDEBAR = 'hy.sidebar'
+const OPEN_TABS = 'hy.openTabs.v1'
 
 function safeJson(text, fallback) {
   try {
@@ -13,6 +14,16 @@ function safeJson(text, fallback) {
     return value ?? fallback
   } catch {
     return fallback
+  }
+}
+
+function sessionIdFromHash() {
+  const match = (window.location.hash || '').match(/^#\/s\/([^/?#]+)/)
+  if (!match) return ''
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return ''
   }
 }
 
@@ -28,6 +39,11 @@ export const state = reactive({
   settings: { gate: { mode: 'ask', allow: [] }, default_workspace: '', theme: 'light' },
   sessions: [],
   currentId: localStorage.getItem(LAST_SESSION) || '',
+  openSessionIds: (() => {
+    const stored = safeJson(localStorage.getItem(OPEN_TABS), [])
+    if (!Array.isArray(stored)) return []
+    return [...new Set(stored.filter((id) => typeof id === 'string' && id))]
+  })(),
   session: null,
   messages: [],
   artifacts: [],
@@ -124,6 +140,27 @@ export function closePalette() {
   state.paletteOpen = false
 }
 
+function persistOpenTabs() {
+  try {
+    localStorage.setItem(OPEN_TABS, JSON.stringify(state.openSessionIds))
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function ensureOpenTab(id) {
+  if (!id || state.openSessionIds.includes(id)) return
+  state.openSessionIds.push(id)
+  persistOpenTabs()
+}
+
+function dropOpenTab(id) {
+  const index = state.openSessionIds.indexOf(id)
+  if (index < 0) return
+  state.openSessionIds.splice(index, 1)
+  persistOpenTabs()
+}
+
 function updateSessionInList(patch) {
   if (!patch?.id) return
   const index = state.sessions.findIndex((item) => item.id === patch.id)
@@ -155,7 +192,10 @@ function applyEvent(event) {
     if (type === 'session.updated') updateSessionInList({ id: sessionId, ...payload })
     if (type === 'session.created') loadSessions()
     if (type === 'message.saved' && payload.role === 'user') {
-      updateSessionInList({ id: sessionId, updated_at: new Date().toISOString() })
+      const patch = { id: sessionId, updated_at: new Date().toISOString() }
+      const listed = state.sessions.find((item) => item.id === sessionId)
+      if (listed && !listed.first_question) patch.first_question = payload.content
+      updateSessionInList(patch)
     }
     return
   }
@@ -189,6 +229,10 @@ function applyEvent(event) {
             content: payload.content || '',
             created_at: event.time
           })
+        }
+        if (state.session && !state.session.first_question) {
+          state.session = { ...state.session, first_question: payload.content || '' }
+          updateSessionInList({ id: sessionId, first_question: payload.content || '' })
         }
         state.scrollTick++
       } else if (payload.role === 'assistant') {
@@ -298,6 +342,7 @@ function applyEvent(event) {
     }
     case 'session.updated': {
       if (state.session) state.session = { ...state.session, ...payload }
+      updateSessionInList({ id: sessionId, ...payload })
       break
     }
     case 'session.created': {
@@ -368,6 +413,18 @@ function scheduleRefresh() {
   refreshTimer = setTimeout(() => refreshCurrent(), 220)
 }
 
+function clearCurrentSession() {
+  stopSessionStream()
+  requestToken++
+  state.currentId = ''
+  state.session = null
+  state.messages = []
+  state.artifacts = []
+  state.plan = { title: '', steps: [] }
+  state.live.approvals = []
+  localStorage.removeItem(LAST_SESSION)
+}
+
 export async function boot() {
   if (state.booted) return
   setLocale(i18n.locale, false)
@@ -387,7 +444,10 @@ export async function boot() {
     state.skills = skills
     state.settings = { ...state.settings, ...settings }
     await loadSessions()
-    if (state.currentId && state.sessions.some((item) => item.id === state.currentId)) {
+    const routed = sessionIdFromHash()
+    if (routed && state.sessions.some((item) => item.id === routed)) {
+      await selectSession(routed, false)
+    } else if (state.currentId && state.sessions.some((item) => item.id === state.currentId)) {
       await selectSession(state.currentId, false)
     } else if (state.sessions.length) {
       const visible = state.sessions.find((item) => !item.hidden)
@@ -413,6 +473,12 @@ export async function boot() {
 export async function loadSessions() {
   const sessions = await api.sessions(true)
   state.sessions = sessions
+  const valid = new Set(sessions.map((item) => item.id))
+  const nextTabs = state.openSessionIds.filter((id) => valid.has(id))
+  if (nextTabs.length !== state.openSessionIds.length) {
+    state.openSessionIds = nextTabs
+    persistOpenTabs()
+  }
   return sessions
 }
 
@@ -421,6 +487,7 @@ export async function selectSession(id, navigate = true) {
   stopSessionStream()
   state.currentId = id
   localStorage.setItem(LAST_SESSION, id)
+  ensureOpenTab(id)
   const token = ++requestToken
   state.live.streams = {}
   state.live.reasoning = {}
@@ -439,6 +506,10 @@ export async function selectSession(id, navigate = true) {
     if (token !== requestToken) return
     state.session = detail.session
     state.session.pending = detail.session.pending
+    if (!state.session.first_question) {
+      const listed = state.sessions.find((item) => item.id === id)
+      if (listed?.first_question) state.session.first_question = listed.first_question
+    }
     state.plan = safeJson(detail.session.plan, { title: '', steps: [] })
     if (detail.session.pending) state.live.approvals = [detail.session.pending]
     updateSessionInList(detail.session)
@@ -457,6 +528,17 @@ export async function selectSession(id, navigate = true) {
   } catch (error) {
     toast(error.message, 'bad')
   }
+}
+
+export async function closeSessionTab(id) {
+  const index = state.openSessionIds.indexOf(id)
+  if (index < 0) return
+  state.openSessionIds.splice(index, 1)
+  persistOpenTabs()
+  if (state.currentId !== id) return
+  const nextId = state.openSessionIds[index] || state.openSessionIds[index - 1] || ''
+  if (nextId) await selectSession(nextId)
+  else clearCurrentSession()
 }
 
 export async function refreshCurrent() {
@@ -510,9 +592,19 @@ export async function sendMessage(content) {
     session = await createSession({ kind: 'auto' })
   }
   const streamAfterId = sessionStream?.lastId ?? state.session?.last_event_id ?? 0
+  const firstQuestion = !session.first_question
   state.busy.sending = true
   try {
-    const result = await api.sendMessage(session.id, text)
+    const result = await api.sendMessage(session.id, text, i18n.locale)
+    if (firstQuestion) {
+      if (state.session && !state.session.first_question) {
+        state.session = { ...state.session, first_question: text }
+      }
+      const listed = state.sessions.find((item) => item.id === session.id)
+      if (listed && !listed.first_question) {
+        updateSessionInList({ id: session.id, first_question: text })
+      }
+    }
     startSessionStream(session.id, streamAfterId)
     if (!state.messages.some((item) => item.id === result.msg_id)) {
       state.messages.push({ id: result.msg_id, role: 'user', content: text, created_at: new Date().toISOString() })
@@ -564,17 +656,13 @@ export async function hideSession(id) {
   const target = id || state.currentId
   if (!target) return
   await api.hideSession(target)
+  dropOpenTab(target)
   await loadSessions()
-  if (state.currentId === target) {
-    const next = state.sessions.find((item) => !item.hidden)
-    if (next) await selectSession(next.id)
-    else {
-      state.currentId = ''
-      state.session = null
-      state.messages = []
-      localStorage.removeItem(LAST_SESSION)
-    }
-  }
+  if (state.currentId !== target) return
+  const openTab = state.openSessionIds.find((tabId) => state.sessions.some((item) => item.id === tabId))
+  const visible = openTab || state.sessions.find((item) => !item.hidden)?.id || ''
+  if (visible) await selectSession(visible)
+  else clearCurrentSession()
 }
 
 export async function purgeSession(id) {
@@ -582,13 +670,12 @@ export async function purgeSession(id) {
   if (!target) return
   await api.purgeSession(target)
   toast(t('toast.sessionDeleted'), 'good')
+  dropOpenTab(target)
   await loadSessions()
-  if (state.currentId === target) {
-    state.currentId = ''
-    state.session = null
-    state.messages = []
-    localStorage.removeItem(LAST_SESSION)
-  }
+  if (state.currentId !== target) return
+  const next = state.openSessionIds.find((tabId) => state.sessions.some((item) => item.id === tabId)) || ''
+  if (next) await selectSession(next)
+  else clearCurrentSession()
 }
 
 export async function clearMessages() {
@@ -770,6 +857,6 @@ export async function mergeOrchestration(id) {
 export function navigateTo(sessionId) {
   state.currentId = sessionId
   localStorage.setItem(LAST_SESSION, sessionId)
-  window.location.hash = '#/'
-  selectSession(sessionId)
+  window.location.hash = `#/s/${encodeURIComponent(sessionId)}`
+  selectSession(sessionId, false)
 }

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { createSession, state, toast } from '../stores/app'
-import { skillTitle, t } from '../i18n'
+import { sessionTitle, skillTitle, t } from '../i18n'
 import DirPicker from './DirPicker.vue'
 import Icon from './Icon.vue'
 import Modal from './Modal.vue'
@@ -75,8 +75,8 @@ async function create() {
   try {
     const session = await createSession(form.value)
     emit('close')
-    router.push('/')
-    toast(t('session.created', { title: session.title }), 'good')
+    router.push(`/s/${encodeURIComponent(session.id)}`)
+    toast(t('session.created', { title: sessionTitle(session) }), 'good')
   } catch (error) {
     toast(error.message, 'bad')
   } finally {

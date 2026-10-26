@@ -29,8 +29,8 @@ def register(ctx) -> None:
             title="HaoYuan General Assistant",
             description="Chat-only assistant when no workspace is bound.",
             instructions=(
-                "Answer clearly and concisely. When the user needs file or command access, explain that a workspace must "
-                "be bound first."
+                "Answer clearly and concisely. If no workspace is bound and the user needs file or command access, "
+                "explain that a workspace must be bound first."
             ),
             tools=[],
             auto_skills=True,

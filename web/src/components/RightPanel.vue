@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { artifactUrl } from '../api/client'
 import { activeSkills, currentSession, openDiff, openFile, state, tokenCount } from '../stores/app'
-import { kindLabel, skillTitle, t } from '../i18n'
+import { kindLabel, sessionTitle, skillTitle, t } from '../i18n'
 import FileTree from './FileTree.vue'
 import Icon from './Icon.vue'
 import PlanPanel from './PlanPanel.vue'
@@ -76,7 +76,7 @@ const statusMap = {
       <template v-if="state.activeRightTab === 'overview'">
         <div class="overview-head">
           <div class="tiny faint">{{ t('session.currentSession') }}</div>
-          <div class="overview-title">{{ session?.title || t('session.noSession') }}</div>
+          <div class="overview-title">{{ session ? sessionTitle(session) : t('session.noSession') }}</div>
           <div class="row" style="gap: 6px; margin-top: 6px">
             <StatusPill :status="session?.status || 'idle'" />
             <span class="badge">{{ kindLabel(session?.kind) }}</span>

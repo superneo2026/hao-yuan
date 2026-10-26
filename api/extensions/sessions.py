@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from typing import Any
 
@@ -19,6 +20,101 @@ from extensions.common import fail, ok
 router = APIRouter(prefix=prefix, tags=["sessions"])
 
 THINKING_LEVELS = ("", "auto", "off", "low", "high")
+
+DEFAULT_SESSION_TITLES = {
+    "",
+    "New task",
+    "New coding task",
+    "New plan",
+    "New storyboard",
+    "Robot task",
+    "New conversation",
+    "Untitled",
+    "新建任务",
+    "新任务",
+    "新对话",
+    "新会话",
+    "新建会话",
+    "未命名会话",
+    "新方案",
+    "新分镜",
+    "机器人任务",
+}
+TITLE_LANGUAGES = {
+    "zh-CN": "Simplified Chinese",
+    "zh-TW": "Traditional Chinese",
+    "en": "English",
+}
+_title_tasks: set[asyncio.Task] = set()
+
+
+def _is_default_title(title: str) -> bool:
+    return (title or "").strip() in DEFAULT_SESSION_TITLES
+
+
+def _fallback_title(content: str, locale: str = "") -> str:
+    text = re.sub(r"```[\s\S]*?```", " ", content or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^(?:你好|您好|嗨|哈喽|hi|hello|hey)[，,。.!！?？\s]*", "", text, flags=re.I)
+    text = re.sub(r"^(?:请|麻烦|帮我|帮忙|给我|please|can you|could you|help me)\s*", "", text, flags=re.I)
+    text = text.strip(" \t\r\n\"'`“”‘’#*-")
+    if not text:
+        return ""
+    limit = 24 if re.search(r"[\u4e00-\u9fff]", text) else 56
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return text
+
+
+def _clean_title(title: str) -> str:
+    value = re.sub(r"\s+", " ", title or "").strip()
+    value = value.strip(" \t\r\n\"'`“”‘’#*-")
+    value = re.sub(r"^(?:标题|title)\s*[：:]\s*", "", value, flags=re.I)
+    value = re.sub(r"[。.!！?？]+$", "", value).strip()
+    return value[:80]
+
+
+async def _generate_session_title(harness, session: dict[str, Any], content: str, locale: str) -> None:
+    language = TITLE_LANGUAGES.get(locale)
+    if not language:
+        return
+    provider = session.get("provider") or DEFAULT_PROVIDER
+    model = session.get("model") or ""
+    title = ""
+    if provider != "mock":
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"Write a very short conversation title in {language} "
+                    "(at most 8 words or 24 Chinese characters). "
+                    "Reply with the title only, without quotes, numbering, or trailing punctuation."
+                ),
+            },
+            {"role": "user", "content": (content or "")[:2000]},
+        ]
+        try:
+            title = _clean_title(await harness.gateway.complete_text(provider, model, messages, thinking="off"))
+        except Exception:
+            title = ""
+    if not title:
+        title = _fallback_title(content)
+    if not title:
+        return
+    try:
+        current = await harness.storage.get_session(session["id"])
+        if not current or not _is_default_title(current.get("title")):
+            return
+        await harness.storage.update_session(session["id"], title=title)
+        await harness.events.emit(session["id"], "session.updated", {"title": title})
+    except Exception:
+        return
+
+
+def _spawn_title_task(harness, session: dict[str, Any], content: str, locale: str) -> None:
+    task = asyncio.create_task(_generate_session_title(harness, session, content, locale))
+    _title_tasks.add(task)
+    task.add_done_callback(_title_tasks.discard)
 
 
 class SessionCreate(BaseModel):
@@ -37,6 +133,7 @@ class SessionCreate(BaseModel):
 
 class MessageSend(BaseModel):
     content: str
+    locale: str = ""
 
 
 class TitleBody(BaseModel):
@@ -138,6 +235,8 @@ async def get_session(session_id: str):
     session = await harness.manager.get_session(session_id)
     if not session:
         return fail("session not found", 404)
+    first = await harness.storage.first_user_message(session_id)
+    session["first_question"] = (first or {}).get("content", "")[:200] if first else ""
     session["pending"] = _pending(harness, session_id)
     last_event = await harness.storage.last_event(session_id)
     session["last_event_id"] = int(last_event["id"]) if last_event else 0
@@ -266,6 +365,10 @@ async def send_message(session_id: str, body: MessageSend):
         "message.saved",
         {"msg_id": message["id"], "role": "user", "content": content, "appended": active},
     )
+    if body.locale and _is_default_title(session.get("title")):
+        first = await harness.storage.first_user_message(session_id)
+        if first and first["id"] == message["id"]:
+            _spawn_title_task(harness, session, content, body.locale)
     if not active:
         harness.manager.enqueue(session_id)
     return ok({"msg_id": message["id"], "session_id": session_id, "appended": active})

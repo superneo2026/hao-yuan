@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { selectSession, state, supervisorAct, supervisorChat, toast } from '../stores/app'
-import { kindLabel, t } from '../i18n'
+import { kindLabel, sessionTitle, t } from '../i18n'
 import Icon from '../components/Icon.vue'
 import StatusPill from '../components/StatusPill.vue'
 
@@ -37,7 +37,7 @@ async function load() {
 
 function open(item) {
   selectSession(item.id)
-  router.push('/')
+  router.push(`/s/${encodeURIComponent(item.id)}`)
 }
 
 async function act(item, action) {
@@ -99,7 +99,7 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
       <div v-for="item in snapshot.alerts" :key="item.id" class="alert-row">
         <StatusPill :status="item.status" :health="item.health" />
-        <span class="truncate" style="min-width: 0; flex: 1">{{ item.title }}</span>
+        <span class="truncate" style="min-width: 0; flex: 1">{{ sessionTitle(item) }}</span>
         <span class="tiny muted truncate" style="max-width: 260px">{{ item.reason }}</span>
         <button class="btn sm" @click="open(item)">{{ t('console.open') }}</button>
         <button v-if="item.status === 'error'" class="btn sm" @click="act(item, 'resume')"><Icon name="refresh" :size="12" /> {{ t('common.resume') }}</button>
@@ -125,7 +125,7 @@ onBeforeUnmount(() => clearInterval(timer))
               <span class="spacer" />
               <span class="tiny faint">{{ item.updated_at?.slice(11, 16) }}</span>
             </div>
-            <h3 class="truncate">{{ item.title }}</h3>
+            <h3 class="truncate">{{ sessionTitle(item) }}</h3>
             <p class="session-question">{{ item.first_question || t('console.noUserMessage') }}</p>
             <div v-if="item.plan_total" class="mini-progress">
               <div class="mini-bar"><span :style="{ width: `${percent(item)}%` }" /></div>

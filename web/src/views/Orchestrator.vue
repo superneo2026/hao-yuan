@@ -84,7 +84,7 @@ async function merge() {
 function openWorker(task) {
   if (!task.session_id) return
   selectSession(task.session_id)
-  router.push('/')
+  router.push(`/s/${encodeURIComponent(task.session_id)}`)
 }
 
 function selectOrch(item) {

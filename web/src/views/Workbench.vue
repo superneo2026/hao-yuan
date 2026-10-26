@@ -1,8 +1,8 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { openDiff, renameSession, state } from '../stores/app'
-import { kindLabel, t } from '../i18n'
+import { closeSessionTab, openDiff, renameSession, selectSession, state } from '../stores/app'
+import { kindLabel, sessionTitle, t } from '../i18n'
 import ApprovalCard from '../components/ApprovalCard.vue'
 import ChatTimeline from '../components/ChatTimeline.vue'
 import Composer from '../components/Composer.vue'
@@ -14,7 +14,6 @@ import RightPanel from '../components/RightPanel.vue'
 import StatusPill from '../components/StatusPill.vue'
 
 const router = useRouter()
-const composer = ref(null)
 const RIGHT_PANEL_KEY = 'hy.rightOpen.v2'
 const rightOpen = ref(window.innerWidth > 960 && localStorage.getItem(RIGHT_PANEL_KEY) === '1')
 const rightWidth = ref(Number(localStorage.getItem('hy.rightWidth') || 370))
@@ -22,6 +21,40 @@ const fileOpen = ref(false)
 const diffOpen = ref(false)
 
 const session = computed(() => state.session)
+const currentTitle = computed(() => (session.value ? sessionTitle(session.value) : t('session.workbenchTitle')))
+const tabsRef = ref(null)
+const tabs = computed(() =>
+  state.openSessionIds
+    .map((id) => state.sessions.find((item) => item.id === id))
+    .filter(Boolean)
+)
+
+watch(
+  () => state.currentId,
+  async (id) => {
+    await nextTick()
+    const el = Array.from(tabsRef.value?.children || []).find((node) => node.dataset.tabId === id)
+    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+)
+
+function openTab(tab) {
+  if (tab.id === state.currentId) return
+  selectSession(tab.id)
+  router.push(`/s/${encodeURIComponent(tab.id)}`)
+}
+
+function closeTab(id) {
+  closeSessionTab(id)
+}
+
+function onTabsWheel(event) {
+  const el = event.currentTarget
+  if (!el || el.scrollWidth <= el.clientWidth) return
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  el.scrollLeft += event.deltaY
+  event.preventDefault()
+}
 
 function toggleRight() {
   rightOpen.value = !rightOpen.value
@@ -44,13 +77,9 @@ function startResize(event) {
   window.addEventListener('mouseup', up)
 }
 
-function suggest(text) {
-  composer.value?.fill(text)
-}
-
 async function editTitle() {
   if (!session.value) return
-  const title = window.prompt(t('session.renamePrompt'), session.value.title || '')
+  const title = window.prompt(t('session.renamePrompt'), currentTitle.value)
   if (title) await renameSession(title.trim())
 }
 
@@ -88,7 +117,7 @@ function closeDiff() {
       </button>
       <div class="topbar-left">
         <div class="topbar-title" @click="editTitle" :title="t('session.clickToRename')">
-          {{ session?.title || t('session.workbenchTitle') }}
+          {{ currentTitle }}
         </div>
         <div class="topbar-meta">
           <StatusPill v-if="session" :status="session.status" />
@@ -106,6 +135,37 @@ function closeDiff() {
         </button>
       </div>
     </header>
+
+    <div v-if="tabs.length" ref="tabsRef" class="session-tabs" role="tablist" @wheel="onTabsWheel">
+      <div
+        v-for="tab in tabs"
+        :key="tab.id"
+        class="session-tab"
+        :class="{ active: tab.id === state.currentId }"
+        role="tab"
+        tabindex="0"
+        :aria-selected="tab.id === state.currentId"
+        :data-tab-id="tab.id"
+        :title="sessionTitle(tab)"
+        @click="openTab(tab)"
+        @keydown.enter.prevent="openTab(tab)"
+        @keydown.space.prevent="openTab(tab)"
+      >
+        <span class="status-dot" :class="tab.status === 'waiting_input' ? 'waiting' : tab.status" />
+        <span class="tab-title truncate">{{ sessionTitle(tab) }}</span>
+        <button
+          type="button"
+          class="tab-close"
+          :title="t('session.closeTab')"
+          :aria-label="`${t('session.closeTab')}: ${sessionTitle(tab)}`"
+          @click.stop="closeTab(tab.id)"
+          @keydown.enter.stop
+          @keydown.space.stop
+        >
+          <Icon name="close" :size="11" />
+        </button>
+      </div>
+    </div>
 
     <div v-if="!session" class="no-session">
       <div class="empty-state">
@@ -125,9 +185,9 @@ function closeDiff() {
 
     <div v-else class="workbench-body" :style="{ gridTemplateColumns: rightOpen ? `minmax(0, 1fr) ${rightWidth}px` : 'minmax(0, 1fr)' }">
       <section class="main-column">
-        <ChatTimeline @suggest="suggest" />
+        <ChatTimeline />
         <ApprovalCard />
-        <Composer ref="composer" />
+        <Composer />
       </section>
       <template v-if="rightOpen">
         <div class="resizer" @mousedown.prevent="startResize" />
@@ -175,7 +235,7 @@ function closeDiff() {
 
 <style scoped>
 .workbench { display: flex; flex-direction: column; min-height: 0; height: 100%; }
-.topbar { height: var(--topbar-h); flex: 0 0 var(--topbar-h); display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, transparent); backdrop-filter: blur(14px); }
+.topbar { position: relative; z-index: 60; height: var(--topbar-h); flex: 0 0 var(--topbar-h); display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, transparent); backdrop-filter: blur(14px); }
 .mobile-menu { display: none; }
 .topbar-left { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .topbar-title { font-size: 13.5px; font-weight: 620; letter-spacing: -.01em; cursor: pointer; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -184,6 +244,30 @@ function closeDiff() {
 .topbar-meta .badge { height: 18px; font-size: 9.5px; padding: 0 6px; }
 .topbar-workspace { max-width: 280px; }
 .topbar-actions { display: flex; align-items: center; gap: 6px; }
+.session-tabs {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 6px 16px; border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+}
+.session-tabs::-webkit-scrollbar { height: 4px; }
+.session-tabs::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
+.session-tab {
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  max-width: 220px; height: 28px; padding: 0 8px 0 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2);
+  color: var(--muted); font-size: 11.5px; cursor: pointer;
+  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
+}
+.session-tab:hover { background: var(--surface); border-color: var(--line-strong); color: var(--ink-2); }
+.session-tab.active { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand); }
+.session-tab .tab-title { max-width: 160px; }
+.session-tab.active .tab-title { color: var(--ink); font-weight: 600; }
+.session-tab .status-dot { flex: 0 0 5px; width: 5px; height: 5px; }
+.session-tab .tab-close { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 5px; color: var(--faint); opacity: .55; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.session-tab:hover .tab-close, .session-tab.active .tab-close { opacity: 1; }
+.session-tab .tab-close:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+.session-tab:focus-visible, .session-tab .tab-close:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .workbench-body { flex: 1; min-height: 0; display: grid; }
 .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .resizer { width: 5px; cursor: col-resize; background: transparent; position: relative; z-index: 4; }
@@ -215,5 +299,8 @@ function closeDiff() {
   .topbar-meta { display: none; }
   .topbar-title { max-width: 46vw; }
   .console-btn { display: none; }
+  .session-tabs { padding: 6px 10px; }
+  .session-tab { max-width: 168px; }
+  .session-tab .tab-title { max-width: 112px; }
 }
 </style>

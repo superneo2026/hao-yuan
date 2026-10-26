@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { closePalette, selectSession, setTheme, state } from '../stores/app'
-import { kindLabel, statusLabel, t } from '../i18n'
+import { kindLabel, sessionTitle, statusLabel, t } from '../i18n'
 import Icon from './Icon.vue'
 
 const router = useRouter()
@@ -26,12 +26,12 @@ const commands = computed(() => {
   const search = query.value.trim().toLowerCase()
   const sessionCommands = state.sessions.slice(0, 30).map((session) => ({
     id: `s-${session.id}`,
-    title: session.title || t('session.untitled'),
+    title: sessionTitle(session),
     hint: `${kindLabel(session.kind)} · ${statusLabel(session.status)}`,
     icon: 'message',
     run: () => {
       selectSession(session.id)
-      router.push('/')
+      router.push(`/s/${encodeURIComponent(session.id)}`)
     }
   }))
   const all = [

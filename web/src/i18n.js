@@ -41,6 +41,48 @@ export function tr(key, fallback, params = {}) {
   return t(key, params, fallback)
 }
 
+const DEFAULT_SESSION_TITLES = new Set([
+  '',
+  'New task',
+  'New coding task',
+  'New plan',
+  'New storyboard',
+  'Robot task',
+  'New conversation',
+  'Untitled',
+  '新建任务',
+  '新任务',
+  '新对话',
+  '新会话',
+  '新建会话',
+  '未命名会话',
+  '新方案',
+  '新分镜',
+  '机器人任务'
+])
+
+export function isDefaultSessionTitle(title) {
+  return DEFAULT_SESSION_TITLES.has(String(title || '').trim())
+}
+
+export function summarizeSessionTitle(text) {
+  let value = String(text || '').replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!value) return ''
+  value = value.replace(/^(?:你好|您好|嗨|哈喽|hi|hello|hey)[，,。.!！?？\s]*/i, '')
+  value = value.replace(/^(?:请|麻烦|帮我|帮忙|给我|please|can you|could you|help me)\s*/i, '')
+  value = value.replace(/^[\s"'`“”‘’#*\-]+|[\s"'`“”‘’#*\-]+$/g, '').trim()
+  if (!value) return ''
+  const limit = /[\u4e00-\u9fff]/.test(value) ? 24 : 56
+  return value.length > limit ? `${value.slice(0, limit).trimEnd()}…` : value
+}
+
+export function sessionTitle(session) {
+  if (!session) return t('session.untitled')
+  const raw = String(session.title || '').trim()
+  if (raw && !isDefaultSessionTitle(raw)) return raw
+  return summarizeSessionTitle(session.first_question || '') || t('session.untitled')
+}
+
 export function kindLabel(kind) {
   return t(`kind.${kind || 'auto'}`, {}, kind || 'auto')
 }
@@ -175,6 +217,7 @@ const messages = {
     'session.noSessions': '还没有会话',
     'session.planMini': '计划',
     'session.hide': '隐藏',
+    'session.closeTab': '关闭标签页',
     'session.delete': '删除',
     'session.deleteConfirm': '删除“{title}”及其全部数据？此操作不可恢复。',
     'session.workbenchTitle': '工作台',
@@ -712,6 +755,7 @@ const messages = {
     'session.noSessions': '還沒有會話',
     'session.planMini': '計畫',
     'session.hide': '隱藏',
+    'session.closeTab': '關閉分頁',
     'session.delete': '刪除',
     'session.deleteConfirm': '刪除「{title}」及其全部資料？此操作無法復原。',
     'session.workbenchTitle': '工作台',
@@ -1249,6 +1293,7 @@ const messages = {
     'session.noSessions': 'No sessions yet',
     'session.planMini': 'plan',
     'session.hide': 'Hide',
+    'session.closeTab': 'Close tab',
     'session.delete': 'Delete',
     'session.deleteConfirm': 'Delete "{title}" and all of its data? This cannot be undone.',
     'session.workbenchTitle': 'Workbench',

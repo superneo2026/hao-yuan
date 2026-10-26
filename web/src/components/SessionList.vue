@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { state, selectSession, hideSession, purgeSession } from '../stores/app'
-import { formatRelativeTime, kindLabel, t } from '../i18n'
+import { formatRelativeTime, kindLabel, sessionTitle, t } from '../i18n'
 import Icon from './Icon.vue'
 
 const emit = defineEmits(['new'])
@@ -51,7 +51,7 @@ function open(session) {
     import('../api/client').then(({ api }) => api.unhideSession(session.id)).catch(() => {})
   }
   selectSession(session.id)
-  if (router.currentRoute.value.path !== '/') router.push('/')
+  router.push(`/s/${encodeURIComponent(session.id)}`)
   state.mobileNavOpen = false
 }
 
@@ -60,7 +60,7 @@ function timeLabel(value) {
 }
 
 async function remove(session) {
-  if (!window.confirm(t('session.deleteConfirm', { title: session.title || t('session.untitled') }))) return
+  if (!window.confirm(t('session.deleteConfirm', { title: sessionTitle(session) }))) return
   await purgeSession(session.id)
 }
 
@@ -95,7 +95,7 @@ async function hide(session) {
           <Icon v-else :name="kindIcon[session.kind] || 'message'" :size="14" />
         </span>
         <span class="session-copy">
-          <span class="session-title truncate">{{ session.title || t('session.untitled') }}</span>
+          <span class="session-title truncate">{{ sessionTitle(session) }}</span>
           <span class="session-meta">
             <span class="status-dot" :class="session.status === 'waiting_input' ? 'waiting' : session.status" />
             <span>{{ kindLabel(session.kind) }}</span>

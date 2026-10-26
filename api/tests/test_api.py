@@ -50,6 +50,81 @@ def test_general_chat_mock(client):
     assert '"type": "delta"' in stream.text or '"type": "message.saved"' in stream.text
 
 
+def test_first_message_auto_titles_session(client):
+    session = client.post("/api/sessions", json={"kind": "general", "title": ""}).json()["data"]
+    assert session["title"] == "New conversation"
+    client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"content": "帮我修复登录 bug", "locale": "zh-CN"},
+    )
+    final = wait_status(client, session["id"])
+    assert final["status"] == "done"
+    title = final["title"]
+    for _ in range(30):
+        if title not in ("New conversation", ""):
+            break
+        time.sleep(0.1)
+        title = client.get(f"/api/sessions/{session['id']}").json()["data"]["session"]["title"]
+    assert "修复登录" in title, title
+
+
+def test_greeting_does_not_start_workspace_task(client, tmp_path):
+    workspace = tmp_path / "greet"
+    workspace.mkdir()
+    session = client.post(
+        "/api/sessions",
+        json={"kind": "coding", "title": "greeting", "workspace": str(workspace)},
+    ).json()["data"]
+    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "你好吗"})
+    final = wait_status(client, session["id"])
+    assert final["status"] == "done", final.get("error")
+    events = client.get(f"/api/sessions/{session['id']}/events").json()["data"]
+    types = [event["type"] for event in events]
+    assert "write.nudge" not in types
+    assert "tool.start" not in types
+    route = next(event for event in events if event["type"] == "route")
+    assert route["payload"]["qa"] is True
+    assert route["payload"]["casual"] is True
+    assert route["payload"]["agent"] == "general"
+
+
+def test_casual_chat_uses_general_agent(client, tmp_path):
+    workspace = tmp_path / "casual"
+    workspace.mkdir()
+    session = client.post(
+        "/api/sessions",
+        json={"kind": "coding", "title": "casual", "workspace": str(workspace)},
+    ).json()["data"]
+    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "今天天气不错"})
+    final = wait_status(client, session["id"])
+    assert final["status"] == "done", final.get("error")
+    events = client.get(f"/api/sessions/{session['id']}/events").json()["data"]
+    types = [event["type"] for event in events]
+    assert "write.nudge" not in types
+    assert "tool.start" not in types
+    route = next(event for event in events if event["type"] == "route")
+    assert route["payload"]["agent"] == "general"
+    assert route["payload"]["casual"] is True
+
+
+def test_vague_message_does_not_force_write(client, tmp_path):
+    workspace = tmp_path / "vague"
+    workspace.mkdir()
+    session = client.post(
+        "/api/sessions",
+        json={"kind": "coding", "title": "vague", "workspace": str(workspace)},
+    ).json()["data"]
+    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "???"})
+    final = wait_status(client, session["id"])
+    assert final["status"] == "done", final.get("error")
+    events = client.get(f"/api/sessions/{session['id']}/events").json()["data"]
+    types = [event["type"] for event in events]
+    assert "write.nudge" not in types
+    assert "tool.start" not in types
+    route = next(event for event in events if event["type"] == "route")
+    assert route["payload"]["agent"] == "general"
+
+
 def test_coding_write_with_auto_gate(client, tmp_path):
     workspace = tmp_path / "repo"
     workspace.mkdir()

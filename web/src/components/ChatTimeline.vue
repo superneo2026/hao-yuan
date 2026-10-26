@@ -6,8 +6,6 @@ import Icon from './Icon.vue'
 import Markdown from './Markdown.vue'
 import ToolCard from './ToolCard.vue'
 
-const emit = defineEmits(['suggest'])
-
 const scroller = ref(null)
 const autoScroll = ref(true)
 const showReasoning = ref({})
@@ -137,12 +135,6 @@ function timeLabel(value) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-const suggestions = computed(() => [
-  { icon: 'compass', text: t('chat.suggestion1') },
-  { icon: 'alert', text: t('chat.suggestion2') },
-  { icon: 'sparkles', text: t('chat.suggestion3') },
-  { icon: 'code', text: t('chat.suggestion4') }
-])
 </script>
 
 <template>
@@ -158,13 +150,6 @@ const suggestions = computed(() => [
             {{ t('chat.welcomeDesc') }}
             <span class="mono" style="color: var(--ink-2)">{{ currentSession?.workspace || t('chat.noWorkspace') }}</span>
           </p>
-          <div class="suggestions">
-            <button v-for="suggestion in suggestions" :key="suggestion.text" class="suggestion" @click="emit('suggest', suggestion.text)">
-              <span class="suggestion-icon"><Icon :name="suggestion.icon" :size="15" /></span>
-              <span>{{ suggestion.text }}</span>
-              <Icon name="arrow-right" :size="14" class="suggestion-arrow" />
-            </button>
-          </div>
         </div>
       </div>
 
@@ -267,17 +252,10 @@ const suggestions = computed(() => [
 .tool-only { padding-left: 39px; display: flex; flex-direction: column; gap: 6px; }
 .thinking-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; padding: 4px 0; }
 .welcome-mark { display: flex; justify-content: center; margin-bottom: 18px; }
-.suggestions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; text-align: left; margin-top: 8px; }
-.suggestion { display: flex; align-items: center; gap: 9px; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); font-size: 12.5px; transition: all .15s var(--ease); }
-.suggestion:hover { border-color: var(--brand-line); background: var(--brand-soft); color: var(--ink); transform: translateY(-1px); }
-.suggestion-icon { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-2); color: var(--brand); flex: 0 0 26px; }
-.suggestion-arrow { margin-left: auto; opacity: 0; color: var(--brand); }
-.suggestion:hover .suggestion-arrow { opacity: 1; }
 .jump-bottom { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; padding: 6px 11px; border-radius: 99px; border: 1px solid var(--line-strong); background: var(--elevated); color: var(--ink-2); font-size: 11.5px; box-shadow: var(--shadow-card); }
 .jump-bottom:hover { color: var(--ink); border-color: var(--brand-line); }
 @media (max-width: 720px) {
   .timeline { padding: 18px 16px 8px; }
-  .suggestions { grid-template-columns: 1fr; }
   .tool-only { padding-left: 0; }
 }
 </style>
