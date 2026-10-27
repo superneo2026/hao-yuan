@@ -29,7 +29,7 @@ class DeepSeekProvider:
             "model": model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 8192,
+            "max_tokens": profile.max_output_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -37,7 +37,9 @@ class DeepSeekProvider:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        if thinking == "off":
+        if not profile.supports_thinking:
+            pass
+        elif thinking == "off":
             payload["thinking"] = {"type": "disabled"}
         elif thinking in ("low", "high"):
             payload["thinking"] = {"type": "enabled"}

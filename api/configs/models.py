@@ -3,7 +3,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from configs.secrets import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, ZHIPU_API_KEY, ZHIPU_BASE_URL
+from configs.secrets import (
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
+    MIMO_API_KEY,
+    MIMO_BASE_URL,
+    MIMO_MODEL,
+    ZHIPU_API_KEY,
+    ZHIPU_BASE_URL,
+)
 
 
 @dataclass
@@ -15,6 +24,8 @@ class ProviderConfig:
     api_key: str = ""
     thinking_models: set[str] = field(default_factory=set)
     tiers: dict[str, str] = field(default_factory=dict)
+    max_output_tokens: int = 8192
+    supports_thinking: bool = True
 
 
 PROVIDERS: dict[str, ProviderConfig] = {
@@ -43,6 +54,16 @@ PROVIDERS: dict[str, ProviderConfig] = {
         api_key=ZHIPU_API_KEY,
         tiers={"lite": "glm-5.3-flash", "standard": "glm-5.3-flash", "pro": "glm-5.3"},
     ),
+    "mimo": ProviderConfig(
+        name="mimo",
+        base_url=MIMO_BASE_URL,
+        models=[MIMO_MODEL],
+        default_model=MIMO_MODEL,
+        api_key=MIMO_API_KEY,
+        max_output_tokens=16384,
+        supports_thinking=False,
+        tiers={"lite": MIMO_MODEL, "standard": MIMO_MODEL, "pro": MIMO_MODEL},
+    ),
 }
 
 THINKING_OFF_PROVIDERS = {"zhipu"}
@@ -50,6 +71,7 @@ THINKING_OFF_PROVIDERS = {"zhipu"}
 PRICES_PER_MTOK = {
     "deepseek": {"prompt": 2.0, "completion": 8.0},
     "zhipu": {"prompt": 0.0, "completion": 0.0},
+    "mimo": {"prompt": 2.0, "completion": 8.0},
     "mock": {"prompt": 0.0, "completion": 0.0},
 }
 

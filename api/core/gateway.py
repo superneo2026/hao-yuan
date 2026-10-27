@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, AsyncGenerator
 
 from adapters.providers.deepseek import DeepSeekProvider
 from adapters.providers.mock import MockProvider
 from configs.models import PROVIDERS, ProviderConfig
+
+
+def strict_provider() -> bool:
+    return os.getenv("HAOYUAN_STRICT_PROVIDER", "").strip().lower() in {"1", "true", "yes"}
 
 
 class ModelGateway:
@@ -14,6 +19,7 @@ class ModelGateway:
             "mock": MockProvider(),
             "deepseek": DeepSeekProvider(),
             "zhipu": DeepSeekProvider(),
+            "mimo": DeepSeekProvider(),
         }
 
     def candidates(self, provider: str, model: str) -> list[tuple[str, str]]:
@@ -25,6 +31,8 @@ class ModelGateway:
                 item = (provider, candidate)
                 if item not in out:
                     out.append(item)
+        if strict_provider():
+            return out or [("mock", "mock-deterministic")]
         for name, other in PROVIDERS.items():
             if name == provider:
                 continue
@@ -57,26 +65,30 @@ class ModelGateway:
             handler = self.providers.get(prov)
             if handler is None:
                 continue
-            produced = False
-            try:
-                async for event in handler.stream(messages, tools or [], conf, mdl, thinking):
-                    if event.get("type") in ("delta", "reasoning") and event.get("text"):
-                        produced = True
-                    if event.get("type") == "message":
-                        event["fallbacks"] = fallbacks
-                        event["provider"] = prov
-                        event["model"] = mdl
-                    yield event
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                last_error = exc
-                if produced:
-                    raise RuntimeError(f"model stream interrupted after partial output: {exc}") from exc
-                fallbacks.append(f"{prov}/{mdl}")
-                await asyncio.sleep(0.2)
-                continue
+            for attempt in range(2):
+                produced = False
+                try:
+                    async for event in handler.stream(messages, tools or [], conf, mdl, thinking):
+                        if event.get("type") in ("delta", "reasoning") and event.get("text"):
+                            produced = True
+                        if event.get("type") == "message":
+                            event["fallbacks"] = fallbacks
+                            event["provider"] = prov
+                            event["model"] = mdl
+                        yield event
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    if produced:
+                        raise RuntimeError(f"model stream interrupted after partial output: {exc}") from exc
+                    if attempt == 0:
+                        await asyncio.sleep(0.5)
+                        continue
+                    break
+            fallbacks.append(f"{prov}/{mdl}")
+            await asyncio.sleep(0.2)
         if last_error:
             raise RuntimeError(f"model call failed after fallbacks: {last_error}") from last_error
         raise RuntimeError("model call failed: no available provider")
@@ -110,5 +122,7 @@ class ModelGateway:
                 api_key=conf.api_key,
                 thinking_models=conf.thinking_models,
                 tiers=conf.tiers,
+                max_output_tokens=conf.max_output_tokens,
+                supports_thinking=conf.supports_thinking,
             )
         return conf

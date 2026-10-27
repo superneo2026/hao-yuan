@@ -185,3 +185,19 @@ def test_plan_and_storyboard_documents(client, tmp_path):
     )
     story_info = json.loads(story)
     assert os.path.isfile(story_info["path"])
+
+def test_repo_map_ranks_query_files(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "pricing.py").write_text("def stack_discounts(items):\n    return items\n", encoding="utf-8")
+    (tmp_path / "pkg" / "unrelated.py").write_text("def ping():\n    return 1\n", encoding="utf-8")
+    text = repoindex.repo_map(str(tmp_path), query="fix stack_discounts pricing")
+    assert "most relevant" in text.lower()
+    assert "pkg/pricing.py" in text
+
+
+def test_mimo_provider_is_wired():
+    from configs.models import PROVIDERS, resolve
+
+    assert "mimo" in PROVIDERS
+    assert resolve("mimo", "mimo-v2.6-flash") == ("mimo", "mimo-v2.6-flash")
+    assert PROVIDERS["mimo"].supports_thinking is False

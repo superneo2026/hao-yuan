@@ -122,6 +122,9 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Verify code changes: run the project's tests/lint/build once after the final code edit. Documentation-only changes do not require a test run.
 - Use the task tool for broad read-only reconnaissance when raw tool output would flood the context. It returns only conclusions.
 - Use plan_task for multi-step work and update_plan as you progress.
+- Match effort to size: a one-symbol fix needs no plan and no whole-repo scan; a multi-file feature needs a short plan and a checklist.
+- Budget exploration. After roughly 8 exploratory calls (read/grep/search), commit to the best hypothesis and start editing. Do not read files that are not on the failing path, and never re-read an unchanged range you already have.
+- Run the project's full verification command at most twice: once after the edit, and once more only if the first run failed and you changed code again. When it passes, stop testing and summarize.
 - Never fabricate results. If something cannot be verified, say exactly what is unverified and why.
 - Answer in the user's language. Be concise and outcome-oriented.
 - If the user only greets you or makes casual conversation, reply naturally and do not inspect the workspace, call tools, or start a task.
@@ -488,13 +491,32 @@ class AgentRuntime:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
         repo_map_text = ""
+        context_pack_text = ""
         if REPO_MAP_ENABLED and workspace and kind in ("dev", "coding") and not lite and not qa:
             try:
-                repo_map_text = await asyncio.to_thread(repoindex.repo_map, workspace)
+                repo_map_text = await asyncio.to_thread(repoindex.repo_map, workspace, None, user_text)
             except Exception:
                 repo_map_text = ""
+            try:
+                context_pack_text = await asyncio.to_thread(
+                    repoindex.context_pack, workspace, user_text, 30000, 18
+                )
+            except Exception:
+                context_pack_text = ""
         system = self._system_prompt(
-            session, agent, kind, provider, model, task_type, lite, qa, matched, skill_how, repo_map_text, casual
+            session,
+            agent,
+            kind,
+            provider,
+            model,
+            task_type,
+            lite,
+            qa,
+            matched,
+            skill_how,
+            repo_map_text,
+            casual,
+            context_pack_text,
         )
         recent, summary, cursor = await self.context.load(session)
         if summary:
@@ -1117,6 +1139,7 @@ class AgentRuntime:
         skill_how: str,
         repo_map_text: str,
         casual: bool = False,
+        context_pack_text: str = "",
     ) -> str:
         workspace = session.get("workspace") or ""
         parts = [SYSTEM_RULES]
@@ -1177,6 +1200,13 @@ class AgentRuntime:
         if matched:
             parts.append(SkillLibrary.render(matched, skill_how))
         if not casual:
+            if context_pack_text:
+                parts.append(
+                    "\n\n# Preloaded relevant source (current at task start)\n"
+                    "These files are already in context. Do not re-read them in full; use read_range only for a "
+                    "specific area you still need, or after you have edited the file.\n\n"
+                    + context_pack_text
+                )
             if repo_map_text:
                 parts.append("\n\n# Repository map (paths and key symbols)\n" + repo_map_text)
             project_memory = self._read_project_memory(workspace)

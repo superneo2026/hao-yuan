@@ -26,6 +26,10 @@ DEEPSEEK_MODEL = _get("DEEPSEEK_MODEL", "deepseek-flash")
 ZHIPU_API_KEY = _get("ZHIPU_API_KEY", "")
 ZHIPU_BASE_URL = _get("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/coding/paas/v4").rstrip("/")
 
+MIMO_API_KEY = _get("MIMO_API_KEY", "")
+MIMO_BASE_URL = _get("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1").rstrip("/")
+MIMO_MODEL = _get("MIMO_MODEL", "mimo-v2.6-flash")
+
 FEISHU_APP_ID = _get("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = _get("FEISHU_APP_SECRET", "")
 

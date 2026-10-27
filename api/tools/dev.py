@@ -468,21 +468,40 @@ def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
     env = os.environ.copy()
     env.update(_CHILD_IO_ENV)
     adapted = normalize_shell_command(command)
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
+        adapted,
+        shell=True,
+        cwd=str(workspace.root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        creationflags=creationflags,
+    )
     try:
-        process = subprocess.run(
-            adapted,
-            shell=True,
-            cwd=str(workspace.root),
-            capture_output=True,
-            timeout=SHELL_TIMEOUT,
-            env=env,
-        )
+        stdout_raw, stderr_raw = process.communicate(timeout=SHELL_TIMEOUT)
     except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+            )
+        else:
+            try:
+                os.killpg(os.getpgid(process.pid), 9)
+            except Exception:
+                process.kill()
+        try:
+            stdout_raw, stderr_raw = process.communicate(timeout=10)
+        except Exception:
+            stdout_raw, stderr_raw = b"", b""
+        partial = _decode_child_output(stdout_raw)
         return _truncate(
-            f"$ {command}\n[timeout after {int(SHELL_TIMEOUT)}s; the process may still be running]"
+            f"$ {command}\n[timeout after {int(SHELL_TIMEOUT)}s; process tree terminated]"
+            + (("\n" + partial.strip()[-2000:]) if partial.strip() else "")
         )
-    stdout = _decode_child_output(process.stdout)
-    stderr = _decode_child_output(process.stderr)
+    stdout = _decode_child_output(stdout_raw)
+    stderr = _decode_child_output(stderr_raw)
     out = stdout + (("\n[stderr] " + stderr) if stderr else "")
     head = f"$ {command}\n[exit {process.returncode}]"
     if adapted != command:

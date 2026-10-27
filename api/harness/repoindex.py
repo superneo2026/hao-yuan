@@ -265,12 +265,69 @@ def rank_files(workspace: str, query: str, limit: int = 8) -> list[tuple[str, fl
     return sorted(scores.items(), key=lambda item: -item[1])[: max(1, min(limit, 20))]
 
 
-def repo_map(workspace: str, max_tokens: int | None = None) -> str:
+_PACK_EXTS = {".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".md", ".toml"}
+_PACK_SKIP = {"legacy_data.py"}
+
+
+def context_pack(
+    workspace: str,
+    query: str = "",
+    max_chars: int = 24000,
+    max_files: int = 16,
+    per_file: int = 6000,
+) -> str:
+    """Assemble a compact, query-ranked source pack so the agent need not re-read small repos."""
+    idx = get_index(workspace)
+    files = [rel for rel in idx["files"] if os.path.splitext(rel)[1].lower() in _PACK_EXTS]
+    if not files:
+        return ""
+    ranked = [rel for rel, _ in rank_files(workspace, query, limit=max_files * 2) if rel in files]
+    if not ranked:
+        ranked = list(files)
+    docs = [rel for rel in files if rel.lower().startswith("docs/") or rel.lower() == "readme.md"]
+    # add siblings of the most relevant directories, smallest first, to maximise coverage
+    dirs = {rel.rsplit("/", 1)[0] for rel in ranked[:4] if "/" in rel}
+    siblings = sorted(
+        (rel for rel in files if rel not in ranked and rel.rsplit("/", 1)[0] in dirs),
+        key=lambda rel: len(rel),
+    )
+    ordered = ranked + [rel for rel in docs if rel not in ranked] + siblings
+    chunks: list[str] = []
+    used = 0
+    count = 0
+    for rel in ordered:
+        if count >= max_files or used >= max_chars:
+            break
+        if os.path.basename(rel) in _PACK_SKIP:
+            continue
+        path = os.path.join(workspace, rel)
+        try:
+            if os.path.getsize(path) > 40000:
+                continue
+            text = open(path, "r", encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        body = text[:per_file]
+        if len(text) > per_file:
+            body += "\n... [truncated; request a line range if needed]"
+        block = f"### {rel}\n```\n{body}\n```"
+        if used + len(block) > max_chars:
+            continue
+        chunks.append(block)
+        used += len(block)
+        count += 1
+    return "\n\n".join(chunks)
+
+
+def repo_map(workspace: str, max_tokens: int | None = None, query: str = "") -> str:
     max_tokens = max_tokens or REPO_MAP_MAX_TOKENS
     idx = get_index(workspace)
     if not idx["symbols"] and not idx["files"]:
         return ""
     files = sorted(idx["files"])
+    ranked = rank_files(workspace, query, limit=8) if (query or "").strip() else []
     dirs: dict[str, list[str]] = {}
     for rel in files:
         parts = rel.split("/")
@@ -278,6 +335,12 @@ def repo_map(workspace: str, max_tokens: int | None = None) -> str:
         dirs.setdefault(directory, []).append(parts[-1])
     lines: list[str] = []
     budget = max_tokens * 4 - 200
+    if ranked:
+        head = "# Files most relevant to this request: " + ", ".join(rel for rel, _ in ranked)
+        if budget - len(head) >= 0:
+            lines.append(head)
+            lines.append("")
+            budget -= len(head) + 2
     for directory in sorted(dirs):
         names = dirs[directory]
         head = f"{directory}/: " + " ".join(names[:24]) + (" ..." if len(names) > 24 else "")
