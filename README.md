@@ -24,6 +24,7 @@
 | 测试修复环 | pytest 失败结构化解析 → 定位行 → 最小修复 → 失败指纹升级策略 |
 | 子代理 | `task` 在独立上下文侦察，只回填结论，避免污染主上下文 |
 | 上下文治理 | 工具结果老化、结构化摘要、轮内压缩、硬预算裁剪 |
+| 上下文预装 | 需求感知 `repo_map` 排序 + 复杂题相关源码 `context_pack`（最多约 30KB），减少重复整读 |
 | 长程任务 | 步数预算、自动续跑、检查点、幂等副作用登记（写操作不重复施加） |
 | 人机协同 | 高风险写操作/命令弹出 diff 预览，批准或拒绝后才执行 |
 
@@ -163,6 +164,11 @@ DEEPSEEK_MODEL = "deepseek-flash"
 
 # 可选：智谱
 ZHIPU_API_KEY = ""
+
+# 可选：小米 MiMo（公平评测使用的模型）
+MIMO_API_KEY = "tp-..."
+MIMO_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+MIMO_MODEL = "mimo-v2.6-flash"
 ```
 
 也可以使用环境变量（优先级高于文件）：
@@ -234,11 +240,11 @@ hao-yuan/
 │   │   └── plugin.py              插件发现 / 依赖 / 生命周期
 │   ├── harness/                   沙箱 / 技能 / 符号索引 / 修复环 / 监督 / 编排 / 具身
 │   ├── tools/                     builtin / dev / plan
-│   ├── adapters/providers/        deepseek / mock
+│   ├── adapters/providers/        deepseek / mimo / mock
 │   ├── plugins/                   coding / plans / video / supervisor / orchestrator / embodied
 │   ├── extensions/                系统 / 会话 / 技能 / 设置 / 文件 / 用量 / 插件 / 审批 / 实时事件（SSE / WebSocket）
 │   ├── skills/                    核心技能
-│   ├── tests/                     16 个后端测试
+│   ├── tests/                     28 个后端测试
 │   └── data/                      运行时数据（gitignore）
 ├── web/                           Vue 3 + Vite
 ├── docs/screenshots/              界面截图
@@ -365,7 +371,7 @@ async def shutdown(ctx):
 ```bash
 cd api
 python -m pytest -q
-# 26 passed, 1 warning
+# 28 passed, 1 warning
 
 cd ../web
 npm run build
@@ -411,8 +417,38 @@ npm run build
 
 ## 7. Harness 公平评测结果
 
-> 完整报告：[test/testing/index.html](test/testing/index.html)（2026-10-25，deepseek-flash）  
-> 另有硬任务评测（mimo-v2.6-flash）：[test/testing/index-mimo.html](test/testing/index-mimo.html)
+> 最新报告：[test/testing/mimo-2026-10.html](test/testing/mimo-2026-10.html)（2026-10，mimo-v2.6-flash）  
+> 历史报告：[test/testing/index.html](test/testing/index.html)（2026-10-25，deepseek-flash）
+
+### 7.1 MiMo 公平评测（最新）
+
+**方法**：5 个可自动判分的任务（基础自适应 1 + 定位 / 性能 / 长程 / 并发 4）× 3 个工具；统一 `mimo-v2.6-flash`、提示词、种子仓库与预算。运行结束后注入隐藏测试，并对 `tests/`、`pyproject.toml` 做 SHA-256 校验，篡改即 0 分。t1/d1/d3 使用 official-r1 交错批次，d4/d6 使用冻结代码后的独立复跑批次。
+
+| 排名 | 工具 | 综合（产品加权） | 正确率 | 速度 | 成本 | 工程纪律 | 等权 |
+|---|---|---|---|---|---|---|---|
+| 1 | **豪源 HaoYuan** | **98.8** | 100.0 | 94.4 | 96.9 | 100.0 | **98.3（第 1）** |
+| 2 | OpenCode | 90.5 | 100.0 | 67.8 | 53.5 | 100.0 | 84.3（第 2） |
+| 3 | Claude Code | 88.9 | 100.0 | 65.1 | 40.9 | 100.0 | 81.2（第 3） |
+
+综合 = 0.65 × 正确率 + 0.15 × 速度 + 0.10 × 成本 + 0.10 × 工程纪律；等权口径为 0.40 / 0.20 / 0.20 / 0.20。
+
+- 三者正确率均为 100%；豪源产品加权 **98.8**、等权 **98.3**，两种口径均为第一。
+- 分任务：豪源在 t1（63.8s）、d3（220.6s）、d4（469.6s）最快；OpenCode 拿下 d1（111.3s），Claude Code 拿下 d6（254.5s）。
+- 成本：5 题总成本豪源 **$3.33**、OpenCode $6.56、Claude Code $9.04；单任务成本分别为 $0.666 / $1.313 / $1.809。
+- 自适应强度：t1 简单题 63.8s / 11 次调用，未启动计划或子代理；d4 长程题通过预装相关源码减少重复探索（从 1200s 超时降到 469.6s）。
+- 关键修复：补齐 MiMo provider（此前 `resolve("mimo", ...)` 会静默回退 deepseek）、需求感知 repo map、复杂题 30KB context pack、进程树回收、严格 provider + 单次调用上限 + 同模型重试、简单题 lite 路由。
+- 局限：正式对照每题 1 轮；d4/d6 为独立复跑批次；模型延迟方差较大（Claude d3 先前 623s、本次 884s）；d5 区分度不足未入榜；自建任务，不能替代 SWE-bench 等公开基准。
+
+复现：
+
+```bash
+cd test/bench
+python harness_bench.py run --batch official-r1 --tools haoyuan,claude,opencode --tasks t1_multisite_bugfix,d1_needle_regress,d3_perf_cliff --resume
+python harness_bench.py run --batch official-r1 --tools haoyuan,claude,opencode --tasks d4_multilayer_feature,d6_concurrency_fix --resume
+python make_report_mimo_final.py
+```
+
+### 7.2 deepseek-flash 深度评测（历史）
 
 **方法**：8 个可自动判分的编码任务（5 基础 + 3 困难）× 每任务 3 轮 × 3 个工具；统一 deepseek-flash、提示词、种子仓库与预算；运行结束后注入隐藏测试，并对 `tests/`、`pyproject.toml` 做 SHA-256 校验，篡改即 0 分。
 
@@ -458,7 +494,7 @@ python make_report.py
 | 插件机制 | ✅ 增强 | 清单、依赖、生命周期、工具/Agent/路由/技能/前端元数据 |
 | 飞书远程指挥 | ⏳ 未纳入本版 | 接口层已解耦，可作为插件补充 |
 | ASR / TTS / 视频渲染 | ⏳ 未纳入本版 | 当前聚焦 AI 编程主链路 |
-| 权威 Benchmark | ⏳ 公开基准未跑 | 已完成自建 8 任务公平评测（见第 7 节）；SWE-bench 等公开基准未重跑 |
+| 权威 Benchmark | ⏳ 公开基准未跑 | 已完成自建评测：5 任务 MiMo 公平评测 + 8 任务 deepseek 深度评测（见第 7 节）；SWE-bench 等公开基准未重跑 |
 
 ---
 
