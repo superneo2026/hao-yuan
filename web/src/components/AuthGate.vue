@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { authSetupMode, dismissAccountSetup, loginAccount, setupAccount, state } from '../stores/app'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
@@ -12,9 +12,48 @@ const show = ref(false)
 const error = ref('')
 const submitting = ref(false)
 const skipping = ref(false)
+const attemptsLeft = ref(null)
+const lockSeconds = ref(0)
+const unlocked = ref(false)
+let lockTimer = null
+
+const lockCountdown = computed(() => {
+  const total = Math.max(0, lockSeconds.value)
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+})
+
+const maxAttempts = computed(() => Math.max(1, Number(state.auth.maxFailures) || 5))
+
+function stopLockTimer() {
+  if (lockTimer) {
+    clearInterval(lockTimer)
+    lockTimer = null
+  }
+}
+
+function startLock(seconds) {
+  stopLockTimer()
+  error.value = ''
+  unlocked.value = false
+  attemptsLeft.value = 0
+  lockSeconds.value = Math.max(1, Math.floor(seconds || 300))
+  lockTimer = setInterval(() => {
+    lockSeconds.value = Math.max(0, lockSeconds.value - 1)
+    if (lockSeconds.value <= 0) {
+      stopLockTimer()
+      attemptsLeft.value = null
+      unlocked.value = true
+      password.value = ''
+    }
+  }, 1000)
+}
 
 async function submit() {
+  if (submitting.value || lockSeconds.value > 0) return
   error.value = ''
+  unlocked.value = false
   const name = username.value.trim()
   if (!name || !password.value) {
     error.value = t('auth.required')
@@ -33,11 +72,21 @@ async function submit() {
     if (setup.value) await setupAccount(name, password.value)
     else await loginAccount(name, password.value)
   } catch (err) {
-    error.value = err.message || t('common.error')
+    const data = err.data || {}
+    if (data.locked || data.retry_after) {
+      startLock(data.retry_after || 300)
+    } else if (data.remaining_attempts !== undefined) {
+      attemptsLeft.value = data.remaining_attempts
+      error.value = t('auth.attemptsLeft', { n: data.remaining_attempts })
+    } else {
+      error.value = err.message || t('common.error')
+    }
   } finally {
     submitting.value = false
   }
 }
+
+onBeforeUnmount(stopLockTimer)
 
 async function skip() {
   skipping.value = true
@@ -130,12 +179,33 @@ async function skip() {
             </div>
           </template>
 
-          <div v-if="error" class="auth-error"><Icon name="alert" :size="14" /> {{ error }}</div>
+          <div v-if="lockSeconds > 0" class="auth-lock">
+            <span class="auth-lock-icon"><Icon name="lock" :size="16" /></span>
+            <div>
+              <b>{{ t('auth.lockedTitle') }}</b>
+              <span>{{ t('auth.lockedCountdown', { time: lockCountdown }) }}</span>
+            </div>
+          </div>
+          <div v-else-if="error" class="auth-error"><Icon name="alert" :size="14" /> {{ error }}</div>
+          <div v-else-if="unlocked" class="auth-unlocked"><Icon name="check" :size="14" /> {{ t('auth.unlocked') }}</div>
 
-          <button class="btn primary lg auth-submit" type="submit" :disabled="submitting">
+          <div v-if="attemptsLeft !== null && lockSeconds === 0" class="auth-attempts">
+            <span class="attempts-dots">
+              <i v-for="n in maxAttempts" :key="n" :class="{ used: n > attemptsLeft }" />
+            </span>
+            <span>{{ t('auth.attemptsHint', { n: maxAttempts }) }}</span>
+          </div>
+
+          <button class="btn primary lg auth-submit" type="submit" :disabled="submitting || lockSeconds > 0">
             <span v-if="submitting" class="spinner" style="width: 14px; height: 14px" />
-            <Icon v-else :name="setup ? 'shield' : 'log-in'" :size="16" />
-            {{ submitting ? (setup ? t('auth.settingUp') : t('auth.signingIn')) : (setup ? t('auth.setup') : t('auth.signIn')) }}
+            <Icon v-else :name="lockSeconds > 0 ? 'lock' : setup ? 'shield' : 'log-in'" :size="16" />
+            {{
+              lockSeconds > 0
+                ? t('auth.lockedButton', { time: lockCountdown })
+                : submitting
+                  ? (setup ? t('auth.settingUp') : t('auth.signingIn'))
+                  : (setup ? t('auth.setup') : t('auth.signIn'))
+            }}
           </button>
         </form>
 
@@ -178,6 +248,15 @@ async function skip() {
 .eye-btn { position: absolute; right: 6px; width: 30px; height: 30px; display: grid; place-items: center; border: none; background: transparent; color: var(--faint); border-radius: 7px; }
 .eye-btn:hover { color: var(--ink); background: var(--surface-3); }
 .auth-error { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--bad); background: var(--bad-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--bad) 25%, transparent); }
+.auth-lock { display: flex; align-items: center; gap: 9px; margin-top: 4px; padding: 10px 11px; border-radius: 10px; color: var(--bad); background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent); }
+.auth-lock-icon { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+.auth-lock b { display: block; font-size: 12px; }
+.auth-lock span:not(.auth-lock-icon) { display: block; font-size: 11px; color: color-mix(in srgb, var(--bad) 80%, var(--ink)); font-family: var(--font-mono); letter-spacing: .03em; }
+.auth-unlocked { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--good); background: var(--good-soft); border: 1px solid color-mix(in srgb, var(--good) 25%, transparent); font-size: 11.5px; }
+.auth-attempts { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--bad); font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
+.attempts-dots { display: inline-flex; gap: 3px; }
+.attempts-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--surface-3); border: 1px solid var(--line-strong); }
+.attempts-dots i.used { background: var(--bad); border-color: var(--bad); box-shadow: 0 0 8px color-mix(in srgb, var(--bad) 50%, transparent); }
 .auth-submit { width: 100%; margin-top: 8px; }
 .auth-note { margin: 0; color: var(--faint); text-align: center; line-height: 1.6; }
 .auth-later { width: 100%; color: var(--muted); font-size: 12px; }

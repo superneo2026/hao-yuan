@@ -21,7 +21,8 @@ from extensions.common import fail, ok
 COOKIE_NAME = "haoyuan_session"
 TOKEN_TTL = 7 * 24 * 3600
 PBKDF2_ITERATIONS = 210_000
-MAX_FAILURES = 5
+DEFAULT_MAX_FAILURES = 5
+MAX_FAILURES_LIMIT = 20
 LOCK_SECONDS = 5 * 60
 STATE_PATH = DATA_DIR / "user_account.json"
 
@@ -59,6 +60,7 @@ class AuthStore:
             "password_hash": "",
             "iterations": PBKDF2_ITERATIONS,
             "secret": secrets.token_hex(32),
+            "max_failures": DEFAULT_MAX_FAILURES,
             "created_at": "",
             "updated_at": "",
         }
@@ -69,6 +71,11 @@ class AuthStore:
             base.update(data)
         base["enabled"] = bool(base.get("enabled", True))
         base["configured"] = bool(base.get("configured")) and bool(base.get("password_hash"))
+        try:
+            max_failures = int(base.get("max_failures") or DEFAULT_MAX_FAILURES)
+        except (TypeError, ValueError):
+            max_failures = DEFAULT_MAX_FAILURES
+        base["max_failures"] = max(1, min(MAX_FAILURES_LIMIT, max_failures))
         return base
 
     def read(self) -> dict[str, Any]:
@@ -113,7 +120,22 @@ class AuthStore:
             "configured": configured,
             "locked": enabled and configured,
             "username": data.get("username", ""),
+            "max_failures": int(data.get("max_failures") or DEFAULT_MAX_FAILURES),
+            "lock_seconds": int(LOCK_SECONDS),
         }
+
+    def set_policy(self, max_failures: int) -> dict[str, Any]:
+        try:
+            value = int(max_failures)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"最多错误次数需为 1-{MAX_FAILURES_LIMIT} 之间的整数") from exc
+        if not 1 <= value <= MAX_FAILURES_LIMIT:
+            raise ValueError(f"最多错误次数需为 1-{MAX_FAILURES_LIMIT} 之间的整数")
+        with self._lock:
+            data = self.read()
+            data["max_failures"] = value
+            self.write(data)
+        return {"max_failures": value, "lock_seconds": int(LOCK_SECONDS)}
 
     def setup(self, username: str, password: str) -> dict[str, Any]:
         with self._lock:
@@ -297,6 +319,10 @@ class ChangeBody(BaseModel):
     new_password: str = ""
 
 
+class PolicyBody(BaseModel):
+    max_failures: int = DEFAULT_MAX_FAILURES
+
+
 def _clean_username(value: str) -> str:
     username = (value or "").strip()
     if not 2 <= len(username) <= 32:
@@ -341,12 +367,25 @@ def build_router(store: AuthStore) -> APIRouter:
             failures.pop(key, None)
         return 0
 
-    def record_failure(key: str) -> None:
+    def record_failure(key: str, max_failures: int) -> dict[str, Any]:
         entry = failures.setdefault(key, {"count": 0, "until": 0})
         entry["count"] = float(entry.get("count", 0)) + 1
-        if entry["count"] >= MAX_FAILURES:
+        attempts = int(entry["count"])
+        if attempts >= max_failures:
             entry["until"] = time.time() + LOCK_SECONDS
             entry["count"] = 0
+            return {
+                "locked": True,
+                "remaining_attempts": 0,
+                "retry_after": int(LOCK_SECONDS),
+                "max_failures": max_failures,
+            }
+        return {
+            "locked": False,
+            "remaining_attempts": max_failures - attempts,
+            "retry_after": 0,
+            "max_failures": max_failures,
+        }
 
     def token_from_request(request: Request) -> str:
         return _token_from_headers(
@@ -399,18 +438,33 @@ def build_router(store: AuthStore) -> APIRouter:
         if not gate["configured"]:
             return fail("尚未设置账号，请先完成初始化", 400)
         key = client_key(request)
+        max_failures = int(gate.get("max_failures") or DEFAULT_MAX_FAILURES)
         remaining = check_lock(key)
         if remaining > 0:
             wait = _format_wait(remaining)
             return fail(
-                f"连续登录失败 {MAX_FAILURES} 次，账号已锁定，请 {wait}后重试",
+                f"连续登录失败 {max_failures} 次，账号已锁定，请 {wait}后重试",
                 429,
-                {"locked": True, "retry_after": max(1, int(remaining + 0.999))},
+                {
+                    "locked": True,
+                    "retry_after": max(1, int(remaining + 0.999)),
+                    "max_failures": max_failures,
+                },
             )
         username = (body.username or "").strip()
         if not store.verify(username, body.password or ""):
-            record_failure(key)
-            return fail("用户名或密码不正确", 401)
+            result = record_failure(key, max_failures)
+            if result["locked"]:
+                return fail(
+                    f"连续登录失败 {max_failures} 次，账号已锁定，请 {_format_wait(result['retry_after'])}后重试",
+                    429,
+                    result,
+                )
+            return fail(
+                f"用户名或密码不正确，还可尝试 {result['remaining_attempts']} 次",
+                401,
+                result,
+            )
         failures.pop(key, None)
         token = store.issue_token(str(store.read().get("username", username)))
         set_session(response, token)
@@ -427,6 +481,21 @@ def build_router(store: AuthStore) -> APIRouter:
         if not payload:
             return fail("需要登录", 401)
         return ok({"authenticated": True, "username": payload.get("u", "")})
+
+    @router.put("/auth/policy")
+    async def auth_policy(body: PolicyBody, request: Request):
+        payload = store.verify_token(token_from_request(request))
+        if not payload:
+            return fail("需要登录", 401)
+        try:
+            policy = store.set_policy(body.max_failures)
+        except ValueError as exc:
+            return fail(str(exc), 400)
+        failures.clear()
+        return ok(
+            {**status_payload(request), **policy, "authenticated": True},
+            "安全策略已更新",
+        )
 
     @router.post("/auth/change")
     async def auth_change(body: ChangeBody, request: Request, response: Response):

@@ -39,10 +39,16 @@ async function request(path, options = {}) {
   }
   if (!response.ok) {
     const message = payload?.message || payload?.detail || `HTTP ${response.status}`
-    throw new Error(message)
+    const error = new Error(message)
+    error.code = payload?.code ?? response.status
+    error.data = payload?.data
+    throw error
   }
   if (payload && typeof payload.code === 'number' && payload.code !== 200) {
-    throw new Error(payload.message || 'Request failed')
+    const error = new Error(payload.message || 'Request failed')
+    error.code = payload.code
+    error.data = payload.data
+    throw error
   }
   return payload?.data !== undefined ? payload.data : payload
 }
@@ -105,6 +111,7 @@ export const api = {
   authLogin: (body) => request('/api/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   authLogout: () => request('/api/auth/logout', { method: 'POST' }),
   authChange: (body) => request('/api/auth/change', { method: 'POST', body: JSON.stringify(body) }),
+  authPolicy: (body) => request('/api/auth/policy', { method: 'PUT', body: JSON.stringify(body) }),
 
   settings: () => request('/api/settings'),
   saveGate: (mode, allow) => request('/api/settings/gate', { method: 'PUT', body: JSON.stringify({ mode, allow }) }),

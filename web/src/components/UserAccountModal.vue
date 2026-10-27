@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { changeAccount, logoutAccount, state } from '../stores/app'
+import { changeAccount, logoutAccount, saveAuthPolicy, state } from '../stores/app'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
 
@@ -13,6 +13,8 @@ const confirm = ref('')
 const show = ref(false)
 const loading = ref(false)
 const error = ref('')
+const maxFailures = ref(Number(state.auth.maxFailures) || 5)
+const policySaving = ref(false)
 
 const nameChanged = computed(() => username.value.trim() && username.value.trim() !== state.auth.username)
 
@@ -49,6 +51,24 @@ async function save() {
   }
 }
 
+async function savePolicy() {
+  error.value = ''
+  const value = Number(maxFailures.value)
+  if (!Number.isInteger(value) || value < 1 || value > 20) {
+    error.value = t('auth.policyRange')
+    return
+  }
+  policySaving.value = true
+  try {
+    await saveAuthPolicy(value)
+    maxFailures.value = value
+  } catch (err) {
+    error.value = err.message || t('common.error')
+  } finally {
+    policySaving.value = false
+  }
+}
+
 async function signOut() {
   loading.value = true
   try {
@@ -79,6 +99,37 @@ async function signOut() {
           <div>
             <b>{{ t('auth.accountProtected') }}</b>
             <span>{{ t('auth.accountProtectedDesc') }}</span>
+          </div>
+        </div>
+
+        <div class="policy-card">
+          <div class="policy-head">
+            <span class="policy-icon"><Icon name="shield" :size="16" /></span>
+            <div>
+              <b>{{ t('auth.policyTitle') }}</b>
+              <span>{{ t('auth.policyDesc') }}</span>
+            </div>
+          </div>
+          <div class="policy-row">
+            <input id="ac-max" v-model.number="maxFailures" class="field policy-input" type="number" min="1" max="20" />
+            <span class="tiny muted">{{ t('auth.attemptsUnit') }}</span>
+            <span class="spacer" />
+            <div class="policy-chips">
+              <button
+                v-for="n in [3, 5, 10]"
+                :key="n"
+                type="button"
+                class="policy-chip"
+                :class="{ active: Number(maxFailures) === n }"
+                @click="maxFailures = n"
+              >
+                {{ n }}
+              </button>
+            </div>
+            <button class="btn sm primary" :disabled="policySaving" @click="savePolicy">
+              <span v-if="policySaving" class="spinner" style="width: 11px; height: 11px" />
+              {{ t('auth.savePolicy') }}
+            </button>
           </div>
         </div>
 
@@ -156,6 +207,17 @@ async function signOut() {
 .banner-icon { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
 .account-banner b { display: block; font-size: 12.5px; }
 .account-banner span { display: block; font-size: 10.5px; color: var(--muted); }
+.policy-card { padding: 12px; margin-bottom: 9px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.policy-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+.policy-icon { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 9px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); border: 1px solid var(--brand-line); }
+.policy-head b { display: block; font-size: 12.5px; }
+.policy-head span { display: block; font-size: 10.5px; color: var(--muted); }
+.policy-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.policy-input { width: 68px; height: 32px; padding: 0 8px; text-align: center; font-family: var(--font-mono); font-weight: 650; }
+.policy-chips { display: flex; gap: 4px; }
+.policy-chip { height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 11px; }
+.policy-chip:hover { border-color: var(--line-strong); color: var(--ink); }
+.policy-chip.active { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
 .account-field { position: relative; display: flex; align-items: center; margin-bottom: 8px; }
 .field-icon { position: absolute; left: 11px; color: var(--faint); pointer-events: none; }
 .account-input { padding-left: 34px; height: 40px; }

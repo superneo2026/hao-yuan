@@ -79,7 +79,7 @@ export const state = reactive({
   usageByModel: [],
   supervisor: null,
   orchestrations: [],
-  auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', loading: false },
+  auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', maxFailures: 5, lockSeconds: 300, loading: false },
   market: { loading: false, online: false, error: '', centerUrl: '', plugins: [] },
   accountOpen: false,
   authSetupOpen: false,
@@ -452,7 +452,7 @@ export async function checkAuth() {
     const data = await api.authStatus()
     applyAuth(data)
   } catch {
-    applyAuth({ checked: true, enabled: false, configured: false, active: false, authenticated: false, username: '' })
+    applyAuth({ checked: true, enabled: false, configured: false, active: false, authenticated: false, username: '', max_failures: 5 })
   }
   return state.auth
 }
@@ -465,6 +465,8 @@ function applyAuth(data) {
     active: !!data.active,
     authenticated: !!data.authenticated,
     username: data.username || '',
+    maxFailures: Number(data.max_failures) || 5,
+    lockSeconds: Number(data.lock_seconds) || 300,
     loading: false
   }
 }
@@ -518,6 +520,13 @@ export async function changeAccount(body) {
   if (data.token) setAuthToken(data.token)
   applyAuth(data)
   toast(t('auth.changed'), 'good')
+  return data
+}
+
+export async function saveAuthPolicy(maxFailures) {
+  const data = await api.authPolicy({ max_failures: maxFailures })
+  applyAuth(data)
+  toast(t('auth.policySaved'), 'good')
   return data
 }
 
