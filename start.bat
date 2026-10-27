@@ -23,7 +23,7 @@ pushd web
 call npm run build
 popd
 
-echo [HaoYuan] Starting API and web UI on http://127.0.0.1:8030
-start "" http://127.0.0.1:8030
+echo [HaoYuan] Starting API on port 8030 (auto +1 if busy)...
+start "" /min powershell -NoProfile -ExecutionPolicy Bypass -Command "$port=$null; for($i=0;$i -lt 120 -and -not $port;$i++){ Start-Sleep -Milliseconds 500; try{ $r=Get-Content -Raw -LiteralPath 'api\data\runtime.json' | ConvertFrom-Json; if($r.api_port){ $port=[int]$r.api_port } }catch{}}; Start-Process ('http://127.0.0.1:' + $(if($port){$port}else{8030}))"
 cd api
 ..\api\env1\Scripts\python.exe main.py

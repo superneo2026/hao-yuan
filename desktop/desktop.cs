@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -7,12 +8,13 @@ using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("HaoYuan Desktop Console")]
 [assembly: System.Reflection.AssemblyProduct("HaoYuan")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
 
 static class Program
 {
@@ -36,11 +38,10 @@ static class Program
 
 sealed class MainForm : Form
 {
-    const int ApiPort = 8030;
-    const int WebPort = 8130;
     static readonly Regex AnsiPattern = new Regex("\u001b\\[[0-9;?]*[A-Za-z]", RegexOptions.Compiled);
 
     readonly string root;
+    readonly string runtimeFile;
     Process backendProc;
     Process frontendProc;
     volatile bool backendStarting;
@@ -49,8 +50,17 @@ sealed class MainForm : Form
     volatile bool frontendCancel;
     volatile bool building;
 
+    int apiPortConfig = 8030;
+    int webPortConfig = 8130;
+    int apiPortActual = 8030;
+    int webPortActual = 8130;
+
     Label backendStatus;
     Label frontendStatus;
+    Label backendUrlLabel;
+    Label frontendUrlLabel;
+    NumericUpDown apiPortBox;
+    NumericUpDown webPortBox;
     Button backendStart;
     Button backendStop;
     Button frontendStart;
@@ -63,10 +73,14 @@ sealed class MainForm : Form
     public MainForm()
     {
         root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        runtimeFile = Path.Combine(root, Path.Combine("api", Path.Combine("data", "runtime.json")));
+        RefreshRuntime();
         BuildUi();
+        apiPortBox.Value = ClampPort(apiPortConfig);
+        webPortBox.Value = ClampPort(webPortConfig);
         UpdateStatus();
         Log("就绪。项目目录：" + root);
-        Log("提示：关闭本窗口不会停止已启动的服务，服务可继续在后台运行。");
+        Log("提示：端口被占用时服务会自动 +1 顺延；关闭本窗口不会停止已启动的服务。");
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -82,7 +96,7 @@ sealed class MainForm : Form
         Text = "豪源 · 桌面控制台";
         Font = new Font("Microsoft YaHei UI", 9F);
         BackColor = Color.FromArgb(246, 247, 249);
-        ClientSize = new Size(840, 580);
+        ClientSize = new Size(840, 650);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -117,7 +131,8 @@ sealed class MainForm : Form
         Controls.Add(card);
 
         card.Controls.Add(MakeLabel("后端服务", new Point(22, 18), true));
-        card.Controls.Add(MakeLabel("api · http://127.0.0.1:8030", new Point(22, 45), false));
+        backendUrlLabel = MakeLabel("api · http://127.0.0.1:" + apiPortActual, new Point(22, 45), false);
+        card.Controls.Add(backendUrlLabel);
         backendStatus = MakeStatusLabel(new Point(330, 22));
         card.Controls.Add(backendStatus);
         backendStart = MakeButton("启动后端", new Point(510, 18), 120, 36, ButtonKind.StartSmall);
@@ -128,7 +143,8 @@ sealed class MainForm : Form
         card.Controls.Add(backendStop);
 
         card.Controls.Add(MakeLabel("前端服务", new Point(22, 78), true));
-        card.Controls.Add(MakeLabel("web · http://localhost:8130", new Point(22, 105), false));
+        frontendUrlLabel = MakeLabel("web · http://localhost:" + webPortActual, new Point(22, 105), false);
+        card.Controls.Add(frontendUrlLabel);
         frontendStatus = MakeStatusLabel(new Point(330, 82));
         card.Controls.Add(frontendStatus);
         frontendStart = MakeButton("启动前端", new Point(510, 78), 120, 36, ButtonKind.StartSmall);
@@ -138,27 +154,58 @@ sealed class MainForm : Form
         frontendStop.Click += delegate { StopFrontend(); };
         card.Controls.Add(frontendStop);
 
-        Button allStart = MakeButton("全部启动", new Point(24, 244), 186, 44, ButtonKind.Primary);
+        Panel portCard = new Panel();
+        portCard.BackColor = Color.White;
+        portCard.Location = new Point(24, 236);
+        portCard.Size = new Size(792, 64);
+        portCard.Paint += delegate (object sender, PaintEventArgs e)
+        {
+            using (Pen pen = new Pen(Color.FromArgb(226, 232, 240)))
+            {
+                e.Graphics.DrawRectangle(pen, 0, 0, portCard.Width - 1, portCard.Height - 1);
+            }
+        };
+        Controls.Add(portCard);
+
+        portCard.Controls.Add(MakeLabel("后端端口", new Point(22, 21), true));
+        apiPortBox = MakePortBox(new Point(112, 17));
+        portCard.Controls.Add(apiPortBox);
+        portCard.Controls.Add(MakeLabel("前端端口", new Point(250, 21), true));
+        webPortBox = MakePortBox(new Point(352, 17));
+        portCard.Controls.Add(webPortBox);
+
+        Button applyPorts = MakeButton("应用端口并重启", new Point(488, 15), 158, 34, ButtonKind.Primary);
+        applyPorts.Click += delegate { ApplyPortsAndRestart(); };
+        portCard.Controls.Add(applyPorts);
+
+        Label portHint = new Label();
+        portHint.Text = "冲突时自动 +1 顺延";
+        portHint.ForeColor = Color.FromArgb(148, 163, 184);
+        portHint.AutoSize = true;
+        portHint.Location = new Point(664, 24);
+        portCard.Controls.Add(portHint);
+
+        Button allStart = MakeButton("全部启动", new Point(24, 316), 186, 44, ButtonKind.Primary);
         allStart.Click += delegate { StartAll(); };
         Controls.Add(allStart);
 
-        Button allStop = MakeButton("全部关闭", new Point(226, 244), 186, 44, ButtonKind.Danger);
+        Button allStop = MakeButton("全部关闭", new Point(226, 316), 186, 44, ButtonKind.Danger);
         allStop.Click += delegate { StopAll(); };
         Controls.Add(allStop);
 
-        Button openProduct = MakeButton("打开产品网页", new Point(428, 244), 186, 44, ButtonKind.Secondary);
+        Button openProduct = MakeButton("打开产品网页", new Point(428, 316), 186, 44, ButtonKind.Secondary);
         openProduct.Click += delegate { OpenProductPage(); };
         Controls.Add(openProduct);
 
-        Button build = MakeButton("构建前端", new Point(630, 244), 186, 44, ButtonKind.Secondary);
+        Button build = MakeButton("构建前端", new Point(630, 316), 186, 44, ButtonKind.Secondary);
         build.Click += delegate { BuildFrontend(); };
         Controls.Add(build);
 
-        Button openFolder = MakeButton("打开项目目录", new Point(24, 302), 150, 32, ButtonKind.Secondary);
+        Button openFolder = MakeButton("打开项目目录", new Point(24, 374), 150, 32, ButtonKind.Secondary);
         openFolder.Click += delegate { OpenFolder(); };
         Controls.Add(openFolder);
 
-        Button refresh = MakeButton("刷新状态", new Point(186, 302), 130, 32, ButtonKind.Secondary);
+        Button refresh = MakeButton("刷新状态", new Point(186, 374), 130, 32, ButtonKind.Secondary);
         refresh.Click += delegate { UpdateStatus(); Log("状态已刷新。"); };
         Controls.Add(refresh);
 
@@ -166,7 +213,7 @@ sealed class MainForm : Form
         hint.Text = "状态每秒自动刷新 · 首次启动会自动创建环境并安装依赖";
         hint.ForeColor = Color.FromArgb(148, 163, 184);
         hint.AutoSize = true;
-        hint.Location = new Point(334, 310);
+        hint.Location = new Point(334, 382);
         Controls.Add(hint);
 
         Label logTitle = new Label();
@@ -174,12 +221,12 @@ sealed class MainForm : Form
         logTitle.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
         logTitle.ForeColor = Color.FromArgb(15, 23, 42);
         logTitle.AutoSize = true;
-        logTitle.Location = new Point(24, 350);
+        logTitle.Location = new Point(24, 424);
         Controls.Add(logTitle);
 
         logBox = new RichTextBox();
-        logBox.Location = new Point(24, 376);
-        logBox.Size = new Size(792, 184);
+        logBox.Location = new Point(24, 450);
+        logBox.Size = new Size(792, 176);
         logBox.ReadOnly = true;
         logBox.BackColor = Color.FromArgb(15, 23, 42);
         logBox.ForeColor = Color.FromArgb(226, 232, 240);
@@ -215,6 +262,19 @@ sealed class MainForm : Form
         label.Text = "● 检测中";
         label.ForeColor = Color.FromArgb(148, 163, 184);
         return label;
+    }
+
+    NumericUpDown MakePortBox(Point location)
+    {
+        NumericUpDown box = new NumericUpDown();
+        box.Location = location;
+        box.Size = new Size(120, 28);
+        box.Minimum = 1024;
+        box.Maximum = 65535;
+        box.Increment = 1;
+        box.ThousandsSeparator = false;
+        box.TextAlign = HorizontalAlignment.Left;
+        return box;
     }
 
     Button MakeButton(string text, Point location, int width, int height, ButtonKind kind)
@@ -281,6 +341,76 @@ sealed class MainForm : Form
         logBox.ScrollToCaret();
     }
 
+    static int ClampPort(int port)
+    {
+        if (port < 1024) return 1024;
+        if (port > 65535) return 65535;
+        return port;
+    }
+
+    Dictionary<string, object> ReadRuntime()
+    {
+        try
+        {
+            if (!File.Exists(runtimeFile)) return new Dictionary<string, object>();
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            Dictionary<string, object> data = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(runtimeFile, Encoding.UTF8));
+            return data ?? new Dictionary<string, object>();
+        }
+        catch { return new Dictionary<string, object>(); }
+    }
+
+    void WriteRuntime(Dictionary<string, object> data)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(runtimeFile));
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            File.WriteAllText(runtimeFile, serializer.Serialize(data), Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            Log("写入端口配置失败：" + ex.Message);
+        }
+    }
+
+    int RuntimeInt(Dictionary<string, object> data, string key, int fallback)
+    {
+        try
+        {
+            object value;
+            if (data != null && data.TryGetValue(key, out value) && value != null)
+            {
+                return Convert.ToInt32(value);
+            }
+        }
+        catch { }
+        return fallback;
+    }
+
+    void RefreshRuntime()
+    {
+        Dictionary<string, object> data = ReadRuntime();
+        apiPortConfig = ClampPort(RuntimeInt(data, "api_port_config", apiPortConfig));
+        webPortConfig = ClampPort(RuntimeInt(data, "web_port_config", webPortConfig));
+        apiPortActual = ClampPort(RuntimeInt(data, "api_port", apiPortConfig));
+        webPortActual = ClampPort(RuntimeInt(data, "web_port", webPortConfig));
+    }
+
+    void SavePortConfig(int apiPort, int webPort)
+    {
+        Dictionary<string, object> data = ReadRuntime();
+        data["api_port_config"] = apiPort;
+        data["web_port_config"] = webPort;
+        WriteRuntime(data);
+    }
+
+    void ClearRuntimePort(string key)
+    {
+        Dictionary<string, object> data = ReadRuntime();
+        if (data.Remove(key)) WriteRuntime(data);
+    }
+
     static bool IsPortOpen(int port)
     {
         try
@@ -304,13 +434,17 @@ sealed class MainForm : Form
     void UpdateStatus()
     {
         if (IsDisposed) return;
-        bool apiUp = IsPortOpen(ApiPort);
-        bool webUp = IsPortOpen(WebPort);
+        RefreshRuntime();
+        bool apiUp = IsPortOpen(apiPortActual);
+        bool webUp = IsPortOpen(webPortActual);
         bool apiBusy = backendStarting || IsAlive(backendProc);
         bool webBusy = frontendStarting || IsAlive(frontendProc);
 
         SetStatus(backendStatus, apiUp, apiBusy);
         SetStatus(frontendStatus, webUp, webBusy);
+
+        backendUrlLabel.Text = "api · http://127.0.0.1:" + apiPortActual + (apiPortActual == apiPortConfig ? "" : "（自动顺延）");
+        frontendUrlLabel.Text = "web · http://localhost:" + webPortActual + (webPortActual == webPortConfig ? "" : "（自动顺延）");
 
         backendStart.Enabled = !apiUp && !apiBusy;
         backendStop.Enabled = apiUp || apiBusy;
@@ -337,16 +471,51 @@ sealed class MainForm : Form
         }
     }
 
+    void ApplyPortsAndRestart()
+    {
+        if (backendStarting || frontendStarting)
+        {
+            Log("服务正在启动中，请稍后再修改端口。");
+            return;
+        }
+        int newApi = (int)apiPortBox.Value;
+        int newWeb = (int)webPortBox.Value;
+        bool running = IsPortOpen(apiPortActual) || IsPortOpen(webPortActual) || IsAlive(backendProc) || IsAlive(frontendProc);
+        if (!running && newApi == apiPortConfig && newWeb == webPortConfig)
+        {
+            Log("端口未变化且服务未运行，仅保存配置。");
+        }
+        else
+        {
+            Log("应用端口配置：后端 " + newApi + " / 前端 " + newWeb + "，正在重启服务...");
+        }
+        StopBackend();
+        StopFrontend();
+        apiPortConfig = newApi;
+        webPortConfig = newWeb;
+        apiPortActual = newApi;
+        webPortActual = newWeb;
+        SavePortConfig(newApi, newWeb);
+        Log("端口配置已保存：" + runtimeFile);
+        StartAll();
+    }
+
     void StartAll()
     {
         StartBackend();
-        StartFrontend();
-        Log("等待服务就绪后自动打开产品网页...");
+        Log("等待后端端口确定后启动前端...");
         ThreadPool.QueueUserWorkItem(delegate
         {
+            for (int i = 0; i < 120; i++)
+            {
+                int port = RuntimeInt(ReadRuntime(), "api_port", 0);
+                if (port > 0 && IsPortOpen(port)) break;
+                Thread.Sleep(500);
+            }
+            StartFrontend();
             for (int i = 0; i < 80; i++)
             {
-                if (IsPortOpen(ApiPort) || IsPortOpen(WebPort))
+                if (IsPortOpen(apiPortActual) || IsPortOpen(webPortActual))
                 {
                     OpenProductPage();
                     return;
@@ -365,14 +534,14 @@ sealed class MainForm : Form
 
     void StartBackend()
     {
-        if (backendStarting || IsPortOpen(ApiPort) || IsAlive(backendProc))
+        if (backendStarting || IsPortOpen(apiPortActual) || IsAlive(backendProc))
         {
             Log("后端服务已在运行或正在启动。");
             return;
         }
         backendCancel = false;
         backendStarting = true;
-        Log("正在启动后端服务...");
+        Log("正在启动后端服务（基准端口 " + apiPortConfig + "，被占用时自动 +1 顺延）...");
         ThreadPool.QueueUserWorkItem(delegate
         {
             try
@@ -407,6 +576,7 @@ sealed class MainForm : Form
                 info.StandardErrorEncoding = Encoding.UTF8;
                 info.EnvironmentVariables["PYTHONUTF8"] = "1";
                 info.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+                info.EnvironmentVariables["HAOYUAN_PORT"] = apiPortConfig.ToString();
 
                 Process process = new Process();
                 process.StartInfo = info;
@@ -428,7 +598,7 @@ sealed class MainForm : Form
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
                 backendProc = process;
-                Log("后端服务启动中（PID " + process.Id + "），地址 http://127.0.0.1:8030");
+                Log("后端服务启动中（PID " + process.Id + "），基准地址 http://127.0.0.1:" + apiPortConfig);
             }
             catch (Exception ex)
             {
@@ -451,20 +621,22 @@ sealed class MainForm : Form
             backendProc.Dispose();
             backendProc = null;
         }
-        KillPort(ApiPort);
+        KillPort(apiPortActual);
+        ClearRuntimePort("api_port");
+        apiPortActual = apiPortConfig;
         Log("后端服务已停止。");
     }
 
     void StartFrontend()
     {
-        if (frontendStarting || IsPortOpen(WebPort) || IsAlive(frontendProc))
+        if (frontendStarting || IsPortOpen(webPortActual) || IsAlive(frontendProc))
         {
             Log("前端服务已在运行或正在启动。");
             return;
         }
         frontendCancel = false;
         frontendStarting = true;
-        Log("正在启动前端开发服务...");
+        Log("正在启动前端开发服务（基准端口 " + webPortConfig + "，被占用时自动 +1 顺延）...");
         ThreadPool.QueueUserWorkItem(delegate
         {
             try
@@ -486,6 +658,9 @@ sealed class MainForm : Form
                     return;
                 }
 
+                int proxyPort = ClampPort(RuntimeInt(ReadRuntime(), "api_port", apiPortConfig));
+                if (!IsPortOpen(proxyPort)) proxyPort = apiPortConfig;
+
                 ProcessStartInfo info = new ProcessStartInfo("cmd.exe", "/c npm run dev");
                 info.WorkingDirectory = webDir;
                 info.UseShellExecute = false;
@@ -494,6 +669,8 @@ sealed class MainForm : Form
                 info.RedirectStandardError = true;
                 info.StandardOutputEncoding = Encoding.UTF8;
                 info.StandardErrorEncoding = Encoding.UTF8;
+                info.EnvironmentVariables["HAOYUAN_WEB_PORT"] = webPortConfig.ToString();
+                info.EnvironmentVariables["HAOYUAN_API_PORT"] = proxyPort.ToString();
 
                 Process process = new Process();
                 process.StartInfo = info;
@@ -515,7 +692,7 @@ sealed class MainForm : Form
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
                 frontendProc = process;
-                Log("前端服务启动中（PID " + process.Id + "），地址 http://localhost:8130");
+                Log("前端服务启动中（PID " + process.Id + "），基准地址 http://localhost:" + webPortConfig + "，代理后端 :" + proxyPort);
             }
             catch (Exception ex)
             {
@@ -538,7 +715,9 @@ sealed class MainForm : Form
             frontendProc.Dispose();
             frontendProc = null;
         }
-        KillPort(WebPort);
+        KillPort(webPortActual);
+        ClearRuntimePort("web_port");
+        webPortActual = webPortConfig;
         Log("前端服务已停止。");
     }
 
@@ -556,7 +735,7 @@ sealed class MainForm : Form
             try
             {
                 int code = RunBlocking("cmd.exe", "/c npm run build", Path.Combine(root, "web"));
-                if (code == 0) Log("前端构建完成，生产页面由后端 8030 托管。");
+                if (code == 0) Log("前端构建完成，生产页面由后端端口 " + apiPortActual + " 托管。");
                 else Log("前端构建失败，退出码 " + code + "。");
             }
             catch (Exception ex)
@@ -584,14 +763,15 @@ sealed class MainForm : Form
 
     void OpenProductPage()
     {
-        if (IsPortOpen(ApiPort))
+        RefreshRuntime();
+        if (IsPortOpen(apiPortActual))
         {
-            OpenUrl("http://127.0.0.1:8030");
+            OpenUrl("http://127.0.0.1:" + apiPortActual);
             return;
         }
-        if (IsPortOpen(WebPort))
+        if (IsPortOpen(webPortActual))
         {
-            OpenUrl("http://localhost:8130");
+            OpenUrl("http://localhost:" + webPortActual);
             return;
         }
         Log("服务尚未启动，请先点击「全部启动」或启动后端/前端。");

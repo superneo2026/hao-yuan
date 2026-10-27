@@ -25,6 +25,19 @@ fi
 echo "[HaoYuan] Building frontend..."
 (cd web && npm run build)
 
-echo "[HaoYuan] Starting API and web UI on http://127.0.0.1:8030"
+echo "[HaoYuan] Starting API on port 8030 (auto +1 if busy)..."
+(
+  PORT=""
+  for _ in $(seq 1 120); do
+    if [ -f api/data/runtime.json ]; then
+      PORT="$(python3 -c "import json;print(json.load(open('api/data/runtime.json')).get('api_port') or '')" 2>/dev/null || true)"
+      [ -n "$PORT" ] && break
+    fi
+    sleep 0.5
+  done
+  PORT="${PORT:-8030}"
+  echo "[HaoYuan] API ready at http://127.0.0.1:$PORT"
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "http://127.0.0.1:$PORT" || true; fi
+) &
 cd api
 exec ../api/env1/bin/python main.py

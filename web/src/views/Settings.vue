@@ -71,6 +71,9 @@ function chooseDir(path) {
   saveWorkspace()
 }
 
+const apiAddress = `${window.location.host}`
+const docsUrl = `${window.location.origin}/docs`
+
 onMounted(async () => {
   await loadSettings()
   sync()
@@ -210,10 +213,10 @@ onMounted(async () => {
           <div><span>{{ t('settings.tools') }}</span><b>{{ state.health?.tools }}</b></div>
           <div><span>{{ t('settings.skills') }}</span><b>{{ state.health?.skills }}</b></div>
           <div><span>{{ t('settings.plugins') }}</span><b>{{ state.health?.plugins?.length || 0 }}</b></div>
-          <div><span>{{ t('settings.api') }}</span><b class="mono">127.0.0.1:8030</b></div>
+          <div><span>{{ t('settings.api') }}</span><b class="mono">{{ apiAddress }}</b></div>
         </div>
         <div class="row" style="margin-top: 12px">
-          <a class="btn sm" href="http://127.0.0.1:8030/docs" target="_blank" rel="noopener">{{ t('settings.docs') }}</a>
+          <a class="btn sm" :href="docsUrl" target="_blank" rel="noopener">{{ t('settings.docs') }}</a>
           <span class="tiny faint">{{ t('settings.footer', { version: state.health?.version }) }}</span>
         </div>
       </section>

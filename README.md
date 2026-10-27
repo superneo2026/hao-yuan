@@ -105,7 +105,9 @@ Kernel（会话 / 事件 / 工具注册 / 策略 / 模型网关 / 审批）
 start.bat
 ```
 
-脚本会自动：停止 8030 上的旧进程 → 创建 `api/env1` → 安装 Python 依赖 → 安装前端依赖 → 每次重新构建前端 → 启动 API，并打开 <http://127.0.0.1:8030>。这样不会因为旧进程或旧静态资源导致流式事件异常。
+脚本会自动：停止 8030 上的旧进程 → 创建 `api/env1` → 安装 Python 依赖 → 安装前端依赖 → 每次重新构建前端 → 启动 API，并自动打开产品网页。这样不会因为旧进程或旧静态资源导致流式事件异常。
+
+**端口自动顺延**：后端默认 `8030`、前端默认 `8130`；启动时若端口被占用会自动 +1（8031、8032…）直到绑定成功。实际端口写入 `api/data/runtime.json`，启动脚本会读取后直接打开正确地址。也可用环境变量 `HAOYUAN_PORT` / `HAOYUAN_WEB_PORT`（前端）、`HAOYUAN_API_PORT`（前端代理目标）显式指定基准端口。
 
 停止：
 
@@ -118,8 +120,9 @@ stop.bat
 双击根目录的 `desktop.exe` 打开图形化控制台（约 20 KB，仅依赖 Windows 自带的 .NET Framework 4.x）：
 
 - **全部启动 / 全部关闭**：一键管理后端与前端开发服务，启动后自动打开产品网页
-- **启动 / 停止后端**（8030）、**启动 / 停止前端**（8130）
-- **打开产品网页**：优先 `http://127.0.0.1:8030`，仅前端运行时回退 `http://localhost:8130`
+- **启动 / 停止后端**（默认 8030）、**启动 / 停止前端**（默认 8130）
+- **端口设置**：可直接修改后端 / 前端端口，点击「应用端口并重启」保存配置并自动重启两个服务；端口被占用时服务仍会自动 +1 顺延
+- **打开产品网页**：自动打开后端实际端口（`api/data/runtime.json`），仅前端运行时回退前端端口
 - **构建前端**、**打开项目目录**、每秒刷新的服务状态与实时运行日志
 
 关闭控制台窗口不会停止服务，如需停止请点击「全部关闭」或对应的停止按钮。源码位于 `desktop/`，修改后运行 `desktop\build.bat` 可重新编译。
@@ -139,15 +142,15 @@ cd api
 python -m venv env1
 env1\Scripts\activate           # Linux: source env1/bin/activate
 pip install -r requirements.txt
-python main.py                  # http://127.0.0.1:8030
+python main.py                  # http://127.0.0.1:8030，被占用时自动 +1
 
 # 前端开发模式（热更新，可选）
 cd web
 npm install
-npm run dev                     # http://127.0.0.1:8130
+npm run dev                     # http://localhost:8130，被占用时自动 +1；/api 与 /ws 代理到后端实际端口
 ```
 
-生产模式由后端直接托管 `web/dist`，只需要访问 `:8030`。
+生产模式由后端直接托管 `web/dist`，只需要访问后端实际端口。端口可通过环境变量覆盖：`HAOYUAN_PORT`（后端，默认 8030）、`HAOYUAN_WEB_PORT`（前端，默认 8130）、`HAOYUAN_API_PORT`（前端代理目标，默认读取 `api/data/runtime.json`）。
 
 ### 配置模型
 
@@ -259,6 +262,7 @@ hao-yuan/
 
 - 数据库：`api/data/haoyuan.db`（WAL）
 - 产物：`api/data/artifacts/<session_id>/`
+- 运行时端口：`api/data/runtime.json`（后端写 `api_port`、前端写 `web_port`、桌面控制台写 `api_port_config` / `web_port_config`）
 - 所有文件工具都受会话工作区白名单约束，拒绝 `../` 与绝对路径越界。
 - 高风险工具（写文件、patch、删除、移动、shell、git、机器人运动）必须经审批。
 - `run_shell` 对灾难性命令做硬阻断（如 `rm -rf /`、磁盘格式化、关机）。
@@ -547,7 +551,7 @@ python make_report.py
 | 总管 | `GET /supervisor/overview`、`GET /supervisor/console`、`POST /supervisor/act`、`POST /supervisor/chat` |
 | 编排 | `POST /orchestrations`、`GET /orchestrations`、`GET /orchestrations/{id}` |
 
-交互式文档：<http://127.0.0.1:8030/docs>
+交互式文档：<http://127.0.0.1:8030/docs>（端口顺延后以后端日志或 `api/data/runtime.json` 为准）
 
 ---
 
@@ -559,7 +563,7 @@ python -m pytest -q
 
 cd ../web
 npm run build
-npm run dev        # 开发模式，代理 /api 与 /ws 到 8030
+npm run dev        # 开发模式，/api 与 /ws 自动代理到后端实际端口
 ```
 
 建议在 `AGENTS.md` 中记录团队的 lint / test / build 命令，豪源会自动把项目记忆注入上下文。

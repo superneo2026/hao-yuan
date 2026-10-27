@@ -3,10 +3,11 @@
 ## Project commands
 
 - Backend tests: `cd api && python -m pytest -q`
-- Backend run: `cd api && python main.py` (port 8030)
-- Frontend dev: `cd web && npm run dev` (port 8130, proxies `/api` and `/ws` to 8030)
+- Backend run: `cd api && python main.py` (base port 8030, env `HAOYUAN_PORT`; auto +1 when busy, actual port written to `api/data/runtime.json`)
+- Frontend dev: `cd web && npm run dev` (base port 8130, env `HAOYUAN_WEB_PORT`; auto +1 when busy, proxies `/api`, `/docs` and `/ws` to `HAOYUAN_API_PORT` or `runtime.json` `api_port`)
 - Frontend build: `cd web && npm run build`
 - Production: build the frontend, then run the API; the API serves `web/dist` at `/`.
+- `desktop.exe` (source `desktop/desktop.cs`, build `desktop\build.bat`): can override base ports via `api_port_config` / `web_port_config` in `api/data/runtime.json` and restart services.
 
 ## Architecture invariants
 

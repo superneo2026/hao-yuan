@@ -10,7 +10,7 @@ if not exist "%CSC%" (
 "%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 ^
   /win32manifest:app.manifest ^
   /out:..\desktop.exe ^
-  /r:System.Windows.Forms.dll /r:System.Drawing.dll ^
+  /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll ^
   desktop.cs
 if errorlevel 1 exit /b 1
 echo [HaoYuan] Built ..\desktop.exe

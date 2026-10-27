@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from configs.configs import APP_NAME, APP_VERSION, SERVER_HOST, SERVER_PORT, WEB_DIST_DIR
+from configs.runtime import resolve_free_port, update_runtime
 from core.harness import harness_instance, init_harness
 from extensions import approvals, fs, plugins, sessions, settings, skills, system, usage
 from extensions.ws import ws_endpoint
@@ -68,4 +69,9 @@ else:
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host=SERVER_HOST, port=SERVER_PORT, reload=False)
+    port = resolve_free_port(SERVER_HOST, SERVER_PORT)
+    update_runtime(api_port=port)
+    if port != SERVER_PORT:
+        print(f"[HaoYuan] port {SERVER_PORT} is in use, falling back to {port}", flush=True)
+    print(f"[HaoYuan] API serving at http://{SERVER_HOST}:{port}", flush=True)
+    uvicorn.run("main:app", host=SERVER_HOST, port=port, reload=False)
