@@ -6,7 +6,7 @@ from pathlib import Path
 
 BENCH = Path(__file__).resolve().parent
 RUNS = BENCH / "runs"
-OUT = BENCH.parent / "testing" / "mimo-2026-10.html"
+OUT = BENCH.parent / "testing" / "index-2026-10-27.html"
 
 TOOLS = ["haoyuan", "claude", "opencode"]
 LABEL = {"haoyuan": "豪源 HaoYuan", "claude": "Claude Code", "opencode": "OpenCode"}
@@ -326,8 +326,8 @@ td b{{color:#1e293b}}
 <body>
 <div class="bg"></div>
 <nav class="topnav">
-  <a href="index.html">① deepseek-flash 深度评测</a>
-  <a href="mimo-2026-10.html" class="active">② mimo-v2.6-flash 公平评测（新）</a>
+  <a href="index-2026-10-26.html">① deepseek-flash 深度评测</a>
+  <a href="index-2026-10-27.html" class="active">② mimo-v2.6-flash 公平评测（新）</a>
 </nav>
 <nav class="nav">
   <div class="nav-title">REPORT</div>
@@ -541,7 +541,7 @@ td b{{color:#1e293b}}
 
 <div class="hl"><b>一句话总结：</b>在同一个 mimo-v2.6-flash 下，三个 harness 的正确率都到 100%；豪源通过“MiMo 正确接入 + 需求感知检索 + 复杂题上下文预装 + 进程树回收 + 简单题轻量路由”，在长程/性能题和 token 成本上建立优势，产品加权与等权口径均为第一。OpenCode 与 Claude Code 各自在个别任务上更快，但综合效率与成本落后。</div>
 
-<div class="footer">豪源 HaoYuan · MiMo 公平评测 · 2026-10 · 数据目录 test/bench · 报告目录 test/testing/mimo-2026-10.html</div>
+<div class="footer">豪源 HaoYuan · MiMo 公平评测 · 2026-10 · 数据目录 test/bench · 报告目录 test/testing/index-2026-10-27.html</div>
 </div>
 </body>
 </html>
