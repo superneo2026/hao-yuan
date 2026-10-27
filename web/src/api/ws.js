@@ -1,3 +1,5 @@
+import { getAuthToken } from './client'
+
 export function createSocket({ onEvent, onStatus }) {
   let socket = null
   let closedByUser = false
@@ -13,7 +15,8 @@ export function createSocket({ onEvent, onStatus }) {
   function connect() {
     if (closedByUser) return
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${protocol}://${location.host}/ws`
+    const token = getAuthToken()
+    const url = `${protocol}://${location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`
     status('connecting')
     try {
       socket = new WebSocket(url)

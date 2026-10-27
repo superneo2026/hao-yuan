@@ -61,7 +61,7 @@ async def info():
         {
             "name": APP_NAME,
             "version": APP_VERSION,
-            "description": "HaoYuan - autonomous AI coding studio with plugin architecture.",
+            "description": "HaoYuan - an autonomous AI studio with a plugin architecture, with coding as a core specialty.",
             "models": list_models(),
             "tools": [spec.model_dump() for spec in harness.tools.list_specs()],
             "agents": harness.agents.list(),

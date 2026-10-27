@@ -1,15 +1,41 @@
 const BASE = import.meta.env.VITE_API_BASE || ''
+const AUTH_TOKEN_KEY = 'hy.authToken'
+
+export function getAuthToken() {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setAuthToken(token) {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token)
+    else localStorage.removeItem(AUTH_TOKEN_KEY)
+  } catch {
+    /* storage is best-effort */
+  }
+}
+
+export function clearAuthToken() {
+  setAuthToken('')
+}
 
 async function request(path, options = {}) {
-  const response = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options
-  })
+  const headers = { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) }
+  const token = getAuthToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const response = await fetch(BASE + path, { ...options, headers })
   let payload = null
   try {
     payload = await response.json()
   } catch {
     payload = null
+  }
+  if (response.status === 401) {
+    clearAuthToken()
+    window.dispatchEvent(new CustomEvent('hy:unauthorized'))
   }
   if (!response.ok) {
     const message = payload?.message || payload?.detail || `HTTP ${response.status}`
@@ -65,6 +91,20 @@ export const api = {
   plugins: () => request('/api/plugins'),
   pluginContributions: () => request('/api/plugins/contributions'),
   togglePlugin: (name, enabled) => request(`/api/plugins/${name}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  marketplace: (center = '') => request(`/api/marketplace/plugins${qs({ center })}`),
+  installPlugin: (body) => request('/api/marketplace/install', { method: 'POST', body: JSON.stringify(body) }),
+  uploadPlugin: (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request('/api/plugins/upload', { method: 'POST', body: form })
+  },
+  uninstallPlugin: (name) => request(`/api/plugins/${name}`, { method: 'DELETE' }),
+
+  authStatus: () => request('/api/auth/status'),
+  authSetup: (body) => request('/api/auth/setup', { method: 'POST', body: JSON.stringify(body) }),
+  authLogin: (body) => request('/api/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+  authLogout: () => request('/api/auth/logout', { method: 'POST' }),
+  authChange: (body) => request('/api/auth/change', { method: 'POST', body: JSON.stringify(body) }),
 
   settings: () => request('/api/settings'),
   saveGate: (mode, allow) => request('/api/settings/gate', { method: 'PUT', body: JSON.stringify({ mode, allow }) }),

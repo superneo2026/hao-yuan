@@ -54,6 +54,10 @@ class PluginContext:
         if router is not None:
             self.harness.plugin_routers.append(router)
 
+    def add_middleware(self, middleware, **kwargs) -> None:
+        if middleware is not None:
+            self.harness.plugin_middlewares.append((middleware, kwargs))
+
     def on(self, hook: str, callback: Callable) -> None:
         self.harness.plugin_hooks.setdefault(hook, []).append(callback)
 

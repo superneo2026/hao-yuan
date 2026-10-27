@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { closeSessionTab, openDiff, renameSession, selectSession, state } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
+import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
 import ChatTimeline from '../components/ChatTimeline.vue'
 import Composer from '../components/Composer.vue'
@@ -133,6 +134,7 @@ function closeDiff() {
         <button class="icon-btn" :class="{ active: rightOpen }" :title="t('session.togglePanel')" @click="toggleRight">
           <Icon name="panel" :size="17" />
         </button>
+        <AccountMenu v-if="state.auth.authenticated" />
       </div>
     </header>
 

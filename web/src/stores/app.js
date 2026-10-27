@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue'
-import { api } from '../api/client'
+import { api, clearAuthToken, setAuthToken } from '../api/client'
 import { createSessionStream } from '../api/sse'
 import { i18n, setLocale, t } from '../i18n'
 
@@ -64,6 +64,7 @@ export const state = reactive({
   scrollTick: 0,
   toasts: [],
   sidebarCollapsed: localStorage.getItem(SIDEBAR) === '1',
+  pluginNavOpen: localStorage.getItem('hy.pluginNav') !== '0',
   mobileNavOpen: false,
   paletteOpen: false,
   newTaskOpen: false,
@@ -78,6 +79,10 @@ export const state = reactive({
   usageByModel: [],
   supervisor: null,
   orchestrations: [],
+  auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', loading: false },
+  market: { loading: false, online: false, error: '', centerUrl: '', plugins: [] },
+  accountOpen: false,
+  authSetupOpen: false,
   busy: { sending: false, loadingFile: false }
 })
 
@@ -104,6 +109,10 @@ export const activeSkills = computed(() => {
 export const liveToolList = computed(() =>
   state.live.toolOrder.map((id) => state.live.tools[id]).filter(Boolean)
 )
+export const authBlocked = computed(
+  () => state.auth.checked && state.auth.enabled && state.auth.configured && !state.auth.authenticated
+)
+export const authSetupMode = computed(() => state.auth.enabled && !state.auth.configured)
 export const tokenCount = computed(() => {
   const session = currentSession.value || {}
   return Number(session.context_tokens || 0) + Number(session.total_prompt || 0) + Number(session.total_completion || 0)
@@ -138,6 +147,11 @@ export function openPalette() {
 }
 export function closePalette() {
   state.paletteOpen = false
+}
+
+export function togglePluginNav() {
+  state.pluginNavOpen = !state.pluginNavOpen
+  localStorage.setItem('hy.pluginNav', state.pluginNavOpen ? '1' : '0')
 }
 
 function persistOpenTabs() {
@@ -425,11 +439,118 @@ function clearCurrentSession() {
   localStorage.removeItem(LAST_SESSION)
 }
 
+export function requestAccountSetup() {
+  state.authSetupOpen = true
+}
+
+export function dismissAccountSetup() {
+  state.authSetupOpen = false
+}
+
+export async function checkAuth() {
+  try {
+    const data = await api.authStatus()
+    applyAuth(data)
+  } catch {
+    applyAuth({ checked: true, enabled: false, configured: false, active: false, authenticated: false, username: '' })
+  }
+  return state.auth
+}
+
+function applyAuth(data) {
+  state.auth = {
+    checked: true,
+    enabled: !!data.enabled,
+    configured: !!data.configured,
+    active: !!data.active,
+    authenticated: !!data.authenticated,
+    username: data.username || '',
+    loading: false
+  }
+}
+
+export function markUnauthorized() {
+  clearAuthToken()
+  state.auth = { ...state.auth, checked: true, enabled: true, configured: true, active: true, authenticated: false, loading: false }
+  state.booted = true
+  state.loading = false
+  state.accountOpen = false
+  state.authSetupOpen = false
+  state.sessions = []
+  state.session = null
+  state.messages = []
+  state.artifacts = []
+  state.plugins = []
+  state.skills = []
+}
+
+export async function loginAccount(username, password) {
+  state.auth.loading = true
+  try {
+    const data = await api.authLogin({ username, password })
+    if (data.token) setAuthToken(data.token)
+    applyAuth(data)
+    state.booted = false
+    await boot()
+    return data
+  } finally {
+    state.auth.loading = false
+  }
+}
+
+export async function setupAccount(username, password) {
+  state.auth.loading = true
+  try {
+    const data = await api.authSetup({ username, password })
+    if (data.token) setAuthToken(data.token)
+    state.authSetupOpen = false
+    applyAuth(data)
+    state.booted = false
+    await boot()
+    return data
+  } finally {
+    state.auth.loading = false
+  }
+}
+
+export async function changeAccount(body) {
+  const data = await api.authChange(body)
+  if (data.token) setAuthToken(data.token)
+  applyAuth(data)
+  toast(t('auth.changed'), 'good')
+  return data
+}
+
+export async function logoutAccount() {
+  try {
+    await api.authLogout()
+  } catch {
+    /* ignore network errors on logout */
+  }
+  clearAuthToken()
+  state.auth = { ...state.auth, authenticated: false, active: state.auth.enabled && state.auth.configured }
+  state.accountOpen = false
+  state.booted = true
+  state.sessions = []
+  state.session = null
+  state.messages = []
+  state.artifacts = []
+  state.plugins = []
+  state.skills = []
+  toast(t('auth.loggedOut'), 'info')
+}
+
 export async function boot() {
   if (state.booted) return
   setLocale(i18n.locale, false)
   setTheme(state.theme, false)
   state.loading = true
+  if (!state.auth.checked) await checkAuth()
+  if (state.auth.enabled && state.auth.configured && !state.auth.authenticated) {
+    state.loading = false
+    state.booted = true
+    return
+  }
   try {
     const [health, models, plugins, skills, settings] = await Promise.all([
       api.health(),
@@ -784,7 +905,53 @@ export async function loadPlugins() {
 export async function togglePlugin(name, enabled) {
   const result = await api.togglePlugin(name, enabled)
   await loadPlugins()
-  toast(t('toast.pluginSaved'), 'warn', 7000)
+  if (name === 'user-account') await checkAuth()
+  toast(result.message || t('toast.pluginSaved'), result.restart_required ? 'warn' : 'good', 7000)
+  return result
+}
+
+export async function loadMarketplace(center = '') {
+  const target = (center || localStorage.getItem('hy.pluginCenterUrl') || '').trim()
+  state.market.loading = true
+  try {
+    const data = await api.marketplace(target)
+    const resolved = data.center_url || target || ''
+    if (resolved) localStorage.setItem('hy.pluginCenterUrl', resolved)
+    state.market = {
+      loading: false,
+      online: !!data.online,
+      error: data.error || '',
+      centerUrl: resolved,
+      plugins: data.plugins || []
+    }
+  } catch (error) {
+    state.market = { loading: false, online: false, error: error.message, centerUrl: target, plugins: [] }
+  }
+  return state.market
+}
+
+export async function installPluginFromCenter(plugin) {
+  const data = await api.installPlugin({ name: plugin.name, center_url: state.market.centerUrl })
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  await checkAuth()
+  toast(data.message || t('plugins.installSuccess'), 'good', 6500)
+  return data
+}
+
+export async function uploadPluginPackage(file) {
+  const data = await api.uploadPlugin(file)
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  await checkAuth()
+  toast(data.message || t('plugins.uploadSuccess'), 'good', 6500)
+  return data
+}
+
+export async function uninstallPluginByName(name) {
+  const data = await api.uninstallPlugin(name)
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  await checkAuth()
+  toast(t('plugins.uninstalled'), 'info')
+  return data
 }
 
 export async function loadSettings() {
