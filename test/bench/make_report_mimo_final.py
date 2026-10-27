@@ -326,7 +326,7 @@ td b{{color:#1e293b}}
 <body>
 <div class="bg"></div>
 <nav class="topnav">
-  <a href="index-2026-10-26.html">① deepseek-flash 深度评测</a>
+  <a href="index-2026-10-25.html">① deepseek-flash 深度评测</a>
   <a href="index-2026-10-27.html" class="active">② mimo-v2.6-flash 公平评测（新）</a>
 </nav>
 <nav class="nav">

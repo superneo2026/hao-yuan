@@ -418,7 +418,7 @@ npm run build
 ## 7. Harness 公平评测结果
 
 > 最新报告：[test/testing/index-2026-10-27.html](test/testing/index-2026-10-27.html)（2026-10-27，mimo-v2.6-flash）  
-> 历史报告：[test/testing/index-2026-10-26.html](test/testing/index-2026-10-26.html)（2026-10-26 页面 / 2026-10-25 数据，deepseek-flash）
+> 历史报告：[test/testing/index-2026-10-25.html](test/testing/index-2026-10-25.html)（2026-10-25，deepseek-flash）
 
 ### 7.1 MiMo 公平评测（最新）
 
