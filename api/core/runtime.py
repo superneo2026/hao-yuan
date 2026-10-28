@@ -40,7 +40,7 @@ from configs.configs import (
 )
 from configs.models import PRICES_PER_MTOK, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
-from harness import durability, repair, repoindex
+from harness import durability, repair, repoindex, sysinfo
 from harness.skills import SkillLibrary
 
 TERMINAL_STATUSES = {"done", "error", "cancelled"}
@@ -458,7 +458,8 @@ class AgentRuntime:
         if not agent.tools:
             return []
         if not workspace and getattr(agent, "kind", "") not in ("plan", "video", "robot"):
-            return []
+            chat_safe = {"system_info", "calculator", "now", "echo"}
+            return [name for name in agent.tools if name in chat_safe and self.tools.get(name)]
         names = [name for name in agent.tools if self.tools.get(name)]
         if not names:
             return []
@@ -490,6 +491,12 @@ class AgentRuntime:
     ) -> None:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
+        host_info = ""
+        if not workspace and sysinfo.wants_host_info(user_text):
+            try:
+                host_info = sysinfo.summary(sysinfo.collect())
+            except Exception:
+                host_info = ""
         repo_map_text = ""
         context_pack_text = ""
         if REPO_MAP_ENABLED and workspace and kind in ("dev", "coding") and not lite and not qa:
@@ -518,6 +525,12 @@ class AgentRuntime:
             casual,
             context_pack_text,
         )
+        if host_info:
+            system += (
+                "\n\n# Live host information (read-only)\n"
+                + host_info
+                + "\nUse this information to answer the user's question directly. Do not claim you cannot access system information."
+            )
         recent, summary, cursor = await self.context.load(session)
         if summary:
             system += "\n\n--- Compressed history memory ---\n" + summary
@@ -1156,15 +1169,20 @@ class AgentRuntime:
         )
         if not workspace:
             parts.append(
-                "\n# Chat-only mode\nNo workspace is bound, so coding tools are unavailable. Answer directly and tell the user "
-                "to bind a workspace when file or command access is needed.\n"
+                "\n# Chat-only mode\nNo workspace is bound, so file editing and shell commands are unavailable. "
+                "You can still use system_info for read-only host details (OS, CPU, memory, disk, uptime). "
+                "Tell the user to bind a workspace only when file or command access is actually needed.\n"
             )
         if qa:
-            parts.append("\n# Question mode\nThe user is asking a question, not requesting execution. Answer clearly without starting a task loop.\n")
+            parts.append(
+                "\n# Question mode\nThe user is asking a question, not requesting execution. Answer clearly without starting a task loop. "
+                "If the question is about this machine's OS, CPU, memory, disk or uptime, use system_info or the live host information below.\n"
+            )
         if casual:
             parts.append(
                 "\n# Conversation mode\nThis is casual conversation or a general question, not a workspace task. "
-                "Answer directly and naturally. Do not inspect the workspace, call tools, or start a task loop.\n"
+                "Answer directly and naturally. Do not inspect the workspace or start a task loop. "
+                "Exception: for questions about this machine's OS, CPU, memory, disk or uptime, use system_info or the live host information below.\n"
             )
         if kind == "plan":
             parts.append(
