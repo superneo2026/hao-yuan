@@ -651,7 +651,7 @@ def build_router(store: RemoteStore) -> APIRouter:
                 parsed = _decode_code(code)
             except ValueError as exc:
                 return fail(str(exc), 400)
-            url = parsed["url"]
+            url = url or parsed["url"]
             secret = parsed["key"]
             target_name = parsed["name"]
         elif code:
