@@ -248,6 +248,8 @@ def _is_gated(path: str) -> bool:
         return False
     if path == "/api/auth" or path.startswith("/api/auth/"):
         return False
+    if path.startswith("/api/remote-management/public/"):
+        return False
     if path.startswith("/api/"):
         return True
     return path == "/ws" or path.startswith("/ws/")

@@ -393,7 +393,11 @@ class RemoteAccessMiddleware:
         )
         allowed = bool(token and self.store.verify_token(token))
         if not allowed and path.startswith("/api/remote-management/public/"):
-            allowed = bool(self.store.find_key(headers.get("x-remote-key", "").strip()))
+            key_value = (
+                headers.get("x-remote-key", "").strip()
+                or (query.get("remote_key") or [""])[0].strip()
+            )
+            allowed = bool(self.store.find_key(key_value))
         if allowed:
             user_token = _issue_user_account_token()
             if user_token:
@@ -473,7 +477,12 @@ def _envelope_data(payload: Any) -> dict[str, Any]:
 async def _post_public(url: str, path: str, secret: str, body: dict[str, Any]) -> dict[str, Any]:
     headers = {"X-Remote-Key": secret}
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=True, trust_env=False) as client:
-        response = await client.post(f"{url.rstrip('/')}{path}", json=body, headers=headers)
+        response = await client.post(
+            f"{url.rstrip('/')}{path}",
+            json=body,
+            headers=headers,
+            params={"remote_key": secret},
+        )
         response.raise_for_status()
         return _envelope_data(response.json())
 
@@ -481,9 +490,20 @@ async def _post_public(url: str, path: str, secret: str, body: dict[str, Any]) -
 async def _get_public(url: str, path: str, secret: str) -> dict[str, Any]:
     headers = {"X-Remote-Key": secret}
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=True, trust_env=False) as client:
-        response = await client.get(f"{url.rstrip('/')}{path}", headers=headers)
+        response = await client.get(
+            f"{url.rstrip('/')}{path}",
+            headers=headers,
+            params={"remote_key": secret},
+        )
         response.raise_for_status()
         return _envelope_data(response.json())
+
+
+def _request_key(request: Request) -> str:
+    return (
+        request.headers.get("x-remote-key", "").strip()
+        or (request.query_params.get("remote_key") or "").strip()
+    )
 
 
 def build_router(store: RemoteStore) -> APIRouter:
@@ -650,6 +670,17 @@ def build_router(store: RemoteStore) -> APIRouter:
                 secret,
                 {"manager_name": identity["manager_name"], "manager_url": identity["manager_url"]},
             )
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 403:
+                message = "连接密钥无效或已被删除，请在对方系统重新生成密钥"
+            elif status == 401:
+                message = "对方账号保护拦截了请求，请确认对方已启用「远程管理」插件并重启后端"
+            elif status == 404:
+                message = "对方系统未安装或未启用「远程管理」插件"
+            else:
+                message = f"无法连接对方系统：HTTP {status}"
+            return fail(message, 502)
         except Exception as exc:
             return fail(f"无法连接对方系统：{type(exc).__name__}: {exc}", 502)
         request_id = str(data.get("request_id") or "")
@@ -752,7 +783,7 @@ def build_router(store: RemoteStore) -> APIRouter:
     # ---- public handshake (used by other systems) -----------------------
     @router.post("/remote-management/public/connect")
     async def public_connect(body: PublicConnectBody, request: Request):
-        secret = request.headers.get("x-remote-key", "").strip() or body.key.strip()
+        secret = _request_key(request) or body.key.strip()
         key = store.find_key(secret)
         if key is None:
             return fail("连接密钥无效或已被删除", 403)
@@ -783,7 +814,7 @@ def build_router(store: RemoteStore) -> APIRouter:
 
     @router.get("/remote-management/public/requests/{request_id}")
     async def public_request(request_id: str, request: Request):
-        secret = request.headers.get("x-remote-key", "").strip()
+        secret = _request_key(request)
         key = store.find_key(secret)
         item = store.get_incoming(request_id)
         if key is None or item is None or item.get("key_id") != key.get("id"):
@@ -812,7 +843,7 @@ def build_router(store: RemoteStore) -> APIRouter:
 
     @router.post("/remote-management/public/requests/{request_id}/disconnect")
     async def public_disconnect(request_id: str, request: Request):
-        secret = request.headers.get("x-remote-key", "").strip()
+        secret = _request_key(request)
         key = store.find_key(secret)
         item = store.get_incoming(request_id)
         if key is None or item is None or item.get("key_id") != key.get("id"):
