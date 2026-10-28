@@ -492,9 +492,9 @@ class AgentRuntime:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
         host_info = ""
-        if not workspace and sysinfo.wants_host_info(user_text):
+        if sysinfo.wants_host_info(user_text):
             try:
-                host_info = sysinfo.summary(sysinfo.collect())
+                host_info = sysinfo.summary(sysinfo.collect(workspace))
             except Exception:
                 host_info = ""
         repo_map_text = ""
