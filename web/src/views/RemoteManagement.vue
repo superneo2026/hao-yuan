@@ -685,7 +685,7 @@ onBeforeUnmount(() => {
 .empty-block b { color: var(--ink-2); font-size: 13px; }
 .empty-block span { color: var(--muted); font-size: 11.5px; }
 
-.remote-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: -10px -4px 0; }
+.remote-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; height: calc(100vh - 150px); margin: -10px -4px 0; }
 .remote-workspace.fullscreen {
   position: fixed; inset: 0; z-index: 95;
   margin: 0; padding: 0;
@@ -704,13 +704,12 @@ onBeforeUnmount(() => {
 .ws-copy > span { word-break: break-all; }
 .ws-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
 .ws-body {
-  position: relative; flex: 1; min-height: 480px;
-  height: calc(100vh - 180px);
+  position: relative; flex: 1; min-height: 360px;
   border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
   background: var(--surface-2);
 }
-.fullscreen .ws-body { height: calc(100vh - 61px); border-radius: 0; border: none; }
-.remote-frame { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+.fullscreen .ws-body { border-radius: 0; border: none; }
+.remote-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: none; display: block; background: #fff; }
 .ws-placeholder {
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
   padding: 30px; text-align: center; color: var(--muted); font-size: 12px;
@@ -744,7 +743,8 @@ onBeforeUnmount(() => {
   .key-actions, .system-actions { justify-content: flex-start; }
   .connect-form { grid-template-columns: 1fr; }
   .connect-btn { grid-column: auto; }
-  .ws-body { height: calc(100vh - 250px); min-height: 320px; }
+  .remote-workspace { height: calc(100vh - 170px); }
+  .ws-body { min-height: 300px; }
   .ws-bar { align-items: stretch; }
   .ws-actions { width: 100%; }
   .ws-actions .btn { flex: 1 1 calc(50% - 7px); justify-content: center; }
