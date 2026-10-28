@@ -65,6 +65,7 @@ export const state = reactive({
   toasts: [],
   sidebarCollapsed: localStorage.getItem(SIDEBAR) === '1',
   pluginNavOpen: localStorage.getItem('hy.pluginNav') !== '0',
+  remoteNavOpen: localStorage.getItem('hy.remoteNav') !== '0',
   mobileNavOpen: false,
   paletteOpen: false,
   newTaskOpen: false,
@@ -81,6 +82,16 @@ export const state = reactive({
   orchestrations: [],
   auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', maxFailures: 5, lockSeconds: 300, loading: false },
   market: { loading: false, online: false, error: '', centerUrl: '', plugins: [] },
+  remote: {
+    loading: false,
+    enabled: false,
+    error: '',
+    instance: null,
+    keys: [],
+    incoming: [],
+    outgoing: [],
+    current: null
+  },
   accountOpen: false,
   authSetupOpen: false,
   busy: { sending: false, loadingFile: false }
@@ -152,6 +163,11 @@ export function closePalette() {
 export function togglePluginNav() {
   state.pluginNavOpen = !state.pluginNavOpen
   localStorage.setItem('hy.pluginNav', state.pluginNavOpen ? '1' : '0')
+}
+
+export function toggleRemoteNav() {
+  state.remoteNavOpen = !state.remoteNavOpen
+  localStorage.setItem('hy.remoteNav', state.remoteNavOpen ? '1' : '0')
 }
 
 function persistOpenTabs() {
@@ -573,6 +589,7 @@ export async function boot() {
     state.plugins = plugins
     state.skills = skills
     state.settings = { ...state.settings, ...settings }
+    await loadRemoteManagement()
     await loadSessions()
     const routed = sessionIdFromHash()
     if (routed && state.sessions.some((item) => item.id === routed)) {
@@ -911,10 +928,117 @@ export async function loadPlugins() {
   return state.plugins
 }
 
+function remotePluginReady() {
+  const plugin = state.plugins.find((item) => item.name === 'remote-management')
+  return !!(plugin && plugin.enabled && plugin.loaded && !plugin.error)
+}
+
+export async function loadRemoteManagement() {
+  if (!remotePluginReady()) {
+    state.remote = { loading: false, enabled: false, error: '', instance: null, keys: [], incoming: [], outgoing: [], current: null }
+    return state.remote
+  }
+  state.remote.loading = true
+  try {
+    const data = await api.remoteOverview()
+    state.remote = {
+      loading: false,
+      enabled: true,
+      error: '',
+      instance: data.instance || null,
+      keys: data.keys || [],
+      incoming: data.incoming || [],
+      outgoing: data.outgoing || [],
+      current: state.remote.current
+    }
+  } catch (error) {
+    state.remote = {
+      ...state.remote,
+      loading: false,
+      enabled: error.code !== 404,
+      error: error.message || ''
+    }
+  }
+  return state.remote
+}
+
+export async function saveRemoteSettings(body) {
+  const data = await api.remoteSettings(body)
+  await loadRemoteManagement()
+  toast(t('remote.settingsSaved'), 'good')
+  return data
+}
+
+export async function createRemoteKey(label) {
+  const data = await api.remoteCreateKey({ label })
+  await loadRemoteManagement()
+  toast(t('remote.keyCreated'), 'good')
+  return data
+}
+
+export async function deleteRemoteKey(id) {
+  await api.remoteDeleteKey(id)
+  await loadRemoteManagement()
+  toast(t('remote.keyDeleted'), 'info')
+}
+
+export async function remoteIncomingAction(id, action) {
+  const data = await api.remoteIncomingAction(id, action)
+  await loadRemoteManagement()
+  return data
+}
+
+export async function deleteRemoteIncoming(id) {
+  await api.remoteDeleteIncoming(id)
+  await loadRemoteManagement()
+  toast(t('remote.requestDeleted'), 'info')
+}
+
+export async function addRemoteSystem(body) {
+  const data = await api.remoteAddSystem(body)
+  await loadRemoteManagement()
+  toast(t('remote.requestSent'), 'good')
+  return data
+}
+
+export async function refreshRemoteSystems() {
+  const data = await api.remoteRefreshSystems()
+  state.remote.outgoing = data || []
+  return data
+}
+
+export async function loadRemoteSystem(id) {
+  const data = await api.remoteSystem(id)
+  state.remote.current = data
+  return data
+}
+
+export async function refreshRemoteSystem(id) {
+  const data = await api.remoteRefreshSystem(id)
+  state.remote.current = data
+  await loadRemoteManagement()
+  return data
+}
+
+export async function remoteSystemAction(id, action) {
+  const data = await api.remoteSystemAction(id, action)
+  state.remote.current = data
+  await loadRemoteManagement()
+  return data
+}
+
+export async function deleteRemoteSystem(id) {
+  await api.remoteDeleteSystem(id)
+  state.remote.current = null
+  await loadRemoteManagement()
+  toast(t('remote.systemRemoved'), 'info')
+}
+
 export async function togglePlugin(name, enabled) {
   const result = await api.togglePlugin(name, enabled)
   await loadPlugins()
   if (name === 'user-account') await checkAuth()
+  if (name === 'remote-management') await loadRemoteManagement()
   toast(result.message || t('toast.pluginSaved'), result.restart_required ? 'warn' : 'good', 7000)
   return result
 }
@@ -943,6 +1067,7 @@ export async function installPluginFromCenter(plugin) {
   const data = await api.installPlugin({ name: plugin.name, center_url: state.market.centerUrl })
   await Promise.all([loadPlugins(), loadMarketplace()])
   await checkAuth()
+  await loadRemoteManagement()
   toast(data.message || t('plugins.installSuccess'), 'good', 6500)
   return data
 }
@@ -951,6 +1076,7 @@ export async function uploadPluginPackage(file) {
   const data = await api.uploadPlugin(file)
   await Promise.all([loadPlugins(), loadMarketplace()])
   await checkAuth()
+  await loadRemoteManagement()
   toast(data.message || t('plugins.uploadSuccess'), 'good', 6500)
   return data
 }
@@ -959,6 +1085,7 @@ export async function uninstallPluginByName(name) {
   const data = await api.uninstallPlugin(name)
   await Promise.all([loadPlugins(), loadMarketplace()])
   await checkAuth()
+  await loadRemoteManagement()
   toast(t('plugins.uninstalled'), 'info')
   return data
 }

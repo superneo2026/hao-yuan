@@ -1,5 +1,30 @@
 const BASE = import.meta.env.VITE_API_BASE || ''
 const AUTH_TOKEN_KEY = 'hy.authToken'
+const REMOTE_TOKEN_KEY = 'hy.remoteToken'
+
+function captureRemoteToken() {
+  try {
+    const url = new URL(window.location.href)
+    const token = url.searchParams.get('hy_remote_token')
+    if (!token) return
+    sessionStorage.setItem(REMOTE_TOKEN_KEY, token)
+    url.searchParams.delete('hy_remote_token')
+    const next = `${url.pathname}${url.search}${url.hash}`
+    window.history.replaceState(window.history.state, '', next || '/')
+  } catch {
+    /* remote token capture is best-effort */
+  }
+}
+
+captureRemoteToken()
+
+export function getRemoteToken() {
+  try {
+    return sessionStorage.getItem(REMOTE_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
 
 export function getAuthToken() {
   try {
@@ -26,6 +51,8 @@ async function request(path, options = {}) {
   const headers = { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) }
   const token = getAuthToken()
   if (token) headers.Authorization = `Bearer ${token}`
+  const remoteToken = getRemoteToken()
+  if (remoteToken) headers['X-HaoYuan-Remote'] = remoteToken
   const response = await fetch(BASE + path, { ...options, headers })
   let payload = null
   try {
@@ -96,6 +123,19 @@ export const api = {
 
   plugins: () => request('/api/plugins'),
   pluginContributions: () => request('/api/plugins/contributions'),
+
+  remoteOverview: () => request('/api/remote-management/overview'),
+  remoteSettings: (body) => request('/api/remote-management/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  remoteCreateKey: (body) => request('/api/remote-management/keys', { method: 'POST', body: JSON.stringify(body) }),
+  remoteDeleteKey: (id) => request(`/api/remote-management/keys/${id}`, { method: 'DELETE' }),
+  remoteIncomingAction: (id, action) => request(`/api/remote-management/incoming/${id}/${action}`, { method: 'POST' }),
+  remoteDeleteIncoming: (id) => request(`/api/remote-management/incoming/${id}`, { method: 'DELETE' }),
+  remoteAddSystem: (body) => request('/api/remote-management/systems', { method: 'POST', body: JSON.stringify(body) }),
+  remoteRefreshSystems: () => request('/api/remote-management/systems/refresh', { method: 'POST' }),
+  remoteSystem: (id) => request(`/api/remote-management/systems/${id}`),
+  remoteRefreshSystem: (id) => request(`/api/remote-management/systems/${id}/refresh`, { method: 'POST' }),
+  remoteSystemAction: (id, action) => request(`/api/remote-management/systems/${id}/${action}`, { method: 'POST' }),
+  remoteDeleteSystem: (id) => request(`/api/remote-management/systems/${id}`, { method: 'DELETE' }),
   togglePlugin: (name, enabled) => request(`/api/plugins/${name}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   marketplace: (center = '') => request(`/api/marketplace/plugins${qs({ center })}`),
   installPlugin: (body) => request('/api/marketplace/install', { method: 'POST', body: JSON.stringify(body) }),

@@ -1,0 +1,30 @@
+{
+  "name": "remote-management",
+  "title": "远程管理",
+  "version": "1.0.0",
+  "description": "在不同豪源系统之间建立可撤销的远程管理关系。生成连接密钥、发送/接受管理请求，并在侧栏直接嵌入被管理系统的豪源界面，支持放大为独立全屏工作区。",
+  "author": "HaoYuan",
+  "requires": ["user-account"],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "contributes": {
+    "routes": 18,
+    "frontend": {
+      "nav": [
+        {
+          "path": "/remote",
+          "label": "远程管理",
+          "icon": "globe"
+        }
+      ]
+    }
+  },
+  "marketplace": {
+    "category": "productivity",
+    "tags": ["远程管理", "多设备", "内网穿透", "协作", "官方插件"],
+    "icon": "globe",
+    "featured": true,
+    "downloads": 0,
+    "homepage": ""
+  }
+}

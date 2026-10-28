@@ -22,7 +22,8 @@ const icons = {
   supervisor: 'activity',
   orchestrator: 'network',
   embodied: 'cpu',
-  'user-account': 'shield'
+  'user-account': 'shield',
+  'remote-management': 'globe'
 }
 
 const route = useRoute()

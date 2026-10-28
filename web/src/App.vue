@@ -11,6 +11,7 @@ import {
   setTheme,
   state,
   togglePluginNav,
+  toggleRemoteNav,
   toggleSidebar
 } from './stores/app'
 import { t } from './i18n'
@@ -73,10 +74,18 @@ const navItems = [
 
 const pluginGroupActive = computed(() => ['plugins', 'plugin-center'].includes(route.name))
 const showTopbar = computed(() => !['workbench', 'session'].includes(route.name))
+const remoteReady = computed(() => state.remote.enabled)
+const remoteSystems = computed(() => state.remote.outgoing || [])
+const remoteGroupActive = computed(() => ['remote', 'remote-system'].includes(route.name))
 
 function onPluginParent() {
   if (state.sidebarCollapsed) router.push('/plugins')
   else togglePluginNav()
+}
+
+function onRemoteParent() {
+  if (state.sidebarCollapsed) router.push('/remote')
+  else toggleRemoteNav()
 }
 
 const connectionLabel = computed(() => {
@@ -190,6 +199,41 @@ onBeforeUnmount(() => {
             <Icon name="settings" :size="16" class="icon" />
             <span>{{ t('nav.settings') }}</span>
           </router-link>
+          <div v-if="remoteReady" class="nav-group remote-nav-group">
+            <button
+              type="button"
+              class="nav-link nav-parent"
+              :class="{ 'router-link-active': remoteGroupActive }"
+              @click="onRemoteParent"
+            >
+              <Icon name="globe" :size="16" class="icon" />
+              <span>{{ t('nav.remote') }}</span>
+              <Icon class="nav-caret" :class="{ open: state.remoteNavOpen }" name="chevron-down" :size="13" />
+            </button>
+            <div v-show="state.remoteNavOpen" class="nav-sub">
+              <router-link
+                to="/remote"
+                class="nav-link nav-sublink"
+                exact-active-class="router-link-active"
+                @click="state.mobileNavOpen = false"
+              >
+                <Icon name="network" :size="14" class="icon" />
+                <span>{{ t('remote.overview') }}</span>
+              </router-link>
+              <router-link
+                v-for="system in remoteSystems"
+                :key="system.id"
+                :to="`/remote/system/${system.id}`"
+                class="nav-link nav-sublink"
+                active-class="nav-prefix"
+                exact-active-class="router-link-active"
+                @click="state.mobileNavOpen = false"
+              >
+                <span class="remote-status-dot" :class="system.status" />
+                <span class="remote-nav-name">{{ system.name || system.target_name || system.url }}</span>
+              </router-link>
+            </div>
+          </div>
         </nav>
 
         <div class="sidebar-divider" />
@@ -331,6 +375,16 @@ onBeforeUnmount(() => {
 }
 .nav-sublink.router-link-active::before { display: none; }
 .nav-sublink.router-link-active .icon { color: var(--brand); }
+.remote-nav-group { margin-top: 4px; }
+.remote-nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-status-dot {
+  width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%;
+  background: var(--faint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--faint) 15%, transparent);
+}
+.remote-status-dot.approved { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 16%, transparent); }
+.remote-status-dot.pending { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 16%, transparent); }
+.remote-status-dot.revoked, .remote-status-dot.rejected { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 16%, transparent); }
 
 .sidebar-divider { height: 1px; background: var(--line); margin: 14px 10px; }
 .sidebar-foot {
