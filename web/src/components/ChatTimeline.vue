@@ -174,14 +174,16 @@ function timeLabel(value) {
             <div class="message assistant">
               <div class="avatar assistant-avatar">H</div>
               <div class="assistant-body">
-                <details v-if="group.reasoning" class="reasoning">
-                  <summary @click.stop="showReasoning[group.id] = !showReasoning[group.id]">
-                    <Icon name="brain" :size="13" /> {{ t('chat.reasoning') }}
-                    <Icon :name="showReasoning[group.id] ? 'chevron-down' : 'chevron-right'" :size="12" />
-                  </summary>
-                  <div class="reasoning-body">{{ group.reasoning }}</div>
-                </details>
-                <Markdown v-if="group.content" :content="group.content" />
+                <div v-if="group.reasoning || group.content" class="bubble assistant-bubble">
+                  <details v-if="group.reasoning" class="reasoning">
+                    <summary @click.stop="showReasoning[group.id] = !showReasoning[group.id]">
+                      <Icon name="brain" :size="13" /> {{ t('chat.reasoning') }}
+                      <Icon :name="showReasoning[group.id] ? 'chevron-down' : 'chevron-right'" :size="12" />
+                    </summary>
+                    <div class="reasoning-body">{{ group.reasoning }}</div>
+                  </details>
+                  <Markdown v-if="group.content" :content="group.content" />
+                </div>
                 <div v-if="group.content" class="message-meta">
                   <span>{{ timeLabel(group.created_at) }}</span>
                   <button class="icon-btn" style="width: 20px; height: 20px" @click="copy(group.content)">
@@ -205,15 +207,17 @@ function timeLabel(value) {
         <div v-if="liveTools.length || liveText || liveReasoning" class="message assistant live">
           <div class="avatar assistant-avatar live-avatar">H</div>
           <div class="assistant-body">
+            <div v-if="liveReasoning || liveText" class="bubble assistant-bubble">
+              <details v-if="liveReasoning" class="reasoning" open>
+                <summary><Icon name="brain" :size="13" /> {{ t('chat.reasoning') }} <span class="spinner" v-if="isBusy" style="width: 10px; height: 10px" /></summary>
+                <div class="reasoning-body">{{ liveReasoning }}</div>
+              </details>
+              <Markdown v-if="liveText" :content="liveText" />
+            </div>
             <div class="thinking-line" v-if="isBusy && !liveText">
               <span class="spinner" />
               <span>{{ currentSession?.status === 'waiting_input' ? t('chat.waitingForApproval') : t('chat.working') }}</span>
             </div>
-            <details v-if="liveReasoning" class="reasoning" open>
-              <summary><Icon name="brain" :size="13" /> {{ t('chat.reasoning') }} <span class="spinner" v-if="isBusy" style="width: 10px; height: 10px" /></summary>
-              <div class="reasoning-body">{{ liveReasoning }}</div>
-            </details>
-            <Markdown v-if="liveText" :content="liveText" />
             <div v-if="liveTools.length" class="tool-stack">
               <ToolCard v-for="tool in liveTools" :key="tool.call_id" :item="tool" />
             </div>
@@ -235,20 +239,40 @@ function timeLabel(value) {
 .timeline-inner { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
 .timeline-group { display: flex; flex-direction: column; gap: 8px; }
 .message { display: flex; gap: 11px; align-items: flex-start; }
-.message.user { flex-direction: row; }
+.message.user { flex-direction: row-reverse; }
+.message.assistant { flex-direction: row; }
 .avatar { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: 0 0 28px; margin-top: 1px; }
-.user-avatar { background: var(--surface-3); color: var(--muted); border: 1px solid var(--line); font-size: 9px; letter-spacing: .02em; }
+.user-avatar { background: color-mix(in srgb, var(--user-brand) 12%, transparent); color: var(--user-brand); border: 1px solid color-mix(in srgb, var(--user-brand) 30%, transparent); font-size: 9px; letter-spacing: .02em; }
 .assistant-avatar { background: linear-gradient(140deg, var(--brand), var(--brand-2)); color: #fff; box-shadow: 0 6px 18px rgba(124, 108, 255, .28); }
 .live-avatar { animation: pulse 2s infinite; }
-.bubble-wrap { display: flex; flex-direction: column; gap: 4px; max-width: min(720px, 100%); }
-.bubble { padding: 10px 14px; border-radius: 4px 14px 14px 14px; background: var(--user-bubble); border: 1px solid var(--brand-line); color: var(--ink); white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
-.assistant-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
-.message-meta { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; opacity: .8; }
+.bubble-wrap { flex: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: min(760px, 100%); }
+.bubble { padding: 10px 15px; color: var(--ink); white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.68; }
+.bubble.user-bubble {
+  border-radius: 16px 5px 16px 16px;
+  background: var(--user-bubble);
+  border: 1px solid color-mix(in srgb, var(--user-brand) 42%, transparent);
+  color: var(--user-bubble-ink);
+  box-shadow: 0 10px 26px var(--user-glow);
+}
+.assistant-body { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 2px; }
+.bubble.assistant-bubble {
+  border-radius: 5px 16px 16px 16px;
+  background: var(--bot-bubble);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  box-shadow: 0 2px 10px color-mix(in srgb, #000 6%, transparent);
+  max-width: min(760px, 100%);
+  white-space: normal;
+}
+.assistant-bubble .reasoning { background: transparent; }
+.assistant-bubble .reasoning-body { color: var(--muted); }
+.message-meta { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; opacity: .55; transition: opacity .16s var(--ease); }
+.message:hover .message-meta { opacity: .9; }
 .reasoning { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); overflow: hidden; }
 .reasoning summary { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--muted); font-size: 11.5px; cursor: pointer; list-style: none; }
 .reasoning summary::-webkit-details-marker { display: none; }
 .reasoning-body { padding: 0 12px 10px; color: var(--muted); font-size: 12px; line-height: 1.65; white-space: pre-wrap; max-height: 280px; overflow-y: auto; }
-.tool-stack { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.tool-stack { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; align-self: stretch; }
 .tool-only { padding-left: 39px; display: flex; flex-direction: column; gap: 6px; }
 .thinking-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; padding: 4px 0; }
 .welcome-mark { display: flex; justify-content: center; margin-bottom: 18px; }

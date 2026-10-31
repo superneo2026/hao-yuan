@@ -94,6 +94,7 @@ export const state = reactive({
   },
   accountOpen: false,
   authSetupOpen: false,
+  workspaceSetupOpen: false,
   busy: { sending: false, loadingFile: false }
 })
 
@@ -463,6 +464,14 @@ export function dismissAccountSetup() {
   state.authSetupOpen = false
 }
 
+export function dismissWorkspaceSetup() {
+  state.workspaceSetupOpen = false
+}
+
+export function requestWorkspaceSetup() {
+  state.workspaceSetupOpen = true
+}
+
 export async function checkAuth() {
   try {
     const data = await api.authStatus()
@@ -600,6 +609,7 @@ export async function boot() {
       const visible = state.sessions.find((item) => !item.hidden)
       if (visible) await selectSession(visible.id, false)
     }
+    if (!state.settings.default_workspace) state.workspaceSetupOpen = true
     loadUsage().catch(() => {})
     loadSupervisor().catch(() => {})
     state.connection = 'connected'

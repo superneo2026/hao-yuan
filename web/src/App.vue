@@ -24,6 +24,7 @@ import NewTaskModal from './components/NewTaskModal.vue'
 import SessionList from './components/SessionList.vue'
 import ToastStack from './components/ToastStack.vue'
 import UserAccountModal from './components/UserAccountModal.vue'
+import WorkspaceSetupModal from './components/WorkspaceSetupModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -113,6 +114,7 @@ function onGlobalKey(event) {
     closePalette()
     state.mobileNavOpen = false
     if (state.newTaskOpen) state.newTaskOpen = false
+    if (state.workspaceSetupOpen) state.workspaceSetupOpen = false
   }
 }
 
@@ -270,6 +272,7 @@ onBeforeUnmount(() => {
   <CommandPalette />
   <ToastStack />
   <NewTaskModal v-if="state.newTaskOpen" @close="state.newTaskOpen = false" />
+  <WorkspaceSetupModal v-if="state.workspaceSetupOpen" @close="state.workspaceSetupOpen = false" />
   <UserAccountModal v-if="state.accountOpen" @close="state.accountOpen = false" />
 </template>
 
