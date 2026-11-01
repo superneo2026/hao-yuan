@@ -13,6 +13,7 @@ from typing import Any
 from configs.configs import (
     API_DIR,
     APPLY_PATCH_ENABLED,
+    GATE_CONFIRM_TIMEOUT,
     GREP_MAX_CHARS,
     GREP_MAX_HITS,
     SEARCH_MAX_FILES,
@@ -24,6 +25,7 @@ from configs.configs import (
     VERIFY_CMD_HINTS,
 )
 from core.contracts import ToolContext, ToolSpec
+from harness import reference as reference_analysis
 from harness.sandbox import SafeWorkspace
 
 _CHILD_IO_ENV = {
@@ -776,7 +778,55 @@ def web_audit(ctx: ToolContext, args: dict[str, Any]) -> str:
         lines += [f"  {index}. {item}" for index, item in enumerate(issues[:24])]
     else:
         lines.append("no structural design issues found.")
+    reference_path = str(args.get("reference") or "").strip()
+    if reference_path:
+        try:
+            ref = workspace.resolve(reference_path)
+            if ref.is_file():
+                for target in html_files[:3]:
+                    lines.append("")
+                    lines.append(reference_analysis.compare(str(ref), target))
+        except Exception as exc:
+            lines.append(f"reference compare skipped: {type(exc).__name__}: {exc}")
     return _truncate("\n".join(lines), 8000)
+
+
+async def ask_user(ctx: ToolContext, args: dict[str, Any]) -> str:
+    question = str(args.get("question") or "").strip()
+    if not question:
+        raise ValueError("question is required")
+    if ctx.call is None:
+        raise RuntimeError("ask_user requires an active tool call")
+    options = args.get("options") or []
+    if not isinstance(options, list):
+        options = []
+    clean = [str(item).strip()[:200] for item in options if str(item).strip()][:6]
+    ctx.call.arguments = {
+        **args,
+        "question": question[:2000],
+        "options": clean,
+        "context": str(args.get("context") or "")[:2000],
+        "allow_free_text": args.get("allow_free_text", True) is not False,
+    }
+    manager = getattr(ctx.runtime, "manager", None)
+    if manager is None or not hasattr(manager, "ask_question"):
+        raise RuntimeError("interactive questions are unavailable in this runtime")
+    return await manager.ask_question(ctx.session, ctx.call, ctx.run_id)
+
+
+def reference_digest(ctx: ToolContext, args: dict[str, Any]) -> str:
+    workspace = _workspace(ctx)
+    path = workspace.resolve(args.get("path", ""))
+    if not path.is_file():
+        raise FileNotFoundError(f"reference not found: {args.get('path')}")
+    return reference_analysis.digest(str(path), int(args.get("max_chars") or 9000))
+
+
+def reference_compare(ctx: ToolContext, args: dict[str, Any]) -> str:
+    workspace = _workspace(ctx)
+    reference = workspace.resolve(args.get("reference", ""))
+    target = workspace.resolve(args.get("target", ""))
+    return reference_analysis.compare(str(reference), str(target))
 
 
 def _unified(old: str, new: str, path: str, max_lines: int = 60) -> str:
@@ -865,7 +915,7 @@ def tool_specs(source: str = "coding") -> list[ToolSpec]:
             "path": {"type": "string"},
             "patch": {"type": "string"},
         }, ["path", "patch"], risk="high", side_effect="write", confirm=True, readonly=False, source=source),
-        _spec("write_file", "Create or fully overwrite a workspace file.", {
+        _spec("write_file", "Create or fully overwrite a workspace file. Large files must be split: write a skeleton first, then append the rest with apply_patch/edit_file (<= 150 lines per call), because model output is length-capped.", {
             "path": {"type": "string"},
             "content": {"type": "string"},
         }, ["path", "content"], risk="high", side_effect="write", confirm=True, readonly=False, source=source),
@@ -909,9 +959,24 @@ def tool_specs(source: str = "coding") -> list[ToolSpec]:
             "path": {"type": "string"},
             "overwrite": {"type": "boolean"},
         }, risk="medium", side_effect="write", confirm=True, readonly=False, source=source),
-        _spec("web_audit", "Static audit for multi-page HTML deliverables (responsive, links, a11y, consistency).", {
+        _spec("web_audit", "Static audit for multi-page HTML deliverables (responsive, links, a11y, consistency). Pass reference to also measure fidelity against a reference page.", {
             "path": {"type": "string"},
+            "reference": {"type": "string"},
         }, readonly=True, source=source),
+        _spec("reference_digest", "Extract the design system, structure, components and behaviors from a reference HTML/CSS/source file so a new deliverable can faithfully mirror it. Call this before building anything that says 'reference this page/file/style'.", {
+            "path": {"type": "string"},
+            "max_chars": {"type": "integer"},
+        }, ["path"], readonly=True, source=source),
+        _spec("reference_compare", "Check whether a generated page faithfully follows a reference page: palette, font stack, light/dark mode, breakpoints, and shared components.", {
+            "reference": {"type": "string"},
+            "target": {"type": "string"},
+        }, ["reference", "target"], readonly=True, source=source),
+        _spec("ask_user", "Pause the running task and ask the user a blocking question. Call this instead of ending your turn whenever a decision, missing detail, or confirmation blocks safe progress. The task resumes in place with the user's answer.", {
+            "question": {"type": "string", "description": "One clear, specific question."},
+            "options": {"type": "array", "items": {"type": "string"}, "description": "Optional 2-4 short choices."},
+            "allow_free_text": {"type": "boolean", "description": "Allow a typed answer in addition to the options."},
+            "context": {"type": "string", "description": "Short context explaining why the answer matters."},
+        }, ["question"], readonly=True, timeout_s=GATE_CONFIRM_TIMEOUT + 30, source=source),
         _spec("task", "Dispatch a read-only subagent with its own context and return only its conclusion.", {
             "description": {"type": "string"},
             "prompt": {"type": "string"},
@@ -938,6 +1003,9 @@ EXECUTORS = {
     "move_path": move_path,
     "web_scaffold": web_scaffold,
     "web_audit": web_audit,
+    "reference_digest": reference_digest,
+    "reference_compare": reference_compare,
+    "ask_user": ask_user,
 }
 
 

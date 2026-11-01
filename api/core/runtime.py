@@ -40,7 +40,7 @@ from configs.configs import (
 )
 from configs.models import PRICES_PER_MTOK, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
-from harness import durability, repair, repoindex, sysinfo
+from harness import durability, reference, repair, repoindex, sysinfo
 from harness.skills import SkillLibrary
 
 TERMINAL_STATUSES = {"done", "error", "cancelled"}
@@ -118,6 +118,7 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Work autonomously. Do not ask for permission for read-only actions. For writes or commands, the system shows a preview and asks the user.
 - Locate before editing: use search_symbol, grep, read_range, then apply the smallest possible patch.
 - Prefer apply_patch / edit_file / multi_edit over write_file. Never rewrite a whole file for a small change.
+- Large files: model output is capped, so never emit an entire big file in one tool call. Create it with write_file using a small skeleton, then append the remaining sections in chunks (<= 150 lines each) with apply_patch or edit_file. If a tool result says the arguments were truncated, split the write instead of retrying the same call.
 - Batch independent tool calls in the same assistant message. Reads can run in parallel; writes run in order.
 - Verify code changes: run the project's tests/lint/build once after the final code edit. Documentation-only changes do not require a test run.
 - Use the task tool for broad read-only reconnaissance when raw tool output would flood the context. It returns only conclusions.
@@ -129,6 +130,8 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Answer in the user's language. Be concise and outcome-oriented.
 - If the user only greets you or makes casual conversation, reply naturally and do not inspect the workspace, call tools, or start a task.
 - Do not run destructive commands, do not push to git, and do not touch files outside the workspace.
+- When the user points at an existing file/page as the format or style source, treat it as a hard reference: call reference_digest, then reuse its palette, typography, layout width, breakpoints, components and interactions. Do not substitute a different built-in template. If a file path is given, never assume you already know its contents from memory.
+- When a decision, missing detail, or risk check blocks safe progress mid-task, call ask_user with one clear question and 2-4 short options instead of ending your turn. Execution pauses, the user answers, and you continue the same task with that answer. Do not ask for confirmation you do not need.
 """
 
 
@@ -510,6 +513,14 @@ class AgentRuntime:
                 )
             except Exception:
                 context_pack_text = ""
+        reference_text = ""
+        if workspace and not casual and not qa:
+            try:
+                ref_paths = reference.resolve_reference_paths(workspace, user_text)
+                blocks = [reference.digest(rel) for rel in ref_paths[:2]]
+                reference_text = "\n\n".join(blocks)[:16000]
+            except Exception:
+                reference_text = ""
         system = self._system_prompt(
             session,
             agent,
@@ -524,6 +535,7 @@ class AgentRuntime:
             repo_map_text,
             casual,
             context_pack_text,
+            reference_text,
         )
         if host_info:
             system += (
@@ -557,6 +569,7 @@ class AgentRuntime:
 
         await self.emit(session_id, "session.status", {"status": "running"}, run_id)
         state = {
+            "run_id": run_id,
             "step": 0,
             "total_steps": 0,
             "last_write_step": 0,
@@ -565,6 +578,7 @@ class AgentRuntime:
             "spec_audit": 0,
             "write_nudges": 0,
             "empty_nudges": 0,
+            "trunc_nudges": 0,
             "rollovers": 0,
             "escalated": False,
             "repair_fingerprints": {},
@@ -616,6 +630,7 @@ class AgentRuntime:
             usage: dict[str, Any] = {}
             actual_provider, actual_model = provider, model
             fallbacks: list[str] = []
+            finish_reason = ""
             async for event in self.gateway.stream(provider, model, messages, schemas, thinking):
                 event_type = event.get("type")
                 if event_type == "reasoning":
@@ -628,6 +643,7 @@ class AgentRuntime:
                     actual_provider = event.get("provider") or provider
                     actual_model = event.get("model") or model
                     fallbacks = event.get("fallbacks") or []
+                    finish_reason = event.get("finish_reason") or finish_reason
             if message is None:
                 raise RuntimeError("model returned no message")
 
@@ -683,10 +699,27 @@ class AgentRuntime:
                 run_id,
             )
 
+            if finish_reason == "length":
+                await self.emit(session_id, "output.truncated", {"step": state["total_steps"]}, run_id)
+
             if not parsed_calls:
                 cursor, injected = await self._inject_pending(session_id, messages, cursor)
                 if injected:
                     await self.emit(session_id, "instruction.merged", {"count": injected}, run_id)
+                    continue
+                if finish_reason == "length" and state["trunc_nudges"] < 2:
+                    state["trunc_nudges"] += 1
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[system] Your previous output hit the model's length limit and was cut off. Continue "
+                                "exactly from where it stopped. For large files, never emit the whole file at once: "
+                                "create it with a short write_file skeleton, then append the remaining sections with "
+                                "apply_patch or edit_file in chunks of at most 150 lines."
+                            ),
+                        }
+                    )
                     continue
                 if not (content or "").strip() and state["empty_nudges"] < 1:
                     state["empty_nudges"] += 1
@@ -908,7 +941,14 @@ class AgentRuntime:
         effects = state.get("effects") or {}
         if call.name in IDEMPOTENT_TOOLS and call.call_id in effects:
             return ToolResult(call_id=call.call_id, name=call.name, ok=True, result=effects[call.call_id], summary="restored prior effect")
-        ctx = ToolContext(runtime=self, session=session, workspace=workspace, call=call, emit=self.emit)
+        ctx = ToolContext(
+            runtime=self,
+            session=session,
+            workspace=workspace,
+            call=call,
+            emit=self.emit,
+            run_id=state.get("run_id") or "",
+        )
         result = await self.tools.execute(call, ctx)
         if result.ok and call.name in IDEMPOTENT_TOOLS:
             await durability.record_effect(self.storage, session["id"], state["total_steps"], call.name, call.arguments, str(result.result), workspace)
@@ -1153,6 +1193,7 @@ class AgentRuntime:
         repo_map_text: str,
         casual: bool = False,
         context_pack_text: str = "",
+        reference_text: str = "",
     ) -> str:
         workspace = session.get("workspace") or ""
         parts = [SYSTEM_RULES]
@@ -1217,6 +1258,17 @@ class AgentRuntime:
                 )
         if matched:
             parts.append(SkillLibrary.render(matched, skill_how))
+        if reference_text:
+            parts.append(
+                "\n\n# Reference source contract\n"
+                "The user pointed at an existing file as the format/style source. This digest is the ground truth:\n"
+                "- Reproduce its design tokens (palette, font stack, radius, shadows, max-width, breakpoints) instead of a generic theme.\n"
+                "- Preserve its information architecture: same nav pattern, section order, component vocabulary (cards, KPIs, tables, SVG diagrams, timelines, callouts, overlays).\n"
+                "- Keep its interaction model (sticky nav, scroll spy, login gate, animations) unless the user says otherwise.\n"
+                "- Before writing, call reference_digest to confirm details; after writing, call web_audit with the reference path and fix drift.\n"
+                "If the reference and a built-in scaffold conflict, the reference wins.\n\n"
+                + reference_text
+            )
         if not casual:
             if context_pack_text:
                 parts.append(

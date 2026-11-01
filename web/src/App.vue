@@ -9,6 +9,7 @@ import {
   openPalette,
   selectSession,
   setTheme,
+  startNewTask,
   state,
   togglePluginNav,
   toggleRemoteNav,
@@ -95,8 +96,9 @@ const connectionLabel = computed(() => {
   return t('conn.offline')
 })
 
-function newTask() {
-  state.newTaskOpen = true
+async function newTask() {
+  const session = await startNewTask()
+  if (session) router.push(`/s/${encodeURIComponent(session.id)}`)
 }
 
 function onGlobalKey(event) {

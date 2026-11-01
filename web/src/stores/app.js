@@ -63,6 +63,8 @@ export const state = reactive({
   },
   scrollTick: 0,
   toasts: [],
+  runs: [],
+  activity: { tools: {}, steps: 0, startedAt: 0, endedAt: 0 },
   sidebarCollapsed: localStorage.getItem(SIDEBAR) === '1',
   pluginNavOpen: localStorage.getItem('hy.pluginNav') !== '0',
   remoteNavOpen: localStorage.getItem('hy.remoteNav') !== '0',
@@ -237,6 +239,8 @@ function applyEvent(event) {
         state.session = { ...state.session, status: payload.status, error: payload.error || state.session.error }
       }
       updateSessionInList({ id: sessionId, status: payload.status, error: payload.error })
+      if (payload.status === 'running' && !state.activity.startedAt) state.activity.startedAt = Date.now()
+      if (payload.status === 'done' || payload.status === 'error') state.activity.endedAt = Date.now()
       if (payload.status === 'done' || payload.status === 'error') scheduleRefresh()
       break
     }
@@ -292,6 +296,16 @@ function applyEvent(event) {
         started: Date.now()
       }
       if (!state.live.toolOrder.includes(id)) state.live.toolOrder.push(id)
+      state.activity.tools[id] = {
+        ...(state.activity.tools[id] || {}),
+        call_id: id,
+        tool: payload.tool,
+        args: payload.args || {},
+        status: 'running',
+        startedAt: Date.now()
+      }
+      state.activity.steps = Math.max(state.activity.steps, state.live.toolOrder.length)
+      if (!state.activity.startedAt) state.activity.startedAt = Date.now()
       state.scrollTick++
       break
     }
@@ -306,6 +320,17 @@ function applyEvent(event) {
           error: payload.error,
           ms: payload.ms
         }
+      }
+      state.activity.tools[id] = {
+        ...(state.activity.tools[id] || {}),
+        call_id: id,
+        tool: payload.tool,
+        ok: payload.ok,
+        summary: payload.summary,
+        error: payload.error,
+        ms: payload.ms,
+        status: payload.ok ? 'done' : 'error',
+        endedAt: Date.now()
       }
       break
     }
@@ -369,6 +394,7 @@ function applyEvent(event) {
       state.live.reasoning = {}
       state.live.tools = {}
       state.live.toolOrder = []
+      state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
       break
     }
     case 'session.updated': {
@@ -392,6 +418,9 @@ function applyEvent(event) {
       break
     case 'verify.nudge':
       pushNotice({ kind: 'verify', text: t('notice.verify') })
+      break
+    case 'output.truncated':
+      pushNotice({ kind: 'context', text: t('notice.truncated') })
       break
     case 'checkpoint.rollover':
       pushNotice({ kind: 'checkpoint', text: t('notice.checkpoint', { segment: payload.segment }) })
@@ -444,6 +473,73 @@ function scheduleRefresh() {
   refreshTimer = setTimeout(() => refreshCurrent(), 220)
 }
 
+let activityToken = 0
+export async function loadActivity(sessionId) {
+  if (!sessionId) return
+  const token = ++activityToken
+  try {
+    const events = await api.events(sessionId, 0)
+    if (token !== activityToken || !Array.isArray(events)) return
+    if (state.currentId !== sessionId) return
+    const tools = {}
+    let steps = 0
+    let startedAt = 0
+    let endedAt = 0
+    const stamp = (value) => {
+      const t = Date.parse(String(value || '').replace(' ', 'T'))
+      return Number.isFinite(t) ? t : 0
+    }
+    for (const event of events) {
+      const payload = event.payload || {}
+      const at = stamp(event.created_at)
+      if (event.type === 'tool.start') {
+        steps++
+        const id = payload.call_id
+        if (!id) continue
+        tools[id] = {
+          ...(tools[id] || {}),
+          call_id: id,
+          tool: payload.tool,
+          args: payload.args || {},
+          status: 'running',
+          startedAt: at
+        }
+        if (!startedAt && at) startedAt = at
+      } else if (event.type === 'tool.end') {
+        const id = payload.call_id
+        if (!id) continue
+        tools[id] = {
+          ...(tools[id] || {}),
+          call_id: id,
+          tool: payload.tool,
+          ok: payload.ok,
+          summary: payload.summary,
+          error: payload.error,
+          ms: payload.ms,
+          status: payload.ok ? 'done' : 'error',
+          endedAt: at
+        }
+        if (at > endedAt) endedAt = at
+      } else if (event.type === 'session.status') {
+        if (payload.status === 'running' && !startedAt && at) startedAt = at
+        if ((payload.status === 'done' || payload.status === 'error') && at) endedAt = at
+      }
+    }
+    const merged = { ...tools }
+    for (const [id, item] of Object.entries(state.activity.tools || {})) {
+      merged[id] = { ...(tools[id] || {}), ...item }
+    }
+    state.activity = {
+      tools: merged,
+      steps: Math.max(steps, state.activity.steps || 0),
+      startedAt: startedAt || state.activity.startedAt || 0,
+      endedAt: Math.max(endedAt, state.activity.endedAt || 0)
+    }
+  } catch {
+    /* activity timeline is best-effort */
+  }
+}
+
 function clearCurrentSession() {
   stopSessionStream()
   requestToken++
@@ -453,6 +549,8 @@ function clearCurrentSession() {
   state.artifacts = []
   state.plan = { title: '', steps: [] }
   state.live.approvals = []
+  state.runs = []
+  state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
   localStorage.removeItem(LAST_SESSION)
 }
 
@@ -654,6 +752,8 @@ export async function selectSession(id, navigate = true) {
   state.live.notices = []
   state.live.route = null
   state.live.skills = []
+  state.runs = []
+  state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
   state.selectedFile = null
   state.fileContent = null
   state.diffText = ''
@@ -663,6 +763,7 @@ export async function selectSession(id, navigate = true) {
     if (token !== requestToken) return
     state.session = detail.session
     state.session.pending = detail.session.pending
+    state.runs = detail.runs || []
     if (!state.session.first_question) {
       const listed = state.sessions.find((item) => item.id === id)
       if (listed?.first_question) state.session.first_question = listed.first_question
@@ -675,6 +776,7 @@ export async function selectSession(id, navigate = true) {
     state.messages = messages
     state.artifacts = artifacts
     state.scrollTick++
+    loadActivity(id).catch(() => {})
     startSessionStream(id, detail.session.last_event_id || 0)
     if (detail.session.workspace) {
       Promise.all([loadTree(), loadChanges()]).catch(() => {})
@@ -719,6 +821,56 @@ export async function refreshCurrent() {
     state.scrollTick++
   } catch {
     /* ignore transient refresh errors */
+  }
+}
+
+function parseListValue(value) {
+  if (Array.isArray(value)) return [...value]
+  if (typeof value === 'string' && value) {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+export function recentSessionSettings() {
+  const seen = new Set()
+  const candidates = []
+  for (const item of [state.session, ...state.sessions]) {
+    if (!item || !item.id || item.hidden || seen.has(item.id)) continue
+    seen.add(item.id)
+    candidates.push(item)
+  }
+  candidates.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+  return candidates[0] || null
+}
+
+export async function startNewTask() {
+  const recent = recentSessionSettings()
+  const workspace = String(recent?.workspace || state.settings.default_workspace || '').trim()
+  if (!recent || !workspace) {
+    state.newTaskOpen = true
+    return null
+  }
+  try {
+    return await createSession({
+      kind: recent.kind || 'auto',
+      workspace,
+      provider: recent.provider || '',
+      model: recent.model || '',
+      thinking: recent.thinking || '',
+      gate_mode: recent.gate_mode || '',
+      gate_allow: parseListValue(recent.gate_allow),
+      skills: parseListValue(recent.skills)
+    })
+  } catch (error) {
+    toast(error.message, 'bad')
+    state.newTaskOpen = true
+    return null
   }
 }
 
@@ -795,6 +947,10 @@ export async function resumeSession() {
   } catch (error) {
     toast(error.message, 'bad')
   }
+}
+
+export async function answerQuestion(answer) {
+  return approveCurrent(true, String(answer ?? '').trim())
 }
 
 export async function approveCurrent(approved, reason = '') {

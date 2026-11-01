@@ -244,6 +244,15 @@ class SessionManager:
         )
         return approved, reason
 
+    async def ask_question(self, session: dict[str, Any], call: ToolCall, run_id: str = "") -> str:
+        question = str(call.arguments.get("question") or "").strip()
+        approved, _reason = await self.ask_approval(session, call, run_id, question)
+        if isinstance(approved, str) and approved.strip():
+            return approved.strip()
+        if approved:
+            return "用户已确认，可以继续。"
+        return "用户未回答或已取消，请停止当前分支并向用户说明。"
+
     async def resolve_approval(self, approval_id: str, approved: bool, reason: str = "", resolver: str = "local") -> dict[str, Any] | None:
         approval = await self.storage.get_approval(approval_id)
         if not approval:
@@ -253,7 +262,11 @@ class SessionManager:
         resolved = await self.storage.resolve_approval(approval_id, approved, reason, resolver)
         future = self.approvals.get(approval_id)
         if future and not future.done():
-            future.set_result(bool(approved))
+            if str(approval.get("tool") or "") == "ask_user":
+                answer = (reason or "").strip() or ("是" if approved else "否")
+                future.set_result(answer)
+            else:
+                future.set_result(bool(approved))
         return resolved
 
     async def resolve_by_call(self, session_id: str, call_id: str, approved: bool, reason: str = "") -> bool:

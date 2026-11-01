@@ -114,6 +114,7 @@ LITE_MULTIPHASE_HINTS = (
 LITE_TOOL_SET = (
     "read_file", "read_range", "search_symbol", "apply_patch", "edit_file", "write_file",
     "grep", "glob", "list_dir", "run_shell", "project_scan", "web_audit", "web_scaffold",
+    "reference_digest", "reference_compare", "ask_user",
 )
 TOOL_SCHEMA_TRIM = os.getenv("HAOYUAN_TOOL_SCHEMA_TRIM", "1").strip() not in {"0", "false"}
 TWO_PHASE_PLAN = True

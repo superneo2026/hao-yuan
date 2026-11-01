@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { closeSessionTab, openDiff, renameSession, selectSession, state } from '../stores/app'
+import { closeSessionTab, openDiff, renameSession, selectSession, startNewTask, state } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
@@ -84,8 +84,9 @@ async function editTitle() {
   if (title) await renameSession(title.trim())
 }
 
-function openNew() {
-  state.newTaskOpen = true
+async function openNew() {
+  const session = await startNewTask()
+  if (session) router.push(`/s/${encodeURIComponent(session.id)}`)
 }
 
 function goConsole() {

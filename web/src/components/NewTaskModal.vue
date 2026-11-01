@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { createSession, state, toast } from '../stores/app'
+import { createSession, recentSessionSettings, state, toast } from '../stores/app'
 import { sessionTitle, skillTitle, t } from '../i18n'
 import DirPicker from './DirPicker.vue'
 import Icon from './Icon.vue'
@@ -19,20 +19,40 @@ const kinds = [
   { id: 'general', titleKey: 'newTask.chat', descKey: 'newTask.chatDesc', icon: 'message' }
 ]
 
+function parseAllow(value) {
+  if (Array.isArray(value)) return [...value]
+  if (typeof value === 'string' && value) {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+const inherited = recentSessionSettings()
+
 const form = ref({
-  kind: 'auto',
+  kind: inherited?.kind || 'auto',
   title: '',
-  workspace: state.settings.default_workspace || '',
-  provider: '',
-  model: '',
-  thinking: '',
-  gate_mode: '',
-  skills: []
+  workspace: inherited?.workspace || state.settings.default_workspace || '',
+  provider: inherited?.provider || '',
+  model: inherited?.model || '',
+  thinking: inherited?.thinking || '',
+  gate_mode: inherited?.gate_mode || '',
+  gate_allow: parseAllow(inherited?.gate_allow),
+  skills: parseAllow(inherited?.skills)
 })
 
 const showDir = ref(false)
 const advanced = ref(false)
 const submitting = ref(false)
+
+const hasInheritedSettings = computed(
+  () => !!(inherited && (inherited.model || inherited.thinking || inherited.gate_mode))
+)
 
 const modelOptions = computed(() => {
   const out = []
@@ -135,9 +155,14 @@ async function create() {
     <button class="advanced-toggle" @click="advanced = !advanced">
       <Icon :name="advanced ? 'chevron-down' : 'chevron-right'" :size="14" />
       {{ t('newTask.advanced') }}
+      <span v-if="hasInheritedSettings" class="inherit-pill"><Icon name="refresh" :size="11" /> {{ t('newTask.inheritedBadge') }}</span>
     </button>
 
     <div v-if="advanced" class="advanced-grid">
+      <div class="advanced-note tiny faint">
+        <Icon name="refresh" :size="12" />
+        <span>{{ hasInheritedSettings ? t('newTask.inheritedHint') : t('newTask.noInheritedHint') }}</span>
+      </div>
       <div>
         <label class="label">{{ t('newTask.model') }}</label>
         <select class="select" :value="form.provider && form.model ? `${form.provider}|${form.model}` : ''" @change="onModelChange">
@@ -214,6 +239,8 @@ async function create() {
 .ws-default-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 99px; background: var(--brand-soft); border: 1px solid var(--brand-line); color: var(--brand); font-size: 10.5px; }
 .ws-default-btn { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: none; background: transparent; color: var(--brand); font-size: 11px; }
 .ws-default-btn:hover { text-decoration: underline; }
+.inherit-pill { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; padding: 1px 7px; border-radius: 99px; background: var(--brand-soft); border: 1px solid var(--brand-line); color: var(--brand); font-size: 10px; font-weight: 520; }
+.advanced-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 5px; }
 .advanced-toggle:hover { color: var(--ink); }
 .advanced-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
 .skill-chips { display: flex; flex-wrap: wrap; gap: 6px; }

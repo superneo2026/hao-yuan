@@ -219,6 +219,36 @@ def test_plugin_toggle_persists(client):
     assert embodied["enabled"] is True
 
 
+def test_ask_user_pauses_and_resumes_same_task(client, tmp_path):
+    workspace = tmp_path / "ask-user"
+    workspace.mkdir()
+    session = client.post(
+        "/api/sessions",
+        json={"kind": "dev", "title": "interactive question", "workspace": str(workspace), "gate_mode": "ask"},
+    ).json()["data"]
+    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "请先确认是否继续执行，只做分析"})
+    deadline = time.time() + 8
+    pending = None
+    while time.time() < deadline:
+        detail = client.get(f"/api/sessions/{session['id']}").json()["data"]["session"]
+        if detail.get("pending"):
+            pending = detail["pending"]
+            break
+        time.sleep(0.08)
+    assert pending and pending.get("tool") == "ask_user", pending
+    assert pending["args"]["options"] == ["继续", "停止"]
+    assert client.get(f"/api/sessions/{session['id']}").json()["data"]["session"]["status"] == "waiting_input"
+    resolved = client.post(
+        f"/api/approvals/{pending['approval_id']}/resolve", json={"approved": True, "reason": "继续"}
+    )
+    assert resolved.status_code == 200
+    final = wait_status(client, session["id"])
+    assert final["status"] == "done", final.get("error")
+    messages = client.get(f"/api/sessions/{session['id']}/messages").json()["data"]
+    tool_messages = [message for message in messages if message["role"] == "tool"]
+    assert any("继续" in (message.get("content") or "") for message in tool_messages)
+
+
 def test_orchestrator_requires_git(client, tmp_path):
     workspace = tmp_path / "not-git"
     workspace.mkdir()

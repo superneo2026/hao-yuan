@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { selectSession, state, supervisorAct, supervisorChat, toast } from '../stores/app'
+import { selectSession, startNewTask, state, supervisorAct, supervisorChat, toast } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import Icon from '../components/Icon.vue'
 import StatusPill from '../components/StatusPill.vue'
@@ -38,6 +38,11 @@ async function load() {
 function open(item) {
   selectSession(item.id)
   router.push(`/s/${encodeURIComponent(item.id)}`)
+}
+
+async function newSession() {
+  const session = await startNewTask()
+  if (session) router.push(`/s/${encodeURIComponent(session.id)}`)
 }
 
 async function act(item, action) {
@@ -80,7 +85,7 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
       <div class="row">
         <button class="btn" @click="load"><Icon name="refresh" :size="14" /> {{ t('common.refresh') }}</button>
-        <button class="btn primary" @click="state.newTaskOpen = true"><Icon name="plus" :size="14" /> {{ t('console.newTask') }}</button>
+        <button class="btn primary" @click="newSession"><Icon name="plus" :size="14" /> {{ t('console.newTask') }}</button>
       </div>
     </header>
 

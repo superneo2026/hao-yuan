@@ -59,11 +59,21 @@ class ToolRegistry:
             )
         missing = self._missing_args(spec, call.arguments)
         if missing:
+            raw = call.arguments.get("_raw") if isinstance(call.arguments, dict) else None
+            if raw is not None:
+                error = (
+                    "tool arguments were truncated (the model output hit the length limit), so "
+                    f"{', '.join(missing)} could not be read. Do not retry the same call: split the work into "
+                    "chunks. For large files, create them with write_file using a short skeleton first, then "
+                    "append the remaining sections with apply_patch/edit_file (<= 150 lines each)."
+                )
+            else:
+                error = f"missing required args: {', '.join(missing)}"
             return ToolResult(
                 call_id=call.call_id,
                 name=call.name,
                 ok=False,
-                error=f"missing required args: {', '.join(missing)}",
+                error=error,
                 summary=f"{call.name} argument validation failed",
             )
         handler = self._handlers[call.name]
