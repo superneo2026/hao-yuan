@@ -23,7 +23,7 @@ _HINT_RE = re.compile(
 
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 _VAR_RE = re.compile(r"(--[A-Za-z0-9_-]+)\s*:\s*([^;{}]+);")
-_FONT_RE = re.compile(r"font-family\s*:\s*([^;{}]+);", re.I)
+_FONT_RE = re.compile(r"font-family\s*:\s*([^;{}]+)(?:;|\})", re.I)
 _RADIUS_RE = re.compile(r"border-radius\s*:\s*([^;{}]+);", re.I)
 _SHADOW_RE = re.compile(r"box-shadow\s*:\s*([^;{}]+);", re.I)
 _MAXW_RE = re.compile(r"max-width\s*:\s*([^;{}]+);", re.I)

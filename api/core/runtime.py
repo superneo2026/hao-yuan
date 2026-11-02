@@ -131,6 +131,8 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - If the user only greets you or makes casual conversation, reply naturally and do not inspect the workspace, call tools, or start a task.
 - Do not run destructive commands, do not push to git, and do not touch files outside the workspace.
 - When the user points at an existing file/page as the format or style source, treat it as a hard reference: call reference_digest, then reuse its palette, typography, layout width, breakpoints, components and interactions. Do not substitute a different built-in template. If a file path is given, never assume you already know its contents from memory.
+- Preserve the existing artifact unless the user explicitly asks for a redesign. When a target file already exists, edit it in place and keep its markup, CSS, layout system, section order and naming exactly as they are except for the diff the request requires. Never re-theme, restructure, renumber or "polish" on your own initiative; style/format changes require an explicit user request.
+- Deliver only what was asked. Do not add unrequested sections, scaffolding, commentary, checklists, FAQs, interview prep or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless the user explicitly asks for them.
 - When a decision, missing detail, or risk check blocks safe progress mid-task, call ask_user with one clear question and 2-4 short options instead of ending your turn. Execution pauses, the user answers, and you continue the same task with that answer. Do not ask for confirmation you do not need.
 """
 
@@ -514,12 +516,14 @@ class AgentRuntime:
             except Exception:
                 context_pack_text = ""
         reference_text = ""
+        reference_paths: list[str] = []
         if workspace and not casual and not qa:
             try:
-                ref_paths = reference.resolve_reference_paths(workspace, user_text)
-                blocks = [reference.digest(rel) for rel in ref_paths[:2]]
+                reference_paths = reference.resolve_reference_paths(workspace, user_text)
+                blocks = [reference.digest(rel) for rel in reference_paths[:2]]
                 reference_text = "\n\n".join(blocks)[:16000]
             except Exception:
+                reference_paths = []
                 reference_text = ""
         system = self._system_prompt(
             session,
@@ -584,6 +588,10 @@ class AgentRuntime:
             "repair_fingerprints": {},
             "final_text": "",
             "effects": state_effects,
+            "reference_paths": reference_paths,
+            "reference_outputs": [],
+            "reference_drift": "",
+            "fidelity_nudges": 0,
         }
         max_total = AGENT_MAX_STEPS * (MAX_AUTO_ROLLOVER + 1)
         session = await self.storage.get_session(session_id) or session
@@ -771,6 +779,26 @@ class AgentRuntime:
                         }
                     )
                     continue
+                if state["reference_drift"] and state["fidelity_nudges"] < 2:
+                    state["fidelity_nudges"] += 1
+                    await self.emit(
+                        session_id,
+                        "reference.nudge",
+                        {"nudge": state["fidelity_nudges"], "outputs": len(state["reference_outputs"])},
+                        run_id,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[system reference fidelity gate] The generated HTML drifted from the reference "
+                                "design system. Restore the reference exactly: same palette, font stack, theme mode, "
+                                "layout width, breakpoints and component classes. Do not redesign, and do not add "
+                                "sections the user did not request.\n\n" + state["reference_drift"]
+                            ),
+                        }
+                    )
+                    continue
                 if (
                     audit
                     and not state["spec_audit"]
@@ -828,6 +856,12 @@ class AgentRuntime:
                     path = str(call.arguments.get("path") or "")
                     if Path(path).suffix.lower() in VERIFY_CODE_EXTS:
                         state["last_write_step"] = state["total_steps"]
+                    if Path(path).suffix.lower() in (".html", ".htm") and state["reference_paths"]:
+                        full = path if os.path.isabs(path) else os.path.join(workspace, path)
+                        if os.path.isfile(full):
+                            target = os.path.realpath(full)
+                            if target not in state["reference_outputs"]:
+                                state["reference_outputs"].append(target)
                     await self._register_change_artifact(session_id, call, result)
                 if call.name == "run_shell" and result.ok:
                     command = str(call.arguments.get("command") or "").lower()
@@ -835,6 +869,10 @@ class AgentRuntime:
                         state["last_verify_step"] = state["total_steps"]
                 await self._register_generated_artifact(session_id, call, result)
 
+            if state["reference_paths"] and state["reference_outputs"]:
+                state["reference_drift"] = self._reference_drift(
+                    state["reference_paths"], state["reference_outputs"]
+                )
             await self._repair_after_tests(session, parsed_calls, results, messages, run_id, state)
             await self.storage.update_session(session_id, status="running")
         if CHECKPOINT_ENABLED:
@@ -1178,6 +1216,26 @@ class AgentRuntime:
         completion = int(usage.get("completion_tokens") or 0)
         return round((prompt * price["prompt"] + completion * price["completion"]) / 1_000_000, 6)
 
+    @staticmethod
+    def _reference_drift(reference_paths: list[str], outputs: list[str]) -> str:
+        reports: list[str] = []
+        style_refs = [
+            ref for ref in reference_paths if Path(ref).suffix.lower() in (".html", ".htm", ".css")
+        ]
+        for target in dict.fromkeys(outputs):
+            for ref in style_refs:
+                try:
+                    if os.path.realpath(ref) == target:
+                        continue
+                    report = reference.compare(ref, target)
+                except Exception:
+                    continue
+                match = re.search(r"style fidelity:\s*(\d+)/100", report)
+                if match and int(match.group(1)) < 85:
+                    reports.append(report)
+                    break
+        return "\n\n".join(reports)
+
     def _system_prompt(
         self,
         session: dict[str, Any],
@@ -1265,6 +1323,8 @@ class AgentRuntime:
                 "- Reproduce its design tokens (palette, font stack, radius, shadows, max-width, breakpoints) instead of a generic theme.\n"
                 "- Preserve its information architecture: same nav pattern, section order, component vocabulary (cards, KPIs, tables, SVG diagrams, timelines, callouts, overlays).\n"
                 "- Keep its interaction model (sticky nav, scroll spy, login gate, animations) unless the user says otherwise.\n"
+                "- If the output file already exists, this is an in-place edit: preserve the existing style 1:1 and change only the requested content. Do not create a fresh visual design.\n"
+                "- Never add unrequested meta content. A resume/CV sent to an interviewer must not contain interview Q&A, JD-matching notes or internal prep sections unless explicitly requested.\n"
                 "- Before writing, call reference_digest to confirm details; after writing, call web_audit with the reference path and fix drift.\n"
                 "If the reference and a built-in scaffold conflict, the reference wins.\n\n"
                 + reference_text

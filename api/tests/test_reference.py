@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+from core.runtime import AgentRuntime
 from harness import reference
 from tools import dev
 
@@ -81,6 +82,25 @@ def test_compare_flags_theme_and_palette_drift(tmp_path):
     report = reference.compare(str(ref), str(target))
     assert "palette drift" in report
     assert "theme mode mismatch" in report
+
+
+def test_reference_drift_gate_flags_redesign(tmp_path):
+    ref = tmp_path / "ref.html"
+    ref.write_text(REFERENCE_HTML, encoding="utf-8")
+    target = tmp_path / "target.html"
+    target.write_text(TARGET_HTML, encoding="utf-8")
+    drift = AgentRuntime._reference_drift([str(ref.resolve())], [str(target.resolve())])
+    assert "theme mode mismatch" in drift
+    assert "palette drift" in drift
+
+
+def test_reference_drift_gate_accepts_faithful_copy_and_skips_self(tmp_path):
+    ref = tmp_path / "ref.html"
+    ref.write_text(REFERENCE_HTML, encoding="utf-8")
+    same = tmp_path / "same.html"
+    same.write_text(REFERENCE_HTML, encoding="utf-8")
+    assert AgentRuntime._reference_drift([str(ref.resolve())], [str(same.resolve())]) == ""
+    assert AgentRuntime._reference_drift([str(ref.resolve())], [str(ref.resolve())]) == ""
 
 
 def test_reference_digest_and_compare_tools(tmp_path):

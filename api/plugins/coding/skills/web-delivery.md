@@ -16,6 +16,16 @@ If the request says "参考 / 参照 / 仿照 / 保持这个格式 / 同样的�
 4. The reference wins over the built-in scaffold. Do not call `web_scaffold` when the user asked to follow a reference.
 5. When porting large blocks, copy the structure in small chunks (`write_file` skeleton, then `apply_patch`), never paraphrase the design into a different theme.
 
+## In-place edit fidelity (mandatory when the target exists)
+If the output file already exists, it is an in-place edit, not a fresh design:
+
+1. Keep the existing palette, font stack, theme mode, layout width, breakpoints, component classes, section order and script/export behavior unchanged.
+2. Change only the content the user asked for. Do not re-theme, restructure, renumber, rename, or "improve" the page on your own initiative.
+3. Run `reference_compare` against the reference (or the current file before editing) and require high fidelity. A redesign is a failure, not a bonus.
+
+## Document audience
+For outward-facing documents (resume/CV, cover letter, proposal, report), write for the stated audience only. Do not add internal prep material such as interview Q&A, "高频追问与回答要点", JD-matching walkthroughs or interview talking points unless the user explicitly requests them.
+
 ## Scaffold only when there is no reference
 If no reference page is given, call `web_scaffold` to copy the built-in design system. Every page links `assets/style.css` and `assets/app.js`.
 

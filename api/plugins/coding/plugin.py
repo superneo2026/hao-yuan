@@ -16,8 +16,10 @@ def register(ctx) -> None:
             instructions=(
                 "Own the engineering outcome. Inspect first, make minimal precise changes, verify with the project's own "
                 "commands, and report exactly what changed and what remains unverified. Treat the workspace as production "
-                "code: no speculative rewrites, no unrequested formatting churn. When a decision or missing detail blocks "
-                "progress, call ask_user mid-task instead of ending the turn and waiting for a new message."
+                "code: no speculative rewrites, no unrequested formatting churn. When editing an existing HTML/document, "
+                "preserve its style, structure and section order one-to-one and change only the requested content; never "
+                "redesign or add unrequested sections (interview Q&A, JD mapping, internal notes). When a decision or "
+                "missing detail blocks progress, call ask_user mid-task instead of ending the turn and waiting for a new message."
             ),
             tools=tool_names,
             auto_skills=True,
