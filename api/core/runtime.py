@@ -38,7 +38,7 @@ from configs.configs import (
     VERIFY_GATE,
     VERIFY_MAX_NUDGE,
 )
-from configs.models import PRICES_PER_MTOK, resolve
+from configs.models import price_for, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
 from harness import durability, repair, repoindex
 from harness.skills import SkillLibrary
@@ -653,7 +653,7 @@ class AgentRuntime:
                 tool_args=stored_calls if stored_calls else None,
             )
             if usage:
-                cost = self._cost(actual_provider, usage)
+                cost = self._cost(actual_provider, usage, actual_model)
                 bill = await self.storage.record_usage(session_id, assistant_row["id"], actual_provider, actual_model, usage, cost)
                 await self.emit(session_id, "usage", {**bill, "provider": actual_provider, "model": actual_model}, run_id)
             if fallbacks:
@@ -982,7 +982,7 @@ class AgentRuntime:
                                 provider,
                                 model,
                                 usage,
-                                self._cost(provider, usage),
+                                self._cost(provider, usage, model),
                             )
                         except Exception:
                             pass
@@ -1042,7 +1042,7 @@ class AgentRuntime:
                 if usage:
                     try:
                         await self.storage.record_usage(
-                            session["id"], f"sub-{uuid.uuid4().hex[:10]}", provider, model, usage, self._cost(provider, usage)
+                            session["id"], f"sub-{uuid.uuid4().hex[:10]}", provider, model, usage, self._cost(provider, usage, model)
                         )
                     except Exception:
                         pass
@@ -1119,11 +1119,15 @@ class AgentRuntime:
             pass
 
     @staticmethod
-    def _cost(provider: str, usage: dict[str, Any]) -> float:
-        price = PRICES_PER_MTOK.get(provider, {"prompt": 0, "completion": 0})
+    def _cost(provider: str, usage: dict[str, Any], model: str | None = None) -> float:
+        price = price_for(provider, model)
         prompt = int(usage.get("prompt_tokens") or 0)
         completion = int(usage.get("completion_tokens") or 0)
-        return round((prompt * price["prompt"] + completion * price["completion"]) / 1_000_000, 6)
+        cached = min(int(usage.get("cached_tokens") or 0), prompt)
+        hit_price = price.get("cache_hit", price["prompt"])
+        return round(
+            ((prompt - cached) * price["prompt"] + cached * hit_price + completion * price["completion"]) / 1_000_000, 6
+        )
 
     def _system_prompt(
         self,
