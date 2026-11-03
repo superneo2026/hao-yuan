@@ -475,7 +475,7 @@ function timeLabel(value) {
         type="button"
         class="question-pin"
         :class="{ active: question.id === activeQuestionId }"
-        :title="question.content"
+        :aria-label="question.content"
         @click="jumpToQuestion(question.id)"
       >
         <span class="question-pin-dot" />
@@ -637,7 +637,7 @@ function timeLabel(value) {
 }
 .question-tip {
   position: absolute;
-  right: 24px;
+  right: calc(100% + 8px);
   top: 50%;
   width: max-content;
   max-width: min(300px, 40vw);
@@ -652,15 +652,25 @@ function timeLabel(value) {
   text-align: left;
   opacity: 0;
   visibility: hidden;
-  pointer-events: none;
+  pointer-events: auto;
   transform: translateY(-50%) translateX(6px);
-  transition: opacity .15s var(--ease), transform .15s var(--ease), visibility .15s;
+  transition: opacity .15s var(--ease), transform .15s var(--ease), visibility 0s;
+}
+.question-tip::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 12px;
 }
 .question-pin:hover .question-tip,
-.question-pin:focus-visible .question-tip {
+.question-pin:focus-visible .question-tip,
+.question-pin:focus-within .question-tip {
   opacity: 1;
   visibility: visible;
   transform: translateY(-50%) translateX(0);
+  transition-delay: 0s;
 }
 .question-tip-index {
   display: inline-block;
