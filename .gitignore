@@ -13,7 +13,8 @@ api/env1/
 venv/
 
 # Runtime data
-api/data/
+api/data/*
+!api/data/.gitkeep
 *.db
 *.db-wal
 *.db-shm

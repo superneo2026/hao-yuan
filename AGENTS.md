@@ -7,12 +7,14 @@
 - Frontend dev: `cd web && npm run dev` (base port 8130, env `HAOYUAN_WEB_PORT`; auto +1 when busy, proxies `/api`, `/docs` and `/ws` to `HAOYUAN_API_PORT` or `runtime.json` `api_port`)
 - Frontend build: `cd web && npm run build`
 - Production: build the frontend, then run the API; the API serves `web/dist` at `/`.
+- Plugin center (separate repo `../hao-yuan-plugin-center`): `cd ../hao-yuan-plugin-center && python main.py` (base port 8180, env `PLUGIN_CENTER_PORT`). The API connects to it via `HAOYUAN_PLUGIN_CENTER_URL` (default `http://127.0.0.1:8180`).
 - `desktop.exe` (source `desktop/desktop.cs`, build `desktop\build.bat`): can override base ports via `api_port_config` / `web_port_config` in `api/data/runtime.json` and restart services.
 
 ## Architecture invariants
 
 - `core/` is the kernel. It must not import from `plugins/`.
 - Business capabilities belong in `plugins/<name>/` and register through `register(ctx)`.
+- Plugins may add routers, tools, agents, skills and middlewares through `PluginContext` (`add_router`, `add_middleware`, `on`). Toggle hooks receive `(name, enabled)`.
 - Tool handlers receive `(ctx: ToolContext, args: dict)` and must respect `ctx.workspace`.
 - Every state-changing tool that touches the filesystem or executes commands must be `confirm=True` and high risk.
 - Events are append-only in SQLite and broadcast over WebSocket. Do not log secrets into event payloads.

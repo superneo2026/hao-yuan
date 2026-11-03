@@ -40,7 +40,7 @@ from configs.configs import (
 )
 from configs.models import price_for, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
-from harness import durability, repair, repoindex
+from harness import durability, reference, repair, repoindex, sysinfo
 from harness.skills import SkillLibrary
 
 TERMINAL_STATUSES = {"done", "error", "cancelled"}
@@ -118,6 +118,7 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Work autonomously. Do not ask for permission for read-only actions. For writes or commands, the system shows a preview and asks the user.
 - Locate before editing: use search_symbol, grep, read_range, then apply the smallest possible patch.
 - Prefer apply_patch / edit_file / multi_edit over write_file. Never rewrite a whole file for a small change.
+- Large files: model output is capped, so never emit an entire big file in one tool call. Create it with write_file using a small skeleton, then append the remaining sections in chunks (<= 150 lines each) with apply_patch or edit_file. If a tool result says the arguments were truncated, split the write instead of retrying the same call.
 - Batch independent tool calls in the same assistant message. Reads can run in parallel; writes run in order.
 - Verify code changes: run the project's tests/lint/build once after the final code edit. Documentation-only changes do not require a test run.
 - Use the task tool for broad read-only reconnaissance when raw tool output would flood the context. It returns only conclusions.
@@ -129,6 +130,10 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Answer in the user's language. Be concise and outcome-oriented.
 - If the user only greets you or makes casual conversation, reply naturally and do not inspect the workspace, call tools, or start a task.
 - Do not run destructive commands, do not push to git, and do not touch files outside the workspace.
+- When the user points at an existing file/page as the format or style source, treat it as a hard reference: call reference_digest, then reuse its palette, typography, layout width, breakpoints, components and interactions. Do not substitute a different built-in template. If a file path is given, never assume you already know its contents from memory.
+- Preserve the existing artifact unless the user explicitly asks for a redesign. When a target file already exists, edit it in place and keep its markup, CSS, layout system, section order and naming exactly as they are except for the diff the request requires. Never re-theme, restructure, renumber or "polish" on your own initiative; style/format changes require an explicit user request.
+- Deliver only what was asked. Do not add unrequested sections, scaffolding, commentary, checklists, FAQs, interview prep or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless the user explicitly asks for them.
+- When a decision, missing detail, or risk check blocks safe progress mid-task, call ask_user with one clear question and 2-4 short options instead of ending your turn. Execution pauses, the user answers, and you continue the same task with that answer. Do not ask for confirmation you do not need.
 """
 
 
@@ -458,7 +463,8 @@ class AgentRuntime:
         if not agent.tools:
             return []
         if not workspace and getattr(agent, "kind", "") not in ("plan", "video", "robot"):
-            return []
+            chat_safe = {"system_info", "calculator", "now", "echo"}
+            return [name for name in agent.tools if name in chat_safe and self.tools.get(name)]
         names = [name for name in agent.tools if self.tools.get(name)]
         if not names:
             return []
@@ -490,6 +496,12 @@ class AgentRuntime:
     ) -> None:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
+        host_info = ""
+        if sysinfo.wants_host_info(user_text):
+            try:
+                host_info = sysinfo.summary(sysinfo.collect(workspace))
+            except Exception:
+                host_info = ""
         repo_map_text = ""
         context_pack_text = ""
         if REPO_MAP_ENABLED and workspace and kind in ("dev", "coding") and not lite and not qa:
@@ -503,6 +515,16 @@ class AgentRuntime:
                 )
             except Exception:
                 context_pack_text = ""
+        reference_text = ""
+        reference_paths: list[str] = []
+        if workspace and not casual and not qa:
+            try:
+                reference_paths = reference.resolve_reference_paths(workspace, user_text)
+                blocks = [reference.digest(rel) for rel in reference_paths[:2]]
+                reference_text = "\n\n".join(blocks)[:16000]
+            except Exception:
+                reference_paths = []
+                reference_text = ""
         system = self._system_prompt(
             session,
             agent,
@@ -517,7 +539,14 @@ class AgentRuntime:
             repo_map_text,
             casual,
             context_pack_text,
+            reference_text,
         )
+        if host_info:
+            system += (
+                "\n\n# Live host information (read-only)\n"
+                + host_info
+                + "\nUse this information to answer the user's question directly. Do not claim you cannot access system information."
+            )
         recent, summary, cursor = await self.context.load(session)
         if summary:
             system += "\n\n--- Compressed history memory ---\n" + summary
@@ -544,6 +573,7 @@ class AgentRuntime:
 
         await self.emit(session_id, "session.status", {"status": "running"}, run_id)
         state = {
+            "run_id": run_id,
             "step": 0,
             "total_steps": 0,
             "last_write_step": 0,
@@ -552,11 +582,16 @@ class AgentRuntime:
             "spec_audit": 0,
             "write_nudges": 0,
             "empty_nudges": 0,
+            "trunc_nudges": 0,
             "rollovers": 0,
             "escalated": False,
             "repair_fingerprints": {},
             "final_text": "",
             "effects": state_effects,
+            "reference_paths": reference_paths,
+            "reference_outputs": [],
+            "reference_drift": "",
+            "fidelity_nudges": 0,
         }
         max_total = AGENT_MAX_STEPS * (MAX_AUTO_ROLLOVER + 1)
         session = await self.storage.get_session(session_id) or session
@@ -603,6 +638,7 @@ class AgentRuntime:
             usage: dict[str, Any] = {}
             actual_provider, actual_model = provider, model
             fallbacks: list[str] = []
+            finish_reason = ""
             async for event in self.gateway.stream(provider, model, messages, schemas, thinking):
                 event_type = event.get("type")
                 if event_type == "reasoning":
@@ -615,6 +651,7 @@ class AgentRuntime:
                     actual_provider = event.get("provider") or provider
                     actual_model = event.get("model") or model
                     fallbacks = event.get("fallbacks") or []
+                    finish_reason = event.get("finish_reason") or finish_reason
             if message is None:
                 raise RuntimeError("model returned no message")
 
@@ -670,10 +707,27 @@ class AgentRuntime:
                 run_id,
             )
 
+            if finish_reason == "length":
+                await self.emit(session_id, "output.truncated", {"step": state["total_steps"]}, run_id)
+
             if not parsed_calls:
                 cursor, injected = await self._inject_pending(session_id, messages, cursor)
                 if injected:
                     await self.emit(session_id, "instruction.merged", {"count": injected}, run_id)
+                    continue
+                if finish_reason == "length" and state["trunc_nudges"] < 2:
+                    state["trunc_nudges"] += 1
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[system] Your previous output hit the model's length limit and was cut off. Continue "
+                                "exactly from where it stopped. For large files, never emit the whole file at once: "
+                                "create it with a short write_file skeleton, then append the remaining sections with "
+                                "apply_patch or edit_file in chunks of at most 150 lines."
+                            ),
+                        }
+                    )
                     continue
                 if not (content or "").strip() and state["empty_nudges"] < 1:
                     state["empty_nudges"] += 1
@@ -721,6 +775,26 @@ class AgentRuntime:
                                 "[system verification gate] You changed code but did not run a verification command. "
                                 "Run the relevant test/lint/build now. If verification is impossible, state explicitly "
                                 "what is unverified and why. Do not print values as a substitute for assertions."
+                            ),
+                        }
+                    )
+                    continue
+                if state["reference_drift"] and state["fidelity_nudges"] < 2:
+                    state["fidelity_nudges"] += 1
+                    await self.emit(
+                        session_id,
+                        "reference.nudge",
+                        {"nudge": state["fidelity_nudges"], "outputs": len(state["reference_outputs"])},
+                        run_id,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[system reference fidelity gate] The generated HTML drifted from the reference "
+                                "design system. Restore the reference exactly: same palette, font stack, theme mode, "
+                                "layout width, breakpoints and component classes. Do not redesign, and do not add "
+                                "sections the user did not request.\n\n" + state["reference_drift"]
                             ),
                         }
                     )
@@ -782,6 +856,12 @@ class AgentRuntime:
                     path = str(call.arguments.get("path") or "")
                     if Path(path).suffix.lower() in VERIFY_CODE_EXTS:
                         state["last_write_step"] = state["total_steps"]
+                    if Path(path).suffix.lower() in (".html", ".htm") and state["reference_paths"]:
+                        full = path if os.path.isabs(path) else os.path.join(workspace, path)
+                        if os.path.isfile(full):
+                            target = os.path.realpath(full)
+                            if target not in state["reference_outputs"]:
+                                state["reference_outputs"].append(target)
                     await self._register_change_artifact(session_id, call, result)
                 if call.name == "run_shell" and result.ok:
                     command = str(call.arguments.get("command") or "").lower()
@@ -789,6 +869,10 @@ class AgentRuntime:
                         state["last_verify_step"] = state["total_steps"]
                 await self._register_generated_artifact(session_id, call, result)
 
+            if state["reference_paths"] and state["reference_outputs"]:
+                state["reference_drift"] = self._reference_drift(
+                    state["reference_paths"], state["reference_outputs"]
+                )
             await self._repair_after_tests(session, parsed_calls, results, messages, run_id, state)
             await self.storage.update_session(session_id, status="running")
         if CHECKPOINT_ENABLED:
@@ -895,7 +979,14 @@ class AgentRuntime:
         effects = state.get("effects") or {}
         if call.name in IDEMPOTENT_TOOLS and call.call_id in effects:
             return ToolResult(call_id=call.call_id, name=call.name, ok=True, result=effects[call.call_id], summary="restored prior effect")
-        ctx = ToolContext(runtime=self, session=session, workspace=workspace, call=call, emit=self.emit)
+        ctx = ToolContext(
+            runtime=self,
+            session=session,
+            workspace=workspace,
+            call=call,
+            emit=self.emit,
+            run_id=state.get("run_id") or "",
+        )
         result = await self.tools.execute(call, ctx)
         if result.ok and call.name in IDEMPOTENT_TOOLS:
             await durability.record_effect(self.storage, session["id"], state["total_steps"], call.name, call.arguments, str(result.result), workspace)
@@ -1129,6 +1220,26 @@ class AgentRuntime:
             ((prompt - cached) * price["prompt"] + cached * hit_price + completion * price["completion"]) / 1_000_000, 6
         )
 
+    @staticmethod
+    def _reference_drift(reference_paths: list[str], outputs: list[str]) -> str:
+        reports: list[str] = []
+        style_refs = [
+            ref for ref in reference_paths if Path(ref).suffix.lower() in (".html", ".htm", ".css")
+        ]
+        for target in dict.fromkeys(outputs):
+            for ref in style_refs:
+                try:
+                    if os.path.realpath(ref) == target:
+                        continue
+                    report = reference.compare(ref, target)
+                except Exception:
+                    continue
+                match = re.search(r"style fidelity:\s*(\d+)/100", report)
+                if match and int(match.group(1)) < 85:
+                    reports.append(report)
+                    break
+        return "\n\n".join(reports)
+
     def _system_prompt(
         self,
         session: dict[str, Any],
@@ -1144,6 +1255,7 @@ class AgentRuntime:
         repo_map_text: str,
         casual: bool = False,
         context_pack_text: str = "",
+        reference_text: str = "",
     ) -> str:
         workspace = session.get("workspace") or ""
         parts = [SYSTEM_RULES]
@@ -1160,15 +1272,20 @@ class AgentRuntime:
         )
         if not workspace:
             parts.append(
-                "\n# Chat-only mode\nNo workspace is bound, so coding tools are unavailable. Answer directly and tell the user "
-                "to bind a workspace when file or command access is needed.\n"
+                "\n# Chat-only mode\nNo workspace is bound, so file editing and shell commands are unavailable. "
+                "You can still use system_info for read-only host details (OS, CPU, memory, disk, uptime). "
+                "Tell the user to bind a workspace only when file or command access is actually needed.\n"
             )
         if qa:
-            parts.append("\n# Question mode\nThe user is asking a question, not requesting execution. Answer clearly without starting a task loop.\n")
+            parts.append(
+                "\n# Question mode\nThe user is asking a question, not requesting execution. Answer clearly without starting a task loop. "
+                "If the question is about this machine's OS, CPU, memory, disk or uptime, use system_info or the live host information below.\n"
+            )
         if casual:
             parts.append(
                 "\n# Conversation mode\nThis is casual conversation or a general question, not a workspace task. "
-                "Answer directly and naturally. Do not inspect the workspace, call tools, or start a task loop.\n"
+                "Answer directly and naturally. Do not inspect the workspace or start a task loop. "
+                "Exception: for questions about this machine's OS, CPU, memory, disk or uptime, use system_info or the live host information below.\n"
             )
         if kind == "plan":
             parts.append(
@@ -1203,6 +1320,19 @@ class AgentRuntime:
                 )
         if matched:
             parts.append(SkillLibrary.render(matched, skill_how))
+        if reference_text:
+            parts.append(
+                "\n\n# Reference source contract\n"
+                "The user pointed at an existing file as the format/style source. This digest is the ground truth:\n"
+                "- Reproduce its design tokens (palette, font stack, radius, shadows, max-width, breakpoints) instead of a generic theme.\n"
+                "- Preserve its information architecture: same nav pattern, section order, component vocabulary (cards, KPIs, tables, SVG diagrams, timelines, callouts, overlays).\n"
+                "- Keep its interaction model (sticky nav, scroll spy, login gate, animations) unless the user says otherwise.\n"
+                "- If the output file already exists, this is an in-place edit: preserve the existing style 1:1 and change only the requested content. Do not create a fresh visual design.\n"
+                "- Never add unrequested meta content. A resume/CV sent to an interviewer must not contain interview Q&A, JD-matching notes or internal prep sections unless explicitly requested.\n"
+                "- Before writing, call reference_digest to confirm details; after writing, call web_audit with the reference path and fix drift.\n"
+                "If the reference and a built-in scaffold conflict, the reference wins.\n\n"
+                + reference_text
+            )
         if not casual:
             if context_pack_text:
                 parts.append(

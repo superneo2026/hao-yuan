@@ -14,6 +14,8 @@ from configs.configs import (
 )
 
 _CODE_EXTS = set(REPO_INDEX_CODE_EXTS)
+_ASSET_EXTS = {".html", ".htm", ".css", ".scss", ".less", ".md", ".svg"}
+_INDEX_EXTS = _CODE_EXTS | _ASSET_EXTS
 
 
 def _iter_code_files(base: str):
@@ -23,7 +25,7 @@ def _iter_code_files(base: str):
         dirs[:] = sorted(d for d in dirs if d not in SEARCH_SKIP_DIRS)
         for name in sorted(files):
             ext = os.path.splitext(name)[1].lower()
-            if ext not in _CODE_EXTS:
+            if ext not in _INDEX_EXTS:
                 continue
             count += 1
             if count > REPO_INDEX_MAX_FILES or time.monotonic() > deadline:
@@ -178,6 +180,9 @@ def build_index(workspace: str) -> dict:
             except OSError:
                 continue
             ext = os.path.splitext(path)[1].lower()
+            if ext in _ASSET_EXTS:
+                idx["files"][rel] = 0
+                continue
             symbols = index_python(rel, src) if ext == ".py" else index_js(rel, src)
             if symbols:
                 idx["symbols"].extend(symbols)
@@ -265,7 +270,7 @@ def rank_files(workspace: str, query: str, limit: int = 8) -> list[tuple[str, fl
     return sorted(scores.items(), key=lambda item: -item[1])[: max(1, min(limit, 20))]
 
 
-_PACK_EXTS = {".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".md", ".toml"}
+_PACK_EXTS = {".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".md", ".toml", ".html", ".htm", ".css"}
 _PACK_SKIP = {"legacy_data.py"}
 
 

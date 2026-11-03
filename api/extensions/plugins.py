@@ -49,11 +49,17 @@ async def toggle_plugin(name: str, body: ToggleBody):
     if not plugin:
         return fail("plugin not found", 404)
     await harness.set_plugin_enabled(name, body.enabled)
+    await harness.call_hook("plugin.toggled", name, body.enabled)
+    hot = name == "user-account" and plugin.get("loaded", False)
     return ok(
         {
             "name": name,
             "enabled": body.enabled,
-            "restart_required": True,
-            "message": "Plugin state saved. Restart the API to load or unload plugin routes and tools.",
+            "restart_required": not hot,
+            "message": (
+                "账号保护已即时生效。"
+                if hot
+                else "Plugin state saved. Restart the API to load or unload plugin routes and tools."
+            ),
         }
     )

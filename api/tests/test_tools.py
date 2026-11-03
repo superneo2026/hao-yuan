@@ -201,3 +201,20 @@ def test_mimo_provider_is_wired():
     assert "mimo" in PROVIDERS
     assert resolve("mimo", "mimo-v2.6-flash") == ("mimo", "mimo-v2.6-flash")
     assert PROVIDERS["mimo"].supports_thinking is False
+
+def test_system_info_is_available_without_workspace(client):
+    from harness import sysinfo
+
+    data = sysinfo.collect()
+    assert data["os"]
+    assert data["cpu_count"]
+    text = sysinfo.summary(data)
+    assert "Memory:" in text and "Disk:" in text
+    assert sysinfo.wants_host_info("当前内存多少") is True
+    assert sysinfo.wants_host_info("帮我重构这个仓库") is False
+
+    harness = harness_instance()
+    agent = harness.agents.get("general")
+    names = harness.runtime._tools_for(agent, "general", True, False)
+    assert "system_info" in names
+    assert "run_shell" not in names

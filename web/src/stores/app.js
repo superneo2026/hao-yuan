@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue'
-import { api } from '../api/client'
+import { api, clearAuthToken, setAuthToken } from '../api/client'
 import { createSessionStream } from '../api/sse'
 import { i18n, setLocale, t } from '../i18n'
 
@@ -63,7 +63,11 @@ export const state = reactive({
   },
   scrollTick: 0,
   toasts: [],
+  runs: [],
+  activity: { tools: {}, steps: 0, startedAt: 0, endedAt: 0 },
   sidebarCollapsed: localStorage.getItem(SIDEBAR) === '1',
+  pluginNavOpen: localStorage.getItem('hy.pluginNav') !== '0',
+  remoteNavOpen: localStorage.getItem('hy.remoteNav') !== '0',
   mobileNavOpen: false,
   paletteOpen: false,
   newTaskOpen: false,
@@ -78,6 +82,21 @@ export const state = reactive({
   usageByModel: [],
   supervisor: null,
   orchestrations: [],
+  auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', maxFailures: 5, lockSeconds: 300, loading: false },
+  market: { loading: false, online: false, error: '', centerUrl: '', plugins: [] },
+  remote: {
+    loading: false,
+    enabled: false,
+    error: '',
+    instance: null,
+    keys: [],
+    incoming: [],
+    outgoing: [],
+    current: null
+  },
+  accountOpen: false,
+  authSetupOpen: false,
+  workspaceSetupOpen: false,
   busy: { sending: false, loadingFile: false }
 })
 
@@ -104,6 +123,10 @@ export const activeSkills = computed(() => {
 export const liveToolList = computed(() =>
   state.live.toolOrder.map((id) => state.live.tools[id]).filter(Boolean)
 )
+export const authBlocked = computed(
+  () => state.auth.checked && state.auth.enabled && state.auth.configured && !state.auth.authenticated
+)
+export const authSetupMode = computed(() => state.auth.enabled && !state.auth.configured)
 export const tokenCount = computed(() => {
   const session = currentSession.value || {}
   return Number(session.context_tokens || 0) + Number(session.total_prompt || 0) + Number(session.total_completion || 0)
@@ -138,6 +161,16 @@ export function openPalette() {
 }
 export function closePalette() {
   state.paletteOpen = false
+}
+
+export function togglePluginNav() {
+  state.pluginNavOpen = !state.pluginNavOpen
+  localStorage.setItem('hy.pluginNav', state.pluginNavOpen ? '1' : '0')
+}
+
+export function toggleRemoteNav() {
+  state.remoteNavOpen = !state.remoteNavOpen
+  localStorage.setItem('hy.remoteNav', state.remoteNavOpen ? '1' : '0')
 }
 
 function persistOpenTabs() {
@@ -206,6 +239,8 @@ function applyEvent(event) {
         state.session = { ...state.session, status: payload.status, error: payload.error || state.session.error }
       }
       updateSessionInList({ id: sessionId, status: payload.status, error: payload.error })
+      if (payload.status === 'running' && !state.activity.startedAt) state.activity.startedAt = Date.now()
+      if (payload.status === 'done' || payload.status === 'error') state.activity.endedAt = Date.now()
       if (payload.status === 'done' || payload.status === 'error') scheduleRefresh()
       break
     }
@@ -261,6 +296,16 @@ function applyEvent(event) {
         started: Date.now()
       }
       if (!state.live.toolOrder.includes(id)) state.live.toolOrder.push(id)
+      state.activity.tools[id] = {
+        ...(state.activity.tools[id] || {}),
+        call_id: id,
+        tool: payload.tool,
+        args: payload.args || {},
+        status: 'running',
+        startedAt: Date.now()
+      }
+      state.activity.steps = Math.max(state.activity.steps, state.live.toolOrder.length)
+      if (!state.activity.startedAt) state.activity.startedAt = Date.now()
       state.scrollTick++
       break
     }
@@ -275,6 +320,17 @@ function applyEvent(event) {
           error: payload.error,
           ms: payload.ms
         }
+      }
+      state.activity.tools[id] = {
+        ...(state.activity.tools[id] || {}),
+        call_id: id,
+        tool: payload.tool,
+        ok: payload.ok,
+        summary: payload.summary,
+        error: payload.error,
+        ms: payload.ms,
+        status: payload.ok ? 'done' : 'error',
+        endedAt: Date.now()
       }
       break
     }
@@ -338,6 +394,7 @@ function applyEvent(event) {
       state.live.reasoning = {}
       state.live.tools = {}
       state.live.toolOrder = []
+      state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
       break
     }
     case 'session.updated': {
@@ -361,6 +418,9 @@ function applyEvent(event) {
       break
     case 'verify.nudge':
       pushNotice({ kind: 'verify', text: t('notice.verify') })
+      break
+    case 'output.truncated':
+      pushNotice({ kind: 'context', text: t('notice.truncated') })
       break
     case 'checkpoint.rollover':
       pushNotice({ kind: 'checkpoint', text: t('notice.checkpoint', { segment: payload.segment }) })
@@ -413,6 +473,73 @@ function scheduleRefresh() {
   refreshTimer = setTimeout(() => refreshCurrent(), 220)
 }
 
+let activityToken = 0
+export async function loadActivity(sessionId) {
+  if (!sessionId) return
+  const token = ++activityToken
+  try {
+    const events = await api.events(sessionId, 0)
+    if (token !== activityToken || !Array.isArray(events)) return
+    if (state.currentId !== sessionId) return
+    const tools = {}
+    let steps = 0
+    let startedAt = 0
+    let endedAt = 0
+    const stamp = (value) => {
+      const t = Date.parse(String(value || '').replace(' ', 'T'))
+      return Number.isFinite(t) ? t : 0
+    }
+    for (const event of events) {
+      const payload = event.payload || {}
+      const at = stamp(event.created_at)
+      if (event.type === 'tool.start') {
+        steps++
+        const id = payload.call_id
+        if (!id) continue
+        tools[id] = {
+          ...(tools[id] || {}),
+          call_id: id,
+          tool: payload.tool,
+          args: payload.args || {},
+          status: 'running',
+          startedAt: at
+        }
+        if (!startedAt && at) startedAt = at
+      } else if (event.type === 'tool.end') {
+        const id = payload.call_id
+        if (!id) continue
+        tools[id] = {
+          ...(tools[id] || {}),
+          call_id: id,
+          tool: payload.tool,
+          ok: payload.ok,
+          summary: payload.summary,
+          error: payload.error,
+          ms: payload.ms,
+          status: payload.ok ? 'done' : 'error',
+          endedAt: at
+        }
+        if (at > endedAt) endedAt = at
+      } else if (event.type === 'session.status') {
+        if (payload.status === 'running' && !startedAt && at) startedAt = at
+        if ((payload.status === 'done' || payload.status === 'error') && at) endedAt = at
+      }
+    }
+    const merged = { ...tools }
+    for (const [id, item] of Object.entries(state.activity.tools || {})) {
+      merged[id] = { ...(tools[id] || {}), ...item }
+    }
+    state.activity = {
+      tools: merged,
+      steps: Math.max(steps, state.activity.steps || 0),
+      startedAt: startedAt || state.activity.startedAt || 0,
+      endedAt: Math.max(endedAt, state.activity.endedAt || 0)
+    }
+  } catch {
+    /* activity timeline is best-effort */
+  }
+}
+
 function clearCurrentSession() {
   stopSessionStream()
   requestToken++
@@ -422,7 +549,127 @@ function clearCurrentSession() {
   state.artifacts = []
   state.plan = { title: '', steps: [] }
   state.live.approvals = []
+  state.runs = []
+  state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
   localStorage.removeItem(LAST_SESSION)
+}
+
+export function requestAccountSetup() {
+  state.authSetupOpen = true
+}
+
+export function dismissAccountSetup() {
+  state.authSetupOpen = false
+}
+
+export function dismissWorkspaceSetup() {
+  state.workspaceSetupOpen = false
+}
+
+export function requestWorkspaceSetup() {
+  state.workspaceSetupOpen = true
+}
+
+export async function checkAuth() {
+  try {
+    const data = await api.authStatus()
+    applyAuth(data)
+  } catch {
+    applyAuth({ checked: true, enabled: false, configured: false, active: false, authenticated: false, username: '', max_failures: 5 })
+  }
+  return state.auth
+}
+
+function applyAuth(data) {
+  state.auth = {
+    checked: true,
+    enabled: !!data.enabled,
+    configured: !!data.configured,
+    active: !!data.active,
+    authenticated: !!data.authenticated,
+    username: data.username || '',
+    maxFailures: Number(data.max_failures) || 5,
+    lockSeconds: Number(data.lock_seconds) || 300,
+    loading: false
+  }
+}
+
+export function markUnauthorized() {
+  clearAuthToken()
+  state.auth = { ...state.auth, checked: true, enabled: true, configured: true, active: true, authenticated: false, loading: false }
+  state.booted = true
+  state.loading = false
+  state.accountOpen = false
+  state.authSetupOpen = false
+  state.sessions = []
+  state.session = null
+  state.messages = []
+  state.artifacts = []
+  state.plugins = []
+  state.skills = []
+}
+
+export async function loginAccount(username, password) {
+  state.auth.loading = true
+  try {
+    const data = await api.authLogin({ username, password })
+    if (data.token) setAuthToken(data.token)
+    applyAuth(data)
+    state.booted = false
+    await boot()
+    return data
+  } finally {
+    state.auth.loading = false
+  }
+}
+
+export async function setupAccount(username, password) {
+  state.auth.loading = true
+  try {
+    const data = await api.authSetup({ username, password })
+    if (data.token) setAuthToken(data.token)
+    state.authSetupOpen = false
+    applyAuth(data)
+    state.booted = false
+    await boot()
+    return data
+  } finally {
+    state.auth.loading = false
+  }
+}
+
+export async function changeAccount(body) {
+  const data = await api.authChange(body)
+  if (data.token) setAuthToken(data.token)
+  applyAuth(data)
+  toast(t('auth.changed'), 'good')
+  return data
+}
+
+export async function saveAuthPolicy(maxFailures) {
+  const data = await api.authPolicy({ max_failures: maxFailures })
+  applyAuth(data)
+  toast(t('auth.policySaved'), 'good')
+  return data
+}
+
+export async function logoutAccount() {
+  try {
+    await api.authLogout()
+  } catch {
+    /* ignore network errors on logout */
+  }
+  clearAuthToken()
+  state.auth = { ...state.auth, authenticated: false, active: state.auth.enabled && state.auth.configured }
+  state.accountOpen = false
+  state.booted = true
+  state.sessions = []
+  state.session = null
+  state.messages = []
+  state.artifacts = []
+  state.plugins = []
+  state.skills = []
+  toast(t('auth.loggedOut'), 'info')
 }
 
 export async function boot() {
@@ -430,6 +677,12 @@ export async function boot() {
   setLocale(i18n.locale, false)
   setTheme(state.theme, false)
   state.loading = true
+  if (!state.auth.checked) await checkAuth()
+  if (state.auth.enabled && state.auth.configured && !state.auth.authenticated) {
+    state.loading = false
+    state.booted = true
+    return
+  }
   try {
     const [health, models, plugins, skills, settings] = await Promise.all([
       api.health(),
@@ -443,6 +696,7 @@ export async function boot() {
     state.plugins = plugins
     state.skills = skills
     state.settings = { ...state.settings, ...settings }
+    await loadRemoteManagement()
     await loadSessions()
     const routed = sessionIdFromHash()
     if (routed && state.sessions.some((item) => item.id === routed)) {
@@ -453,6 +707,7 @@ export async function boot() {
       const visible = state.sessions.find((item) => !item.hidden)
       if (visible) await selectSession(visible.id, false)
     }
+    if (!state.settings.default_workspace) state.workspaceSetupOpen = true
     loadUsage().catch(() => {})
     loadSupervisor().catch(() => {})
     state.connection = 'connected'
@@ -497,6 +752,8 @@ export async function selectSession(id, navigate = true) {
   state.live.notices = []
   state.live.route = null
   state.live.skills = []
+  state.runs = []
+  state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
   state.selectedFile = null
   state.fileContent = null
   state.diffText = ''
@@ -506,6 +763,7 @@ export async function selectSession(id, navigate = true) {
     if (token !== requestToken) return
     state.session = detail.session
     state.session.pending = detail.session.pending
+    state.runs = detail.runs || []
     if (!state.session.first_question) {
       const listed = state.sessions.find((item) => item.id === id)
       if (listed?.first_question) state.session.first_question = listed.first_question
@@ -518,6 +776,7 @@ export async function selectSession(id, navigate = true) {
     state.messages = messages
     state.artifacts = artifacts
     state.scrollTick++
+    loadActivity(id).catch(() => {})
     startSessionStream(id, detail.session.last_event_id || 0)
     if (detail.session.workspace) {
       Promise.all([loadTree(), loadChanges()]).catch(() => {})
@@ -562,6 +821,56 @@ export async function refreshCurrent() {
     state.scrollTick++
   } catch {
     /* ignore transient refresh errors */
+  }
+}
+
+function parseListValue(value) {
+  if (Array.isArray(value)) return [...value]
+  if (typeof value === 'string' && value) {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+export function recentSessionSettings() {
+  const seen = new Set()
+  const candidates = []
+  for (const item of [state.session, ...state.sessions]) {
+    if (!item || !item.id || item.hidden || seen.has(item.id)) continue
+    seen.add(item.id)
+    candidates.push(item)
+  }
+  candidates.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+  return candidates[0] || null
+}
+
+export async function startNewTask() {
+  const recent = recentSessionSettings()
+  const workspace = String(recent?.workspace || state.settings.default_workspace || '').trim()
+  if (!recent || !workspace) {
+    state.newTaskOpen = true
+    return null
+  }
+  try {
+    return await createSession({
+      kind: recent.kind || 'auto',
+      workspace,
+      provider: recent.provider || '',
+      model: recent.model || '',
+      thinking: recent.thinking || '',
+      gate_mode: recent.gate_mode || '',
+      gate_allow: parseListValue(recent.gate_allow),
+      skills: parseListValue(recent.skills)
+    })
+  } catch (error) {
+    toast(error.message, 'bad')
+    state.newTaskOpen = true
+    return null
   }
 }
 
@@ -638,6 +947,10 @@ export async function resumeSession() {
   } catch (error) {
     toast(error.message, 'bad')
   }
+}
+
+export async function answerQuestion(answer) {
+  return approveCurrent(true, String(answer ?? '').trim())
 }
 
 export async function approveCurrent(approved, reason = '') {
@@ -781,10 +1094,166 @@ export async function loadPlugins() {
   return state.plugins
 }
 
+function remotePluginReady() {
+  const plugin = state.plugins.find((item) => item.name === 'remote-management')
+  return !!(plugin && plugin.enabled && plugin.loaded && !plugin.error)
+}
+
+export async function loadRemoteManagement() {
+  if (!remotePluginReady()) {
+    state.remote = { loading: false, enabled: false, error: '', instance: null, keys: [], incoming: [], outgoing: [], current: null }
+    return state.remote
+  }
+  state.remote.loading = true
+  try {
+    const data = await api.remoteOverview()
+    state.remote = {
+      loading: false,
+      enabled: true,
+      error: '',
+      instance: data.instance || null,
+      keys: data.keys || [],
+      incoming: data.incoming || [],
+      outgoing: data.outgoing || [],
+      current: state.remote.current
+    }
+  } catch (error) {
+    state.remote = {
+      ...state.remote,
+      loading: false,
+      enabled: error.code !== 404,
+      error: error.message || ''
+    }
+  }
+  return state.remote
+}
+
+export async function saveRemoteSettings(body) {
+  const data = await api.remoteSettings(body)
+  await loadRemoteManagement()
+  toast(t('remote.settingsSaved'), 'good')
+  return data
+}
+
+export async function createRemoteKey(label) {
+  const data = await api.remoteCreateKey({ label })
+  await loadRemoteManagement()
+  toast(t('remote.keyCreated'), 'good')
+  return data
+}
+
+export async function deleteRemoteKey(id) {
+  await api.remoteDeleteKey(id)
+  await loadRemoteManagement()
+  toast(t('remote.keyDeleted'), 'info')
+}
+
+export async function remoteIncomingAction(id, action) {
+  const data = await api.remoteIncomingAction(id, action)
+  await loadRemoteManagement()
+  return data
+}
+
+export async function deleteRemoteIncoming(id) {
+  await api.remoteDeleteIncoming(id)
+  await loadRemoteManagement()
+  toast(t('remote.requestDeleted'), 'info')
+}
+
+export async function addRemoteSystem(body) {
+  const data = await api.remoteAddSystem(body)
+  await loadRemoteManagement()
+  toast(t('remote.requestSent'), 'good')
+  return data
+}
+
+export async function refreshRemoteSystems() {
+  const data = await api.remoteRefreshSystems()
+  state.remote.outgoing = data || []
+  return data
+}
+
+export async function loadRemoteSystem(id) {
+  const data = await api.remoteSystem(id)
+  state.remote.current = data
+  return data
+}
+
+export async function refreshRemoteSystem(id) {
+  const data = await api.remoteRefreshSystem(id)
+  state.remote.current = data
+  await loadRemoteManagement()
+  return data
+}
+
+export async function remoteSystemAction(id, action) {
+  const data = await api.remoteSystemAction(id, action)
+  state.remote.current = data
+  await loadRemoteManagement()
+  return data
+}
+
+export async function deleteRemoteSystem(id) {
+  await api.remoteDeleteSystem(id)
+  state.remote.current = null
+  await loadRemoteManagement()
+  toast(t('remote.systemRemoved'), 'info')
+}
+
 export async function togglePlugin(name, enabled) {
   const result = await api.togglePlugin(name, enabled)
   await loadPlugins()
-  toast(t('toast.pluginSaved'), 'warn', 7000)
+  if (name === 'user-account') await checkAuth()
+  if (name === 'remote-management') await loadRemoteManagement()
+  toast(result.message || t('toast.pluginSaved'), result.restart_required ? 'warn' : 'good', 7000)
+  return result
+}
+
+export async function loadMarketplace(center = '') {
+  const target = (center || localStorage.getItem('hy.pluginCenterUrl') || '').trim()
+  state.market.loading = true
+  try {
+    const data = await api.marketplace(target)
+    const resolved = data.center_url || target || ''
+    if (resolved) localStorage.setItem('hy.pluginCenterUrl', resolved)
+    state.market = {
+      loading: false,
+      online: !!data.online,
+      error: data.error || '',
+      centerUrl: resolved,
+      plugins: data.plugins || []
+    }
+  } catch (error) {
+    state.market = { loading: false, online: false, error: error.message, centerUrl: target, plugins: [] }
+  }
+  return state.market
+}
+
+export async function installPluginFromCenter(plugin) {
+  const data = await api.installPlugin({ name: plugin.name, center_url: state.market.centerUrl })
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  await checkAuth()
+  await loadRemoteManagement()
+  toast(data.message || t('plugins.installSuccess'), 'good', 6500)
+  return data
+}
+
+export async function uploadPluginPackage(file) {
+  const data = await api.uploadPlugin(file)
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  await checkAuth()
+  await loadRemoteManagement()
+  toast(data.message || t('plugins.uploadSuccess'), 'good', 6500)
+  return data
+}
+
+export async function uninstallPluginByName(name) {
+  const data = await api.uninstallPlugin(name)
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  await checkAuth()
+  await loadRemoteManagement()
+  toast(t('plugins.uninstalled'), 'info')
+  return data
 }
 
 export async function loadSettings() {

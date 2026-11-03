@@ -1,0 +1,24 @@
+{
+  "name": "user-account",
+  "title": "用户账号管理",
+  "version": "1.0.0",
+  "description": "为豪源站点添加账号密码保护。启用并设置账密后，所有页面与 API 必须登录后才能访问，支持随时修改用户名和密码。",
+  "author": "HaoYuan",
+  "requires": [],
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "contributes": {
+    "routes": 6,
+    "frontend": {
+      "nav": []
+    }
+  },
+  "marketplace": {
+    "category": "security",
+    "tags": ["登录保护", "账号密码", "隐私", "访问控制"],
+    "icon": "shield",
+    "featured": true,
+    "downloads": 1280,
+    "homepage": ""
+  }
+}

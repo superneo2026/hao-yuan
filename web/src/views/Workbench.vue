@@ -1,8 +1,9 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { closeSessionTab, openDiff, renameSession, selectSession, state } from '../stores/app'
+import { closeSessionTab, openDiff, renameSession, selectSession, startNewTask, state } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
+import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
 import ChatTimeline from '../components/ChatTimeline.vue'
 import Composer from '../components/Composer.vue'
@@ -14,6 +15,8 @@ import RightPanel from '../components/RightPanel.vue'
 import StatusPill from '../components/StatusPill.vue'
 
 const router = useRouter()
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
+const shortcutLabel = isMac ? '⌘ N' : 'Ctrl N'
 const RIGHT_PANEL_KEY = 'hy.rightOpen.v2'
 const rightOpen = ref(window.innerWidth > 960 && localStorage.getItem(RIGHT_PANEL_KEY) === '1')
 const rightWidth = ref(Number(localStorage.getItem('hy.rightWidth') || 370))
@@ -83,8 +86,9 @@ async function editTitle() {
   if (title) await renameSession(title.trim())
 }
 
-function openNew() {
-  state.newTaskOpen = true
+async function openNew() {
+  const session = await startNewTask()
+  if (session) router.push(`/s/${encodeURIComponent(session.id)}`)
 }
 
 function goConsole() {
@@ -116,8 +120,19 @@ function closeDiff() {
         <Icon name="menu" :size="18" />
       </button>
       <div class="topbar-left">
-        <div class="topbar-title" @click="editTitle" :title="t('session.clickToRename')">
-          {{ currentTitle }}
+        <div class="topbar-title-row">
+          <div class="topbar-title" @click="editTitle" :title="t('session.clickToRename')">
+            {{ currentTitle }}
+          </div>
+          <button
+            type="button"
+            class="new-chat-btn"
+            :title="`${t('nav.newTask')} (${shortcutLabel})`"
+            :aria-label="`${t('nav.newTask')} (${shortcutLabel})`"
+            @click="openNew"
+          >
+            <Icon name="plus" :size="13" />
+          </button>
         </div>
         <div class="topbar-meta">
           <StatusPill v-if="session" :status="session.status" />
@@ -133,6 +148,7 @@ function closeDiff() {
         <button class="icon-btn" :class="{ active: rightOpen }" :title="t('session.togglePanel')" @click="toggleRight">
           <Icon name="panel" :size="17" />
         </button>
+        <AccountMenu v-if="state.auth.authenticated" />
       </div>
     </header>
 
@@ -238,8 +254,24 @@ function closeDiff() {
 .topbar { position: relative; z-index: 60; height: var(--topbar-h); flex: 0 0 var(--topbar-h); display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, transparent); backdrop-filter: blur(14px); }
 .mobile-menu { display: none; }
 .topbar-left { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.topbar-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .topbar-title { font-size: 13.5px; font-weight: 620; letter-spacing: -.01em; cursor: pointer; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-title:hover { color: var(--brand); }
+.new-chat-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: color .14s var(--ease), border-color .14s var(--ease), background .14s var(--ease);
+}
+.new-chat-btn:hover { color: var(--ink); border-color: var(--brand-line); background: var(--surface-3); }
 .topbar-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .topbar-meta .badge { height: 18px; font-size: 9.5px; padding: 0 6px; }
 .topbar-workspace { max-width: 280px; }

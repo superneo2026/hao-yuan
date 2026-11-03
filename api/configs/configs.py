@@ -22,6 +22,8 @@ ARTIFACTS_DIR = Path(os.getenv("HAOYUAN_ARTIFACTS_DIR", DATA_DIR / "artifacts"))
 UPLOADS_DIR = Path(os.getenv("HAOYUAN_UPLOADS_DIR", DATA_DIR / "uploads")).expanduser().resolve()
 SKILLS_DIR = Path(os.getenv("HAOYUAN_SKILLS_DIR", API_DIR / "skills")).expanduser().resolve()
 PLUGINS_DIR = Path(os.getenv("HAOYUAN_PLUGINS_DIR", API_DIR / "plugins")).expanduser().resolve()
+PLUGIN_CENTER_URL = os.getenv("HAOYUAN_PLUGIN_CENTER_URL", "http://127.0.0.1:8180").rstrip("/")
+PLUGIN_PACKAGE_MAX_BYTES = int(os.getenv("HAOYUAN_PLUGIN_PACKAGE_MAX_BYTES", str(20 * 1024 * 1024)))
 
 DEFAULT_PROVIDER, DEFAULT_MODEL = auto_default()
 DEFAULT_AGENT = os.getenv("HAOYUAN_DEFAULT_AGENT", "coding")
@@ -112,6 +114,7 @@ LITE_MULTIPHASE_HINTS = (
 LITE_TOOL_SET = (
     "read_file", "read_range", "search_symbol", "apply_patch", "edit_file", "write_file",
     "grep", "glob", "list_dir", "run_shell", "project_scan", "web_audit", "web_scaffold",
+    "reference_digest", "reference_compare", "ask_user",
 )
 TOOL_SCHEMA_TRIM = os.getenv("HAOYUAN_TOOL_SCHEMA_TRIM", "1").strip() not in {"0", "false"}
 TWO_PHASE_PLAN = True

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { closePalette, selectSession, setTheme, state } from '../stores/app'
+import { closePalette, selectSession, setTheme, startNewTask, state } from '../stores/app'
 import { kindLabel, sessionTitle, statusLabel, t } from '../i18n'
 import Icon from './Icon.vue'
 
@@ -11,7 +11,16 @@ const active = ref(0)
 const input = ref(null)
 
 const baseCommands = [
-  { id: 'new', titleKey: 'command.new', hintKey: 'command.newHint', icon: 'plus', run: () => { state.newTaskOpen = true } },
+  {
+    id: 'new',
+    titleKey: 'command.new',
+    hintKey: 'command.newHint',
+    icon: 'plus',
+    run: async () => {
+      const session = await startNewTask()
+      if (session) router.push(`/s/${encodeURIComponent(session.id)}`)
+    }
+  },
   { id: 'workbench', titleKey: 'command.workbench', hintKey: 'command.workbenchHint', icon: 'terminal', run: () => router.push('/') },
   { id: 'console', titleKey: 'command.console', hintKey: 'command.consoleHint', icon: 'activity', run: () => router.push('/console') },
   { id: 'skills', titleKey: 'command.skills', hintKey: 'command.skillsHint', icon: 'sparkles', run: () => router.push('/skills') },

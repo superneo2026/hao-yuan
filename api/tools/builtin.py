@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.contracts import ToolContext, ToolSpec
+from harness import sysinfo
 
 
 def echo(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +52,10 @@ def now(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     return {"now": datetime.now(timezone.utc).isoformat()}
 
 
+def system_info(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return sysinfo.collect(getattr(ctx, "workspace", "") or "")
+
+
 def register_builtin_tools(registry, source: str = "core") -> None:
     registry.register(
         ToolSpec(
@@ -82,4 +87,17 @@ def register_builtin_tools(registry, source: str = "core") -> None:
             source=source,
         ),
         now,
+    )
+    registry.register(
+        ToolSpec(
+            name="system_info",
+            description="Read-only host information: OS, CPU, memory, disk usage and uptime. Use for questions about this machine's configuration or memory.",
+            input_schema={"type": "object", "properties": {}},
+            readonly=True,
+            risk="low",
+            side_effect="none",
+            confirm=False,
+            source=source,
+        ),
+        system_info,
     )

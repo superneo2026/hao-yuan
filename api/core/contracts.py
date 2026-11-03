@@ -84,6 +84,7 @@ class ToolContext:
     workspace: str
     call: ToolCall | None = None
     emit: Any = None
+    run_id: str = ""
 
     @property
     def session_id(self) -> str:

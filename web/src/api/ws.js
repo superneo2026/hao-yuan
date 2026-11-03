@@ -1,3 +1,5 @@
+import { getAuthToken, getRemoteToken } from './client'
+
 export function createSocket({ onEvent, onStatus }) {
   let socket = null
   let closedByUser = false
@@ -13,7 +15,12 @@ export function createSocket({ onEvent, onStatus }) {
   function connect() {
     if (closedByUser) return
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${protocol}://${location.host}/ws`
+    const token = getAuthToken()
+    const remoteToken = getRemoteToken()
+    const params = []
+    if (token) params.push(`token=${encodeURIComponent(token)}`)
+    if (remoteToken) params.push(`remote_token=${encodeURIComponent(remoteToken)}`)
+    const url = `${protocol}://${location.host}/ws${params.length ? `?${params.join('&')}` : ''}`
     status('connecting')
     try {
       socket = new WebSocket(url)

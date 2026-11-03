@@ -1,3 +1,5 @@
+import { getAuthToken, getRemoteToken } from './client'
+
 export function createSessionStream({ sessionId, afterId = 0, onEvent, onStatus, onEnd }) {
   let source = null
   let closed = false
@@ -19,7 +21,9 @@ export function createSessionStream({ sessionId, afterId = 0, onEvent, onStatus,
   function connect() {
     if (closed) return
     onStatus?.('connecting')
-    const url = `/api/sessions/${encodeURIComponent(sessionId)}/stream?after_id=${lastId}`
+    const token = getAuthToken()
+    const remoteToken = getRemoteToken()
+    const url = `/api/sessions/${encodeURIComponent(sessionId)}/stream?after_id=${lastId}${token ? `&token=${encodeURIComponent(token)}` : ''}${remoteToken ? `&remote_token=${encodeURIComponent(remoteToken)}` : ''}`
     source = new EventSource(url)
     source.onopen = () => {
       retry = 0

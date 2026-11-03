@@ -7,7 +7,7 @@ from tools.dev import register_dev_tools, tool_specs
 def register(ctx) -> None:
     register_dev_tools(ctx.tools, source=ctx.name)
     ctx.add_skill_dir("skills")
-    tool_names = [spec.name for spec in tool_specs()] + ["plan_task", "update_plan"]
+    tool_names = [spec.name for spec in tool_specs()] + ["plan_task", "update_plan", "system_info"]
     ctx.register_agent(
         AgentSpec(
             name="coding",
@@ -16,7 +16,10 @@ def register(ctx) -> None:
             instructions=(
                 "Own the engineering outcome. Inspect first, make minimal precise changes, verify with the project's own "
                 "commands, and report exactly what changed and what remains unverified. Treat the workspace as production "
-                "code: no speculative rewrites, no unrequested formatting churn."
+                "code: no speculative rewrites, no unrequested formatting churn. When editing an existing HTML/document, "
+                "preserve its style, structure and section order one-to-one and change only the requested content; never "
+                "redesign or add unrequested sections (interview Q&A, JD mapping, internal notes). When a decision or "
+                "missing detail blocks progress, call ask_user mid-task instead of ending the turn and waiting for a new message."
             ),
             tools=tool_names,
             auto_skills=True,
@@ -29,10 +32,11 @@ def register(ctx) -> None:
             title="HaoYuan General Assistant",
             description="Chat-only assistant when no workspace is bound.",
             instructions=(
-                "Answer clearly and concisely. If no workspace is bound and the user needs file or command access, "
-                "explain that a workspace must be bound first."
+                "Answer clearly and concisely. Use system_info for questions about this machine's OS, CPU, memory, "
+                "disk or uptime. If no workspace is bound and the user needs file or command access, explain that a "
+                "workspace must be bound first."
             ),
-            tools=[],
+            tools=["system_info", "calculator", "now", "echo"],
             auto_skills=True,
             kind="general",
         )

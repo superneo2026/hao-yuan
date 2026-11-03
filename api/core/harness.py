@@ -30,6 +30,7 @@ class Harness:
         self.context = ContextManager(self.storage, self.gateway)
         register_builtin_tools(self.tools, source="core")
         self.plugin_routers: list[Any] = []
+        self.plugin_middlewares: list[Any] = []
         self.plugin_hooks: dict[str, list] = {}
         self.plugins = PluginManager(self, PLUGINS_DIR, DB_PATH)
         self.plugins.discover()

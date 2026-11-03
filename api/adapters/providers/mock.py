@@ -93,6 +93,16 @@ class MockProvider:
         names = {(tool.get("function") or {}).get("name") for tool in tools if isinstance(tool, dict)}
         lowered = text.lower()
 
+        if ("确认" in text or "confirm" in lowered) and "ask_user" in names:
+            return ToolCall(
+                call_id="call_ask",
+                name="ask_user",
+                arguments={
+                    "question": "请确认是否继续执行当前分支？",
+                    "options": ["继续", "停止"],
+                    "context": "mock interactive confirmation",
+                },
+            )
         match = re.search(r"(?:创建|新建|写入|写)(?:一个|文件)?\s*([\w./-]+\.(?:txt|md|py|js|json))", text)
         if match and "write_file" in names:
             path = match.group(1)
