@@ -280,8 +280,11 @@ function applyEvent(event) {
             created_at: event.time
           })
         }
-        const id = payload.msg_id
-        delete state.live.streams[id]
+        // The saved message renders from state.messages, so drop this step's live token
+        // buffers. Keying on payload.msg_id alone left stale buffers whenever the streaming
+        // id differed, which rendered the same reply twice until the next refresh.
+        state.live.streams = {}
+        state.live.reasoning = {}
         state.scrollTick++
       }
       break

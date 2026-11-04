@@ -149,8 +149,28 @@ const userQuestions = computed(() =>
     .map((group, index) => ({ id: group.id, order: index + 1, content: group.content || '' }))
 )
 
-const liveText = computed(() => Object.values(state.live.streams).join(''))
-const liveReasoning = computed(() => Object.values(state.live.reasoning).join(''))
+const lastAssistantMessage = computed(() => {
+  for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+    if (state.messages[i].role === 'assistant') return state.messages[i]
+  }
+  return null
+})
+
+function sameText(a, b) {
+  const left = String(a || '').trim()
+  return left !== '' && left === String(b || '').trim()
+}
+
+// Guard: a persisted message and its still-open live buffer must never render side by side
+// (duplicate assistant bubble) when events arrive out of order.
+const liveText = computed(() => {
+  const text = Object.values(state.live.streams).join('')
+  return sameText(text, lastAssistantMessage.value?.content) ? '' : text
+})
+const liveReasoning = computed(() => {
+  const text = Object.values(state.live.reasoning).join('')
+  return sameText(text, lastAssistantMessage.value?.reasoning) ? '' : text
+})
 const liveTools = computed(() => state.live.toolOrder.map((id) => state.live.tools[id]).filter(Boolean))
 
 const isBusy = computed(() => ['running', 'queued', 'waiting_input'].includes(currentSession.value?.status))

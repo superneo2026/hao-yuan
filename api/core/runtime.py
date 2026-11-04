@@ -633,7 +633,9 @@ class AgentRuntime:
             if compaction.get("compacted"):
                 await self.emit(session_id, "context.compact", compaction, run_id)
 
-            msg_id = uuid.uuid4().hex[:12]
+            # Pre-generate the assistant message id so streaming events (delta/reasoning) and
+            # the persisted row share one id; clients correlate them to replace the live bubble.
+            msg_id = f"m_{uuid.uuid4().hex[:16]}"
             message: dict[str, Any] | None = None
             usage: dict[str, Any] = {}
             actual_provider, actual_model = provider, model
@@ -688,6 +690,7 @@ class AgentRuntime:
                 content,
                 reasoning=reasoning,
                 tool_args=stored_calls if stored_calls else None,
+                message_id=msg_id,
             )
             if usage:
                 cost = self._cost(actual_provider, usage, actual_model)

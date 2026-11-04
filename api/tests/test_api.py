@@ -50,6 +50,23 @@ def test_general_chat_mock(client):
     assert '"type": "delta"' in stream.text or '"type": "message.saved"' in stream.text
 
 
+def test_stream_msg_id_matches_persisted_message(client):
+    session = client.post("/api/sessions", json={"kind": "general", "title": "stream ids"}).json()["data"]
+    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "hello"})
+    final = wait_status(client, session["id"])
+    assert final["status"] == "done", final.get("error")
+    events = client.get(f"/api/sessions/{session['id']}/events").json()["data"]
+    saved = [e for e in events if e["type"] == "message.saved" and e["payload"].get("role") == "assistant"]
+    deltas = [e for e in events if e["type"] == "delta"]
+    assert saved and deltas
+    saved_ids = {e["payload"]["msg_id"] for e in saved}
+    # Streaming tokens must carry the persisted message id, otherwise the UI cannot tell that the
+    # live bubble and the saved bubble are the same reply (it briefly renders the answer twice).
+    assert {e["payload"]["msg_id"] for e in deltas} <= saved_ids
+    messages = client.get(f"/api/sessions/{session['id']}/messages").json()["data"]
+    assert saved_ids <= {message["id"] for message in messages}
+
+
 def test_first_message_auto_titles_session(client):
     session = client.post("/api/sessions", json={"kind": "general", "title": ""}).json()["data"]
     assert session["title"] == "New conversation"
