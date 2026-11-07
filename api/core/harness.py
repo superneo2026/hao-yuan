@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from configs.configs import DB_PATH, PLUGINS_DIR, SKILLS_DIR, WORKSPACE_DIR
+from configs.configs import DB_PATH, GITIGNORE_PLUGINS_DIR, PLUGINS_DIR, SKILLS_DIR, WORKSPACE_DIR
 from core.agents import AgentRegistry
 from core.context import ContextManager
 from core.events import EventBus
@@ -32,7 +32,7 @@ class Harness:
         self.plugin_routers: list[Any] = []
         self.plugin_middlewares: list[Any] = []
         self.plugin_hooks: dict[str, list] = {}
-        self.plugins = PluginManager(self, PLUGINS_DIR, DB_PATH)
+        self.plugins = PluginManager(self, PLUGINS_DIR, DB_PATH, extra_dirs=(GITIGNORE_PLUGINS_DIR,))
         self.plugins.discover()
         self.plugins.load()
         self.runtime = AgentRuntime(self)

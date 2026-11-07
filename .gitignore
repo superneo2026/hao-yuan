@@ -37,3 +37,9 @@ web/.vite-temp/
 Thumbs.db
 
 test/
+
+# Private local plugins (kept out of the public repository)
+api/gitignore_plugins/
+api/harness/embodied.py
+web/src/views/RemoteManagement.vue
+api/tests/test_remote_management.py

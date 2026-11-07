@@ -1,0 +1,40 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Virtual environments
+api/env1/
+.venv/
+venv/
+
+# Runtime data
+api/data/*
+!api/data/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Secrets
+api/configs/secrets_local.py
+.env
+
+# Node / web
+web/node_modules/
+web/dist/
+web/.vite/
+web/.vite-temp/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+test/
+gitignore_plugins/

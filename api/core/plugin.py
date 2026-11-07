@@ -66,9 +66,10 @@ class PluginContext:
 
 
 class PluginManager:
-    def __init__(self, harness: Any, plugins_dir: Path, db_path: Path):
+    def __init__(self, harness: Any, plugins_dir: Path, db_path: Path, extra_dirs: tuple[Path, ...] = ()):
         self.harness = harness
         self.plugins_dir = Path(plugins_dir)
+        self.plugin_dirs = (self.plugins_dir, *(Path(directory) for directory in extra_dirs))
         self.db_path = Path(db_path)
         self.manifests: dict[str, dict[str, Any]] = {}
         self.contexts: dict[str, PluginContext] = {}
@@ -90,22 +91,25 @@ class PluginManager:
 
     def discover(self) -> list[dict[str, Any]]:
         states = self._read_states()
-        if not self.plugins_dir.exists():
-            return []
-        for manifest_path in sorted(self.plugins_dir.glob("*/plugin.json")):
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                print(f"[plugin] invalid manifest {manifest_path}: {exc}")
+        for directory in self.plugin_dirs:
+            if not directory.exists():
                 continue
-            name = str(manifest.get("name") or manifest_path.parent.name)
-            manifest["name"] = name
-            manifest["_dir"] = str(manifest_path.parent)
-            self.manifests[name] = manifest
-            state = states.get(name)
-            self.enabled[name] = (
-                state["enabled"] if state is not None else bool(manifest.get("default_enabled", True))
-            )
+            for manifest_path in sorted(directory.glob("*/plugin.json")):
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    print(f"[plugin] invalid manifest {manifest_path}: {exc}")
+                    continue
+                name = str(manifest.get("name") or manifest_path.parent.name)
+                if name in self.manifests:
+                    continue
+                manifest["name"] = name
+                manifest["_dir"] = str(manifest_path.parent)
+                self.manifests[name] = manifest
+                state = states.get(name)
+                self.enabled[name] = (
+                    state["enabled"] if state is not None else bool(manifest.get("default_enabled", True))
+                )
         return list(self.manifests.values())
 
     def _ordered(self) -> list[dict[str, Any]]:
