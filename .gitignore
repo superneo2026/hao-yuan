@@ -39,7 +39,8 @@ Thumbs.db
 test/
 
 # Private local plugins (kept out of the public repository)
-api/gitignore_plugins/
+api/gitignore_plugins/*
+!api/gitignore_plugins/README.md
 api/harness/embodied.py
 web/src/views/RemoteManagement.vue
 api/tests/test_remote_management.py

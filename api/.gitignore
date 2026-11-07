@@ -37,4 +37,5 @@ web/.vite-temp/
 Thumbs.db
 
 test/
-gitignore_plugins/
+gitignore_plugins/*
+!gitignore_plugins/README.md
