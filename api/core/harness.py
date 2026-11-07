@@ -32,6 +32,7 @@ class Harness:
         self.plugin_routers: list[Any] = []
         self.plugin_middlewares: list[Any] = []
         self.plugin_hooks: dict[str, list] = {}
+        self.app: Any = None
         self.plugins = PluginManager(self, PLUGINS_DIR, DB_PATH, extra_dirs=(GITIGNORE_PLUGINS_DIR,))
         self.plugins.discover()
         self.plugins.load()
@@ -62,10 +63,65 @@ class Harness:
     def plugin_status(self) -> list[dict[str, Any]]:
         return self.plugins.status()
 
-    async def set_plugin_enabled(self, name: str, enabled: bool) -> None:
+    def attach_app(self, app: Any) -> None:
+        self.app = app
+
+    def _route_insert_index(self) -> int:
+        from starlette.routing import Mount
+
+        routes = self.app.router.routes if self.app else []
+        for index, route in enumerate(routes):
+            if isinstance(route, Mount):
+                return index
+        return len(routes)
+
+    def mount_plugin_routers(self, routers: list[Any]) -> None:
+        if self.app is None or not routers:
+            return
+        routes = list(self.app.router.routes)
+        seen = {id(route) for route in routes}
+        index = self._route_insert_index()
+        added: list[Any] = []
+        for router in routers:
+            for route in getattr(router, "routes", []):
+                if id(route) not in seen:
+                    added.append(route)
+                    seen.add(id(route))
+        if added:
+            self.app.router.routes = routes[:index] + added + routes[index:]
+
+    def mount_all_plugin_routers(self) -> None:
+        for name, manifest in self.plugins.manifests.items():
+            if self.plugins.loaded.get(name):
+                self.mount_plugin_routers(self.plugins.routers_for(name))
+
+    def unmount_plugin_routers(self, routers: list[Any]) -> None:
+        if self.app is None or not routers:
+            return
+        remove: set[int] = set()
+        for router in routers:
+            for route in getattr(router, "routes", []):
+                remove.add(id(route))
+        if remove:
+            self.app.router.routes = [route for route in self.app.router.routes if id(route) not in remove]
+
+    async def set_plugin_enabled(self, name: str, enabled: bool) -> bool:
         await self.storage.set_plugin_state(name, enabled)
         if name in self.plugins.enabled:
             self.plugins.enabled[name] = enabled
+        if name == "user-account":
+            # Account protection lives in a global middleware that is installed at
+            # boot; its on/off switch is handled by the plugin's own state file.
+            return True
+        if enabled:
+            loaded = await self.plugins.load_one(name)
+            if loaded:
+                self.mount_plugin_routers(self.plugins.routers_for(name))
+            return loaded
+        routers = self.plugins.routers_for(name)
+        await self.plugins.unload_one(name)
+        self.unmount_plugin_routers(routers)
+        return True
 
     async def call_hook(self, name: str, *args, **kwargs) -> list[Any]:
         results = []

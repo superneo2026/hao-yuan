@@ -35,9 +35,6 @@ app.add_middleware(
 for module in (system, sessions, skills, settings, fs, usage, plugins, marketplace, approvals):
     app.include_router(module.router)
 
-for router in harness.plugin_routers:
-    app.include_router(router)
-
 for middleware, kwargs in harness.plugin_middlewares:
     app.add_middleware(middleware, **kwargs)
 
@@ -69,6 +66,10 @@ else:
                 "docs": "/docs",
             },
         }
+
+
+harness.attach_app(app)
+harness.mount_all_plugin_routers()
 
 
 if __name__ == "__main__":

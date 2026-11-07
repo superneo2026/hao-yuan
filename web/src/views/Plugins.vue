@@ -28,7 +28,7 @@ const icons = {
 
 const route = useRoute()
 const router = useRouter()
-const corePlugins = new Set(['coding', 'plans', 'video', 'supervisor', 'orchestrator', 'embodied'])
+const corePlugins = new Set(['coding', 'plans', 'video', 'supervisor', 'orchestrator'])
 const tab = computed(() => (route.name === 'plugin-center' || route.query.tab === 'market' ? 'market' : 'installed'))
 const centerInput = ref(localStorage.getItem('hy.pluginCenterUrl') || state.market.centerUrl || 'http://127.0.0.1:8180')
 const query = ref('')
@@ -135,12 +135,24 @@ async function install(item) {
   }
 }
 
-async function remove(plugin) {
-  if (!window.confirm(t('plugins.uninstallConfirm', { name: pluginTitle(plugin) }))) return
+const pendingRemove = ref(null)
+const removing = ref(false)
+
+function remove(plugin) {
+  pendingRemove.value = plugin
+}
+
+async function confirmRemove() {
+  const plugin = pendingRemove.value
+  if (!plugin || removing.value) return
+  removing.value = true
   try {
     await uninstallPluginByName(plugin.name)
+    pendingRemove.value = null
   } catch (error) {
     toast(error.message, 'bad')
+  } finally {
+    removing.value = false
   }
 }
 
@@ -297,11 +309,13 @@ onMounted(() => {
             <span class="spacer" />
             <button
               v-if="!corePlugins.has(plugin.name)"
-              class="icon-btn"
+              class="btn sm delete-btn"
+              :disabled="removing && pendingRemove && pendingRemove.name === plugin.name"
               :title="t('plugins.uninstall')"
               @click="remove(plugin)"
             >
-              <Icon name="trash" :size="14" />
+              <Icon name="trash" :size="13" />
+              {{ t('common.delete') }}
             </button>
           </div>
         </article>
@@ -455,6 +469,34 @@ onMounted(() => {
         <div class="modal-foot">
           <span class="tiny faint" style="margin-right: auto">{{ t('plugins.uploadRestart') }}</span>
           <button class="btn" :disabled="uploading" @click="uploadOpen = false">{{ t('common.cancel') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="pendingRemove" class="overlay" @click.self="!removing && (pendingRemove = null)">
+      <div class="modal confirm-modal">
+        <div class="modal-head">
+          <span class="confirm-head-icon"><Icon name="alert" :size="17" /></span>
+          <div style="flex: 1">
+            <h3>{{ t('plugins.uninstallTitle') }}</h3>
+            <span class="tiny faint">{{ t('plugins.uninstallSubtitle') }}</span>
+          </div>
+          <button class="icon-btn" :disabled="removing" @click="pendingRemove = null"><Icon name="close" :size="15" /></button>
+        </div>
+        <div class="modal-body">
+          <p class="confirm-text">{{ t('plugins.uninstallConfirm', { name: pluginTitle(pendingRemove) }) }}</p>
+          <ul class="confirm-list">
+            <li><Icon name="trash" :size="13" /> {{ t('plugins.uninstallPoint1') }}</li>
+            <li><Icon name="alert" :size="13" /> {{ t('plugins.uninstallPoint2') }}</li>
+          </ul>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" :disabled="removing" @click="pendingRemove = null">{{ t('common.cancel') }}</button>
+          <button class="btn danger" :disabled="removing" @click="confirmRemove">
+            <span v-if="removing" class="spinner" style="width: 11px; height: 11px" />
+            <Icon v-else name="trash" :size="14" />
+            {{ removing ? t('plugins.uninstalling') : t('plugins.uninstallAction') }}
+          </button>
         </div>
       </div>
     </div>
@@ -617,6 +659,8 @@ onMounted(() => {
 .plugin-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .plugin-error { display: flex; gap: 6px; align-items: center; color: var(--bad); font-size: 11px; background: var(--bad-soft); border-radius: 8px; padding: 6px 8px; }
 .plugin-actions { display: flex; align-items: center; gap: 6px; padding-top: 11px; border-top: 1px solid var(--line); }
+.delete-btn { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); background: transparent; }
+.delete-btn:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); border-color: color-mix(in srgb, var(--bad) 46%, var(--line)); color: var(--bad); }
 
 .manual-card { padding: 24px; margin-top: 6px; border-radius: 20px; background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface-2) 35%, var(--surface))); animation: hy-rise .5s .1s var(--ease) both; }
 .manual-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
@@ -711,6 +755,14 @@ onMounted(() => {
 .upload-notes { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
 .upload-notes span { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11.5px; }
 .upload-notes .icon { color: var(--good); }
+
+.confirm-modal { width: min(470px, calc(100vw - 32px)); }
+.confirm-head-icon { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 10px; display: grid; place-items: center; background: var(--bad-soft, color-mix(in srgb, var(--bad) 12%, transparent)); color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 24%, transparent); }
+.confirm-text { margin: 0 0 12px; color: var(--ink-2); font-size: 13px; line-height: 1.65; }
+.confirm-list { margin: 0; padding: 12px 14px; list-style: none; display: flex; flex-direction: column; gap: 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.confirm-list li { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.confirm-list li .icon { flex: 0 0 auto; margin-top: 2px; color: var(--bad); }
+.confirm-list li:last-child .icon { color: var(--warn); }
 
 @keyframes hy-rise {
   from { opacity: 0; transform: translateY(12px); }

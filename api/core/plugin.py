@@ -76,6 +76,7 @@ class PluginManager:
         self.loaded: dict[str, bool] = {}
         self.errors: dict[str, str] = {}
         self.enabled: dict[str, bool] = {}
+        self.routers: dict[str, list[Any]] = {}
 
     def _read_states(self) -> dict[str, dict[str, Any]]:
         if not self.db_path.exists():
@@ -142,43 +143,102 @@ class PluginManager:
         spec.loader.exec_module(module)
         return module
 
+    def _unregister_sources(self, name: str) -> None:
+        self.harness.tools.unregister_source(name)
+        self.harness.agents.unregister_source(name)
+        remove = getattr(self.harness.skills, "remove_source", None)
+        if callable(remove):
+            remove(name)
+
+    def _load_manifest(self, manifest: dict[str, Any], states: dict[str, dict[str, Any]]) -> None:
+        name = manifest["name"]
+        directory = Path(manifest["_dir"])
+        config = (states.get(name) or {}).get("config", {}) or manifest.get("config", {})
+        context = PluginContext(
+            harness=self.harness,
+            manifest=manifest,
+            plugin_dir=directory,
+            config=config,
+        )
+        self.contexts[name] = context
+        before = len(self.harness.plugin_routers)
+        try:
+            backend = manifest.get("backend") or "plugin.py"
+            backend_path = directory / backend
+            if backend_path.is_file():
+                module = self._load_module(f"haoyuan_plugin_{name}", backend_path)
+                register = getattr(module, "register", None)
+                if callable(register):
+                    register(context)
+            routes = manifest.get("routes")
+            if routes:
+                routes_path = directory / routes
+                if routes_path.is_file():
+                    module = self._load_module(f"haoyuan_plugin_{name}_routes", routes_path)
+                    router = getattr(module, "router", None)
+                    context.add_router(router)
+            self.routers[name] = self.harness.plugin_routers[before:]
+            self.loaded[name] = True
+            self.errors.pop(name, None)
+        except Exception as exc:
+            self.contexts.pop(name, None)
+            self.routers[name] = []
+            self.loaded[name] = False
+            self.errors[name] = f"{type(exc).__name__}: {exc}"
+            self._unregister_sources(name)
+            print(f"[plugin:{name}] load failed: {exc}")
+            traceback.print_exc()
+
     def load(self) -> None:
         states = self._read_states()
         for manifest in self._ordered():
             name = manifest["name"]
-            directory = Path(manifest["_dir"])
             if not self.enabled.get(name, True):
                 self.loaded[name] = False
                 continue
-            config = (states.get(name) or {}).get("config", {}) or manifest.get("config", {})
-            context = PluginContext(
-                harness=self.harness,
-                manifest=manifest,
-                plugin_dir=directory,
-                config=config,
-            )
-            self.contexts[name] = context
+            self._load_manifest(manifest, states)
+
+    async def _run_startup(self, name: str) -> None:
+        context = self.contexts.get(name)
+        if context is None:
+            return
+        module = sys.modules.get(f"haoyuan_plugin_{name}")
+        hook = getattr(module, "startup", None) if module else None
+        if callable(hook):
             try:
-                backend = manifest.get("backend") or "plugin.py"
-                backend_path = directory / backend
-                if backend_path.is_file():
-                    module = self._load_module(f"haoyuan_plugin_{name}", backend_path)
-                    register = getattr(module, "register", None)
-                    if callable(register):
-                        register(context)
-                routes = manifest.get("routes")
-                if routes:
-                    routes_path = directory / routes
-                    if routes_path.is_file():
-                        module = self._load_module(f"haoyuan_plugin_{name}_routes", routes_path)
-                        router = getattr(module, "router", None)
-                        context.add_router(router)
-                self.loaded[name] = True
+                await hook(context)
             except Exception as exc:
-                self.loaded[name] = False
-                self.errors[name] = f"{type(exc).__name__}: {exc}"
-                print(f"[plugin:{name}] load failed: {exc}")
-                traceback.print_exc()
+                self.errors[name] = f"startup: {type(exc).__name__}: {exc}"
+
+    async def load_one(self, name: str) -> bool:
+        manifest = self.manifests.get(name)
+        if manifest is None:
+            return False
+        if self.loaded.get(name) and name in self.contexts:
+            return True
+        self._load_manifest(manifest, self._read_states())
+        if not self.loaded.get(name):
+            return False
+        await self._run_startup(name)
+        return True
+
+    async def unload_one(self, name: str) -> None:
+        context = self.contexts.get(name)
+        module = sys.modules.get(f"haoyuan_plugin_{name}")
+        hook = getattr(module, "shutdown", None) if module else None
+        if callable(hook) and context is not None:
+            try:
+                await hook(context)
+            except Exception:
+                pass
+        self._unregister_sources(name)
+        for module_name in (f"haoyuan_plugin_{name}", f"haoyuan_plugin_{name}_routes"):
+            sys.modules.pop(module_name, None)
+        self.contexts.pop(name, None)
+        self.loaded[name] = False
+
+    def routers_for(self, name: str) -> list[Any]:
+        return list(self.routers.get(name, []))
 
     async def startup(self) -> None:
         for name, context in self.contexts.items():

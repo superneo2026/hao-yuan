@@ -96,6 +96,12 @@ class SkillLibrary:
             self._dirs.append(item)
             self._loaded = False
 
+    def remove_source(self, source: str) -> None:
+        before = len(self._dirs)
+        self._dirs = [item for item in self._dirs if item[1] != source]
+        if len(self._dirs) != before:
+            self._loaded = False
+
     def load_all(self) -> list[Skill]:
         self._skills.clear()
         for directory, source in self._dirs:

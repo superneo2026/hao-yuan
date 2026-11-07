@@ -630,6 +630,9 @@ class Storage:
             (name, 1 if enabled else 0, json.dumps(config or {}, ensure_ascii=False), now()),
         )
 
+    async def delete_plugin_state(self, name: str) -> None:
+        await self._write("DELETE FROM plugins WHERE name = ?", (name,))
+
     async def save_effect(self, key: str, session_id: str, step: int, tool: str, result: str) -> None:
         await self._write(
             "INSERT OR REPLACE INTO tool_effects(effect_key, session_id, step, tool, result, created_at)"

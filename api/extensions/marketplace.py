@@ -20,7 +20,7 @@ from extensions.common import fail, ok
 router = APIRouter(prefix=prefix, tags=["marketplace"])
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-CORE_PLUGINS = {"coding", "plans", "video", "supervisor", "orchestrator", "embodied"}
+CORE_PLUGINS = {"coding", "plans", "video", "supervisor", "orchestrator"}
 SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".pytest_cache", ".mypy_cache"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 
@@ -144,6 +144,15 @@ def _plugin_dirs() -> tuple[Path, ...]:
     return (PLUGINS_DIR, GITIGNORE_PLUGINS_DIR)
 
 
+async def _hot_activate(harness, name: str) -> dict:
+    if not name or name not in harness.plugins.manifests:
+        return {"enabled": False, "loaded": False}
+    if not harness.plugins.enabled.get(name, True):
+        return {"enabled": False, "loaded": bool(harness.plugins.loaded.get(name, False))}
+    loaded = await harness.set_plugin_enabled(name, True)
+    return {"enabled": True, "loaded": bool(loaded)}
+
+
 def _installed_map() -> dict[str, dict]:
     mapping: dict[str, dict] = {}
     for directory in _plugin_dirs():
@@ -215,11 +224,13 @@ async def install_plugin(body: InstallBody):
         result = _extract_package(content, overwrite=False)
         harness = await get_harness()
         harness.plugins.discover()
+        state = await _hot_activate(harness, result.get("name", ""))
         return ok(
             {
                 **result,
-                "restart_required": True,
-                "message": "插件已安装。启用后重启后端即可加载插件路由。",
+                **state,
+                "restart_required": False,
+                "message": "插件已安装并即时生效。" if state["loaded"] else "插件已安装。",
             },
             "插件安装成功",
         )
@@ -243,11 +254,13 @@ async def upload_plugin(file: UploadFile = File(...)):
         return fail(f"上传失败: {exc}", 400)
     harness = await get_harness()
     harness.plugins.discover()
+    state = await _hot_activate(harness, result.get("name", ""))
     return ok(
         {
             **result,
-            "restart_required": True,
-            "message": "插件已上传到 api/plugins。启用后重启后端即可加载。",
+            **state,
+            "restart_required": False,
+            "message": "插件已上传并即时生效。" if state["loaded"] else "插件已上传。",
         },
         "插件上传成功",
     )
@@ -267,11 +280,18 @@ async def uninstall_plugin(name: str):
             break
     if target is None:
         return fail("插件未安装", 404)
-    shutil.rmtree(target, ignore_errors=True)
+    try:
+        shutil.rmtree(target)
+    except OSError as exc:
+        return fail(f"删除插件源码失败: {exc}", 500)
     harness = await get_harness()
+    await harness.storage.delete_plugin_state(name)
     harness.plugins.manifests.pop(name, None)
     harness.plugins.enabled.pop(name, None)
     harness.plugins.loaded.pop(name, None)
     harness.plugins.contexts.pop(name, None)
     await harness.call_hook("plugin.toggled", name, False)
-    return ok({"name": name, "installed": False, "restart_required": True}, "插件已卸载")
+    return ok(
+        {"name": name, "installed": False, "deleted_path": str(target), "restart_required": True},
+        "插件及其源码已删除",
+    )

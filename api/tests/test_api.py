@@ -233,10 +233,11 @@ def test_plugin_toggle_persists(client):
     name = "embodied" if any(item["name"] == "embodied" for item in plugins) else "video"
     result = client.post(f"/api/plugins/{name}/toggle", json={"enabled": True}).json()["data"]
     assert result["enabled"] is True
-    assert result["restart_required"] is True
+    assert result["restart_required"] is False
     plugins = client.get("/api/plugins").json()["data"]
     toggled = next(item for item in plugins if item["name"] == name)
     assert toggled["enabled"] is True
+    assert toggled["loaded"] is True
 
 
 def test_ask_user_pauses_and_resumes_same_task(client, tmp_path):
