@@ -10,7 +10,7 @@ import Modal from './Modal.vue'
 const emit = defineEmits(['close'])
 const router = useRouter()
 
-const kinds = [
+const allKinds = [
   { id: 'auto', titleKey: 'newTask.auto', descKey: 'newTask.autoDesc', icon: 'sparkles' },
   { id: 'dev', titleKey: 'newTask.coding', descKey: 'newTask.codingDesc', icon: 'terminal' },
   { id: 'plan', titleKey: 'newTask.plan', descKey: 'newTask.planDesc', icon: 'document' },
@@ -33,6 +33,9 @@ function parseAllow(value) {
 }
 
 const inherited = recentSessionSettings()
+
+const embodiedReady = computed(() => state.plugins.some((item) => item.name === 'embodied'))
+const kinds = computed(() => allKinds.filter((kind) => kind.id !== 'robot' || embodiedReady.value))
 
 const form = ref({
   kind: inherited?.kind || 'auto',

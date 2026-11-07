@@ -24,7 +24,8 @@ def test_health_and_plugins(client):
     names = {plugin["name"]: plugin for plugin in health["plugins"]}
     assert {"coding", "plans", "video", "supervisor", "orchestrator"} <= set(names)
     assert names["coding"]["loaded"] is True
-    assert names["embodied"]["enabled"] is False
+    if "embodied" in names:
+        assert names["embodied"]["enabled"] is False
     assert client.get("/api/models").json()["data"]["providers"]
     assert client.get("/api/skills").json()["data"]
     assert client.get("/api/approvals").json()["data"] == []
@@ -228,12 +229,14 @@ def test_settings_and_usage(client):
 
 
 def test_plugin_toggle_persists(client):
-    result = client.post("/api/plugins/embodied/toggle", json={"enabled": True}).json()["data"]
+    plugins = client.get("/api/plugins").json()["data"]
+    name = "embodied" if any(item["name"] == "embodied" for item in plugins) else "video"
+    result = client.post(f"/api/plugins/{name}/toggle", json={"enabled": True}).json()["data"]
     assert result["enabled"] is True
     assert result["restart_required"] is True
     plugins = client.get("/api/plugins").json()["data"]
-    embodied = next(item for item in plugins if item["name"] == "embodied")
-    assert embodied["enabled"] is True
+    toggled = next(item for item in plugins if item["name"] == name)
+    assert toggled["enabled"] is True
 
 
 def test_ask_user_pauses_and_resumes_same_task(client, tmp_path):

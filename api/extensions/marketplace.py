@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
-from configs.configs import PLUGIN_CENTER_URL, PLUGIN_PACKAGE_MAX_BYTES, PLUGINS_DIR, prefix
+from configs.configs import GITIGNORE_PLUGINS_DIR, PLUGIN_CENTER_URL, PLUGIN_PACKAGE_MAX_BYTES, PLUGINS_DIR, prefix
 from core.harness import get_harness
 from extensions.common import fail, ok
 
@@ -140,16 +140,22 @@ def _extract_package(data: bytes, overwrite: bool) -> dict:
             shutil.rmtree(staging_root, ignore_errors=True)
 
 
+def _plugin_dirs() -> tuple[Path, ...]:
+    return (PLUGINS_DIR, GITIGNORE_PLUGINS_DIR)
+
+
 def _installed_map() -> dict[str, dict]:
     mapping: dict[str, dict] = {}
-    if not PLUGINS_DIR.is_dir():
-        return mapping
-    for manifest_path in PLUGINS_DIR.glob("*/plugin.json"):
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+    for directory in _plugin_dirs():
+        if not directory.is_dir():
             continue
-        mapping[str(manifest.get("name") or manifest_path.parent.name)] = manifest
+        for manifest_path in directory.glob("*/plugin.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            name = str(manifest.get("name") or manifest_path.parent.name)
+            mapping.setdefault(name, manifest)
     return mapping
 
 
@@ -253,10 +259,13 @@ async def uninstall_plugin(name: str):
         return fail("插件名称不合法", 400)
     if name in CORE_PLUGINS:
         return fail("核心插件不可卸载", 400)
-    target = (PLUGINS_DIR / name).resolve()
-    if target.parent != PLUGINS_DIR.resolve():
-        return fail("插件名称不合法", 400)
-    if not target.is_dir():
+    target = None
+    for directory in _plugin_dirs():
+        candidate = (directory / name).resolve()
+        if candidate.parent == directory.resolve() and candidate.is_dir():
+            target = candidate
+            break
+    if target is None:
         return fail("插件未安装", 404)
     shutil.rmtree(target, ignore_errors=True)
     harness = await get_harness()
