@@ -280,11 +280,17 @@ async def uninstall_plugin(name: str):
             break
     if target is None:
         return fail("插件未安装", 404)
+    harness = await get_harness()
+    if harness.plugins.enabled.get(name, False):
+        return fail("请先关闭插件后再删除", 400)
+    routers = harness.plugins.routers_for(name)
+    await harness.plugins.unload_one(name)
+    harness.unmount_plugin_routers(routers)
+    harness.plugins.routers.pop(name, None)
     try:
         shutil.rmtree(target)
     except OSError as exc:
         return fail(f"删除插件源码失败: {exc}", 500)
-    harness = await get_harness()
     await harness.storage.delete_plugin_state(name)
     harness.plugins.manifests.pop(name, None)
     harness.plugins.enabled.pop(name, None)
@@ -292,6 +298,6 @@ async def uninstall_plugin(name: str):
     harness.plugins.contexts.pop(name, None)
     await harness.call_hook("plugin.toggled", name, False)
     return ok(
-        {"name": name, "installed": False, "deleted_path": str(target), "restart_required": True},
+        {"name": name, "installed": False, "deleted_path": str(target), "restart_required": False},
         "插件及其源码已删除",
     )

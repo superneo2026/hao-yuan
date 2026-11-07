@@ -139,6 +139,10 @@ const pendingRemove = ref(null)
 const removing = ref(false)
 
 function remove(plugin) {
+  if (plugin.enabled) {
+    toast(t('plugins.uninstallDisabled'), 'warn')
+    return
+  }
   pendingRemove.value = plugin
 }
 
@@ -310,8 +314,9 @@ onMounted(() => {
             <button
               v-if="!corePlugins.has(plugin.name)"
               class="btn sm delete-btn"
+              :class="{ 'delete-locked': plugin.enabled }"
               :disabled="removing && pendingRemove && pendingRemove.name === plugin.name"
-              :title="t('plugins.uninstall')"
+              :title="plugin.enabled ? t('plugins.uninstallDisabled') : t('plugins.uninstall')"
               @click="remove(plugin)"
             >
               <Icon name="trash" :size="13" />
@@ -661,6 +666,8 @@ onMounted(() => {
 .plugin-actions { display: flex; align-items: center; gap: 6px; padding-top: 11px; border-top: 1px solid var(--line); }
 .delete-btn { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); background: transparent; }
 .delete-btn:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); border-color: color-mix(in srgb, var(--bad) 46%, var(--line)); color: var(--bad); }
+.delete-btn.delete-locked { opacity: .55; color: var(--muted); border-color: var(--line); }
+.delete-btn.delete-locked:hover { background: var(--surface-2); color: var(--muted); }
 
 .manual-card { padding: 24px; margin-top: 6px; border-radius: 20px; background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface-2) 35%, var(--surface))); animation: hy-rise .5s .1s var(--ease) both; }
 .manual-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
