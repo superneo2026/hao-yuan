@@ -652,6 +652,10 @@ class Storage:
             " VALUES (?,?,?,?,?,?,?)",
             (session_id, step, run_id, cursor, plan, note, now()),
         )
+        # Keep only the newest checkpoint per session so long tasks do not accumulate rows.
+        await self._write(
+            "DELETE FROM checkpoints WHERE session_id=? AND step<>?", (session_id, step)
+        )
 
     async def latest_checkpoint(self, session_id: str) -> dict[str, Any] | None:
         return await self._one(

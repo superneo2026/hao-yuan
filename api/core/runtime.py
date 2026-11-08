@@ -13,16 +13,18 @@ from typing import Any
 
 from configs.configs import (
     AGENT_MAX_STEPS,
+    AGENT_MAX_TOTAL_STEPS,
     APPLY_PATCH_ENABLED,
     ARTIFACTS_DIR,
     CHECKPOINT_ENABLED,
+    CHECKPOINT_EVERY_STEPS,
     DEFAULT_AGENT,
     IDEMPOTENT_TOOLS,
     LITE_MODE,
     LITE_MULTIPHASE_HINTS,
     LITE_SINGLE_FILE_MAX_PATHS,
     LITE_TOOL_SET,
-    MAX_AUTO_ROLLOVER,
+    MAX_SESSION_COST,
     REPAIR_LOOP_ENABLED,
     REPO_MAP_ENABLED,
     SUBAGENT_ENABLED,
@@ -564,8 +566,10 @@ class AgentRuntime:
                 {
                     "role": "user",
                     "content": (
-                        f"[system] Resuming an interrupted task{where}. First inspect the workspace state, "
-                        "then continue the unfinished work. Writes recorded before the interruption will not be repeated."
+                        f"[system] Resuming an interrupted task{where}. Review the plan and checkpoint "
+                        "notes first, then continue the unfinished work. Do not repeat completed work and "
+                        "do not re-read files you already inspected unless they changed. Writes recorded "
+                        "before the interruption will not be repeated."
                     ),
                 }
             )
@@ -593,12 +597,12 @@ class AgentRuntime:
             "reference_drift": "",
             "fidelity_nudges": 0,
         }
-        max_total = AGENT_MAX_STEPS * (MAX_AUTO_ROLLOVER + 1)
+        max_total = AGENT_MAX_TOTAL_STEPS
         session = await self.storage.get_session(session_id) or session
 
         while True:
             if state["step"] >= AGENT_MAX_STEPS:
-                if state["rollovers"] < MAX_AUTO_ROLLOVER and state["total_steps"] < max_total:
+                if state["total_steps"] < max_total:
                     state["rollovers"] += 1
                     state["step"] = 0
                     await self.emit(
@@ -611,8 +615,9 @@ class AgentRuntime:
                         {
                             "role": "user",
                             "content": (
-                                f"[system] Step budget reached. Continue from where you left off; "
-                                f"do not repeat completed work. Segment {state['rollovers'] + 1}."
+                                f"[system] Segment budget reached ({state['total_steps']}/{max_total} steps). "
+                                "Continue from exactly where you left off; do not repeat completed work or "
+                                f"re-read unchanged files. Segment {state['rollovers'] + 1}."
                             ),
                         }
                     )
@@ -629,6 +634,18 @@ class AgentRuntime:
                 await self.emit(session_id, "instruction.merged", {"count": injected}, run_id)
 
             session = await self.storage.get_session(session_id) or session
+            if MAX_SESSION_COST > 0 and float(session.get("cost_est") or 0) >= MAX_SESSION_COST:
+                await self.emit(
+                    session_id,
+                    "error",
+                    {"message": f"cost budget reached ({MAX_SESSION_COST})"},
+                    run_id,
+                )
+                await self.storage.update_session(session_id, status="error", error="cost budget reached")
+                await self.storage.finish_run(
+                    run_id, "error", error="cost budget reached", step_count=state["total_steps"]
+                )
+                return
             compaction = await self.context.midturn_compact(session, messages, state["total_steps"])
             if compaction.get("compacted"):
                 await self.emit(session_id, "context.compact", compaction, run_id)
@@ -878,6 +895,21 @@ class AgentRuntime:
                 )
             await self._repair_after_tests(session, parsed_calls, results, messages, run_id, state)
             await self.storage.update_session(session_id, status="running")
+            if CHECKPOINT_ENABLED and (
+                CHECKPOINT_EVERY_STEPS <= 1 or state["total_steps"] % CHECKPOINT_EVERY_STEPS == 0
+            ):
+                await durability.save_checkpoint(
+                    self.storage,
+                    session_id,
+                    state["total_steps"],
+                    run_id,
+                    cursor,
+                    session.get("plan") or "",
+                    f"step {state['total_steps']} completed",
+                )
+                await self.emit(
+                    session_id, "checkpoint.saved", {"step": state["total_steps"]}, run_id
+                )
         if CHECKPOINT_ENABLED:
             await durability.save_checkpoint(
                     self.storage,

@@ -35,8 +35,15 @@ DEFAULT_TENANT_ID = os.getenv("HAOYUAN_TENANT_ID", "default")
 DEFAULT_USER_ID = os.getenv("HAOYUAN_USER_ID", "local")
 
 MAX_CONCURRENT_SESSIONS = int(os.getenv("HAOYUAN_MAX_CONCURRENT", "5"))
-AGENT_MAX_STEPS = int(os.getenv("HAOYUAN_MAX_STEPS", "30"))
-MAX_AUTO_ROLLOVER = int(os.getenv("HAOYUAN_MAX_ROLLOVER", "3"))
+# Steps per segment; at each boundary the agent gets a "continue, don't repeat" nudge.
+AGENT_MAX_STEPS = int(os.getenv("HAOYUAN_MAX_STEPS", "60"))
+# Total steps a single run may execute, across all rollover segments. This is the
+# long-horizon budget; set it high for multi-hour / multi-day tasks.
+AGENT_MAX_TOTAL_STEPS = int(os.getenv("HAOYUAN_MAX_TOTAL_STEPS", "200000"))
+# Maximum automatic boot-resumes for an interrupted run (crash / restart).
+MAX_AUTO_ROLLOVER = int(os.getenv("HAOYUAN_MAX_ROLLOVER", "100"))
+# Hard cost ceiling per session/run in estimated USD. 0 disables the ceiling.
+MAX_SESSION_COST = float(os.getenv("HAOYUAN_MAX_COST", "0"))
 GATE_CONFIRM_TIMEOUT = float(os.getenv("HAOYUAN_GATE_TIMEOUT", "600"))
 AUTO_APPROVE_HIGH_RISK = os.getenv("HAOYUAN_AUTO_APPROVE", "0").strip() in {"1", "true", "yes"}
 
@@ -103,6 +110,7 @@ SUBAGENT_TIMEOUT_SEC = float(os.getenv("HAOYUAN_SUBAGENT_TIMEOUT", "480"))
 SUBAGENT_SUMMARY_CHARS = int(os.getenv("HAOYUAN_SUBAGENT_SUMMARY_CHARS", "3000"))
 
 CHECKPOINT_ENABLED = os.getenv("HAOYUAN_CHECKPOINT", "1").strip() not in {"0", "false"}
+CHECKPOINT_EVERY_STEPS = int(os.getenv("HAOYUAN_CHECKPOINT_EVERY", "5"))
 AUTO_RESUME_ON_BOOT = os.getenv("HAOYUAN_AUTO_RESUME", "1").strip() not in {"0", "false"}
 IDEMPOTENT_TOOLS = ("write_file", "edit_file", "apply_patch", "multi_edit", "delete_path", "move_path")
 TOOL_ZOMBIE_GRACE_SEC = float(os.getenv("HAOYUAN_TOOL_ZOMBIE_GRACE", "5"))
