@@ -3,14 +3,117 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
 from configs.configs import (
     SUPERVISOR_AUTO_CANCEL_SEC,
+    SUPERVISOR_AUTO_RESUME,
+    SUPERVISOR_DAILY_COST_CAP,
     SUPERVISOR_INTERVAL,
+    SUPERVISOR_RESUME_BACKOFF_SEC,
+    SUPERVISOR_RESUME_KEYWORDS,
+    SUPERVISOR_RESUME_MAX,
+    SUPERVISOR_RESUME_MAX_BACKOFF_SEC,
     SUPERVISOR_STALE_SEC,
 )
+
+
+_RESUME_STATE: dict[str, dict[str, float]] = {}
+
+
+def _resumable_error(error: str) -> bool:
+    text = (error or "").lower()
+    return any(keyword.lower() in text for keyword in SUPERVISOR_RESUME_KEYWORDS)
+
+
+def _resume_delay(attempts: int) -> float:
+    if SUPERVISOR_RESUME_BACKOFF_SEC <= 0:
+        return 0.0
+    delay = SUPERVISOR_RESUME_BACKOFF_SEC * (2 ** max(0, attempts - 1))
+    return min(delay, SUPERVISOR_RESUME_MAX_BACKOFF_SEC)
+
+
+def reset_resume_state(session_id: str | None = None) -> None:
+    if session_id is None:
+        _RESUME_STATE.clear()
+    else:
+        _RESUME_STATE.pop(session_id, None)
+
+
+async def _auto_resume(harness, item: dict[str, Any]) -> bool:
+    """Resume an interrupted long-running session with backoff and a cost cap."""
+    if not SUPERVISOR_AUTO_RESUME or item.get("health") != "error":
+        return False
+    session_id = item["id"]
+    if not _resumable_error(item.get("error") or item.get("reason") or ""):
+        return False
+    state = _RESUME_STATE.setdefault(session_id, {"attempts": 0.0, "next_at": 0.0})
+    current = time.time()
+    if current < state["next_at"]:
+        return False
+    if SUPERVISOR_RESUME_MAX > 0 and state["attempts"] >= SUPERVISOR_RESUME_MAX:
+        state["next_at"] = current + SUPERVISOR_RESUME_MAX_BACKOFF_SEC
+        await harness.events.emit(
+            session_id,
+            "supervisor.alert",
+            {
+                "health": "resume-exhausted",
+                "reason": f"auto-resume stopped after {int(state['attempts'])} attempts",
+                "attempts": int(state["attempts"]),
+            },
+        )
+        return False
+    if SUPERVISOR_DAILY_COST_CAP > 0:
+        usage = await harness.storage.usage_today()
+        spent = float(usage.get("cost_est") or 0)
+        if spent >= SUPERVISOR_DAILY_COST_CAP:
+            state["next_at"] = current + SUPERVISOR_RESUME_MAX_BACKOFF_SEC
+            await harness.events.emit(
+                session_id,
+                "supervisor.alert",
+                {
+                    "health": "cost-capped",
+                    "reason": f"daily cost cap reached ({spent:.4f} >= {SUPERVISOR_DAILY_COST_CAP:.4f})",
+                    "cost_est": spent,
+                },
+            )
+            return False
+    session = await harness.storage.get_session(session_id)
+    if not session or session.get("status") != "error":
+        return False
+    harness.manager.mark_resume(session_id)
+    await harness.storage.update_session(session_id, status="idle", error="")
+    if not harness.manager.enqueue(session_id):
+        return False
+    state["attempts"] += 1
+    delay = _resume_delay(int(state["attempts"]))
+    state["next_at"] = current + delay
+    await harness.events.emit(
+        session_id,
+        "supervisor.alert",
+        {
+            "health": "auto-resumed",
+            "reason": (item.get("error") or item.get("reason") or "resumed")[:120],
+            "attempt": int(state["attempts"]),
+            "backoff_sec": delay,
+        },
+    )
+    return True
+
+
+async def _cancel_stale(harness, session_id: str) -> None:
+    await harness.manager.cancel(session_id)
+    deadline = time.time() + 15
+    while harness.manager.is_active(session_id) and time.time() < deadline:
+        await asyncio.sleep(0.2)
+    await harness.storage.update_session(session_id, status="error", error="stale: no progress")
+    await harness.events.emit(
+        session_id,
+        "supervisor.alert",
+        {"health": "cancelled", "reason": "auto-cancelled after no progress"},
+    )
 
 
 def _parse_ts(value: str) -> float:
@@ -125,18 +228,25 @@ async def watch_loop(harness) -> None:
         try:
             await asyncio.sleep(SUPERVISOR_INTERVAL)
             snap = await snapshot(harness.storage)
+            for item in snap["items"]:
+                if item["id"] not in _RESUME_STATE:
+                    continue
+                progressing = item.get("status") == "done" or (
+                    item.get("status") in ("running", "queued")
+                    and item.get("idle_sec", -1) < SUPERVISOR_STALE_SEC
+                )
+                if progressing:
+                    reset_resume_state(item["id"])
             for item in snap["alerts"]:
                 if (
                     item["health"] == "stale"
                     and SUPERVISOR_AUTO_CANCEL_SEC
                     and item.get("idle_sec", 0) >= SUPERVISOR_AUTO_CANCEL_SEC
                 ):
-                    await harness.manager.cancel(item["id"])
-                    await harness.events.emit(
-                        item["id"],
-                        "supervisor.alert",
-                        {"health": "cancelled", "reason": "auto-cancelled after no progress"},
-                    )
+                    await _cancel_stale(harness, item["id"])
+                    item = {**item, "health": "error", "error": "stale: no progress"}
+                if item["health"] == "error":
+                    await _auto_resume(harness, item)
             await harness.events.emit("*", "supervisor.snapshot", snap)
         except asyncio.CancelledError:
             raise
