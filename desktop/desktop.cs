@@ -49,6 +49,7 @@ sealed class MainForm : Form
     volatile bool backendCancel;
     volatile bool frontendCancel;
     volatile bool building;
+    volatile bool updating;
 
     int apiPortConfig = 8030;
     int webPortConfig = 8130;
@@ -235,11 +236,15 @@ sealed class MainForm : Form
         refresh.Click += delegate { UpdateStatus(); Log("状态已刷新。"); };
         Controls.Add(refresh);
 
+        Button checkUpdate = MakeButton("检查更新", new Point(326, 374), 130, 32, ButtonKind.Secondary);
+        checkUpdate.Click += delegate { CheckForUpdates(); };
+        Controls.Add(checkUpdate);
+
         Label hint = new Label();
-        hint.Text = "状态每秒自动刷新 · 首次启动会自动创建环境并安装依赖";
+        hint.Text = "状态每秒自动刷新 · 检查更新会拉取 master 并部署";
         hint.ForeColor = Color.FromArgb(148, 163, 184);
         hint.AutoSize = true;
-        hint.Location = new Point(334, 382);
+        hint.Location = new Point(470, 382);
         Controls.Add(hint);
 
         Label logTitle = new Label();
@@ -887,6 +892,163 @@ sealed class MainForm : Form
                 building = false;
             }
         });
+    }
+
+    void CheckForUpdates()
+    {
+        if (updating || building || backendStarting || frontendStarting)
+        {
+            Log("当前有构建/启动/更新任务进行中，请稍后再检查更新。");
+            return;
+        }
+        updating = true;
+        Log("正在检查更新（origin/master）...");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                int code;
+                string dirty = RunCapture("git", "status --porcelain", root, out code);
+                if (code != 0)
+                {
+                    Log("未检测到 Git 仓库或 git 不可用：" + FirstLine(dirty));
+                    ShowInfo("未检测到 Git 仓库或 git 不可用，无法检查更新。");
+                    return;
+                }
+                if (!string.IsNullOrEmpty(dirty.Trim()))
+                {
+                    Log("检测到未提交的本地改动，为避免冲突已取消更新。");
+                    ShowInfo("存在未提交的本地改动，无法自动更新。请先提交或还原本地改动。");
+                    return;
+                }
+                int fetchCode = RunBlocking("git", "fetch --quiet origin master", root);
+                if (fetchCode != 0)
+                {
+                    Log("拉取远程信息失败（网络或凭据问题），无法检查更新。");
+                    ShowInfo("无法连接远程仓库，检查更新失败。");
+                    return;
+                }
+                string head = RunCapture("git", "rev-parse HEAD", root, out code).Trim();
+                string remote = RunCapture("git", "rev-parse origin/master", root, out code).Trim();
+                string behindText = RunCapture("git", "rev-list --count HEAD..origin/master", root, out code).Trim();
+                int behind;
+                int.TryParse(behindText, out behind);
+                if (behind <= 0)
+                {
+                    Log("已是最新版本（" + ShortSha(head) + "），无需更新，服务保持运行。");
+                    ShowInfo("当前已是最新版本，无需更新。");
+                    return;
+                }
+                Log("发现新版本：" + behind + " 个新提交（" + ShortSha(head) + " → " + ShortSha(remote) + "）。");
+                DialogResult answer = DialogResult.No;
+                Invoke(new Action(delegate
+                {
+                    answer = MessageBox.Show(
+                        this,
+                        "发现 " + behind + " 个新提交。\n\n是否立即更新并部署上线？\n（将拉取代码、构建前端并重启服务）",
+                        "发现更新",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+                }));
+                if (answer != DialogResult.Yes)
+                {
+                    Log("已取消更新，服务保持运行。");
+                    return;
+                }
+                Log("正在拉取最新代码（git pull --ff-only origin master）...");
+                int pullCode = RunBlocking("git", "pull --ff-only origin master", root);
+                if (pullCode != 0)
+                {
+                    Log("拉取代码失败，更新已中止（本地与远程可能分叉）。");
+                    ShowInfo("拉取代码失败，更新已中止。服务保持原状。");
+                    return;
+                }
+                Log("代码已更新，正在构建前端...");
+                int buildCode = RunBlocking("cmd.exe", "/c npm run build", Path.Combine(root, "web"));
+                if (buildCode != 0)
+                {
+                    Log("前端构建失败，已停止部署（服务未重启）。");
+                    ShowInfo("前端构建失败，部署已中止，服务保持原状。");
+                    return;
+                }
+                Log("前端构建完成，正在重启服务上线...");
+                RestartAll();
+                Log("更新完成，服务已重启上线。");
+                ShowInfo("更新完成，服务已重启上线。");
+            }
+            catch (Exception ex)
+            {
+                Log("检查更新异常：" + ex.Message);
+                ShowInfo("检查更新异常：" + ex.Message);
+            }
+            finally
+            {
+                updating = false;
+            }
+        });
+    }
+
+    static string ShortSha(string sha)
+    {
+        if (string.IsNullOrEmpty(sha)) return "";
+        return sha.Length > 7 ? sha.Substring(0, 7) : sha;
+    }
+
+    static string FirstLine(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        int index = text.IndexOfAny(new char[] { '\r', '\n' });
+        return index < 0 ? text : text.Substring(0, index);
+    }
+
+    void ShowInfo(string message)
+    {
+        try
+        {
+            if (IsHandleCreated)
+            {
+                Invoke(new Action(delegate
+                {
+                    MessageBox.Show(this, message, "豪源", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }));
+            }
+        }
+        catch { }
+    }
+
+    string RunCapture(string file, string arguments, string workingDirectory, out int exitCode)
+    {
+        exitCode = -1;
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo(file, arguments);
+            info.WorkingDirectory = workingDirectory;
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            info.StandardOutputEncoding = Encoding.UTF8;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            using (Process process = new Process())
+            {
+                process.StartInfo = info;
+                process.Start();
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                if (!process.WaitForExit(30000))
+                {
+                    try { process.Kill(); } catch { }
+                    exitCode = -1;
+                    return "命令超时";
+                }
+                exitCode = process.ExitCode;
+                return string.IsNullOrWhiteSpace(stderr) ? stdout : (stdout + "\n" + stderr);
+            }
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
     }
 
     void OpenFolder()
