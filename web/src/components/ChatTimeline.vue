@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { currentSession, state } from '../stores/app'
+import { currentSession, state, toast } from '../stores/app'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
 import Markdown from './Markdown.vue'
@@ -12,8 +12,10 @@ const activityOpen = ref({})
 const liveActivityOpen = ref(false)
 const activeQuestionId = ref('')
 const now = ref(Date.now())
+const copiedKey = ref('')
 let ticking = null
 let scrollScheduled = false
+let copiedTimer = null
 
 function parseJson(text, fallback) {
   try {
@@ -321,10 +323,49 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (ticking) clearInterval(ticking)
+  if (copiedTimer) clearTimeout(copiedTimer)
 })
 
-function copy(text) {
-  navigator.clipboard?.writeText(text || '')
+function fallbackCopy(value) {
+  const area = document.createElement('textarea')
+  area.value = value
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.top = '-9999px'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(area)
+  if (!ok) throw new Error('copy failed')
+}
+
+function flashCopied(key) {
+  if (!key) return
+  copiedKey.value = key
+  if (copiedTimer) clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { copiedKey.value = '' }, 1200)
+}
+
+async function copy(text, key = '') {
+  const value = text || ''
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(value)
+    } else {
+      fallbackCopy(value)
+    }
+    toast(t('common.copied'), 'good', 1800)
+    flashCopied(key)
+  } catch {
+    try {
+      fallbackCopy(value)
+      toast(t('common.copied'), 'good', 1800)
+      flashCopied(key)
+    } catch {
+      toast(t('common.copyFailed'), 'bad', 2400)
+    }
+  }
 }
 
 function timeLabel(value) {
@@ -360,8 +401,8 @@ function timeLabel(value) {
                 <div class="bubble user-bubble">{{ group.content }}</div>
                 <div class="message-meta">
                   <span>{{ timeLabel(group.created_at) }}</span>
-                  <button class="icon-btn" style="width: 20px; height: 20px" @click="copy(group.content)">
-                    <Icon name="copy" :size="11" />
+                  <button class="icon-btn" style="width: 20px; height: 20px" :title="t('common.copy')" @click="copy(group.content, group.id)">
+                    <Icon :name="copiedKey === group.id ? 'check' : 'copy'" :size="11" />
                   </button>
                 </div>
               </div>
@@ -404,8 +445,8 @@ function timeLabel(value) {
                       </div>
                       <div v-if="segment.hasMeta" class="message-meta">
                         <span>{{ timeLabel(segment.created_at) }}</span>
-                        <button class="icon-btn" style="width: 20px; height: 20px" @click="copy(segment.content)">
-                          <Icon name="copy" :size="11" />
+                        <button class="icon-btn" style="width: 20px; height: 20px" :title="t('common.copy')" @click="copy(segment.content, segment.id)">
+                          <Icon :name="copiedKey === segment.id ? 'check' : 'copy'" :size="11" />
                         </button>
                       </div>
                     </div>
