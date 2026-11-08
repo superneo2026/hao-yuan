@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 
-from core.runtime import AgentRuntime, is_casual_chat, is_question, is_smalltalk, needs_write
+from core.runtime import (
+    AgentRuntime,
+    detect_kind,
+    is_casual_chat,
+    is_question,
+    is_smalltalk,
+    needs_write,
+)
 
 
 class _DummyAgent:
@@ -59,6 +66,26 @@ def test_work_requests_are_not_casual():
         "做个页面",
     ):
         assert not is_casual_chat(text), text
+
+
+def test_html_document_with_video_mentions_routes_to_coding():
+    text = (
+        "帮我书写一个个人副业创业成功的小说，一个HTML页面书写一季的内容。"
+        "第一季要录制10个推广视频发布到哔哩哔哩，输出到 D:\\Env\\git\\test\\haoyuan-xiaoshuo"
+    )
+    assert detect_kind(text) == "dev"
+
+
+def test_video_storyboard_request_routes_to_video():
+    assert detect_kind("帮我写一个短视频分镜脚本") == "video"
+
+
+def test_plan_request_routes_to_plan():
+    assert detect_kind("写一份商业计划书") == "plan"
+
+
+def test_debug_request_routes_to_coding():
+    assert detect_kind("修复视频剪辑脚本的 bug") == "dev"
 
 
 def test_casual_prompt_skips_workspace_memory(tmp_path):

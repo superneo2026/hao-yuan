@@ -202,6 +202,17 @@ def test_mimo_provider_is_wired():
     assert resolve("mimo", "mimo-v2.6-flash") == ("mimo", "mimo-v2.6-flash")
     assert PROVIDERS["mimo"].supports_thinking is False
 
+def test_lite_mode_keeps_domain_tools_for_plan_and_video():
+    harness = harness_instance()
+    video = harness.agents.get("video")
+    video_names = harness.runtime._tools_for(video, "video", True, True)
+    assert "make_storyboard" in video_names
+    assert "read_file" in video_names
+    planner = harness.agents.get("planner")
+    plan_names = harness.runtime._tools_for(planner, "plan", True, True)
+    assert "make_plan" in plan_names
+
+
 def test_system_info_is_available_without_workspace(client):
     from harness import sysinfo
 

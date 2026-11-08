@@ -65,6 +65,14 @@ DEBUG_HINTS = (
 TERMINAL_HINTS = ("命令", "终端", "环境", "安装", "部署", "启动服务", "docker", "install", "deploy", "setup", "shell")
 REPORT_HINTS = ("报告", "分析", "总结", "方案", "计划书", "调研", "report", "analysis")
 VIDEO_INTENT = ("视频", "剪辑", "分镜", "配音", "口播", "字幕", "成片", "宣传片", "短视频", "storyboard")
+WEB_ARTIFACT_INTENT = (
+    "html", "htm", "css", "javascript", "typescript", "vue", "react", "svelte",
+    "网页", "页面", "网站", "站点", "前端", "代码", "程序",
+)
+CODE_WORK_INTENT = (
+    "修复", "修一下", "修好", "调试", "排查", "定位问题", "跑不过", "测试不过", "报错",
+    "bug", "debug", "regression", "failing",
+)
 _PLAN_INTENT_RE = re.compile(r"(写|生成|做|出|制定|策划|规划).{0,10}(方案|计划书|计划|报告)|商业计划|调研报告|可行性分析|方案计划书")
 _PATH_RE = re.compile(
     r"[\w./\\-]+\.(py|js|ts|tsx|vue|java|go|rs|c|cpp|h|hpp|json|ya?ml|toml|md|sql|sh|bat|ps1|css|html)\b",
@@ -181,10 +189,18 @@ def detect_task_type(text: str) -> str:
 
 def detect_kind(text: str) -> str:
     lowered = (text or "").lower()
-    if any(hint in lowered for hint in VIDEO_INTENT):
-        return "video"
+    # Explicit code/web artifacts must win over incidental keyword matches: a
+    # task that only mentions "视频" while publishing, or that references an
+    # HTML page, is a coding task. Otherwise it is routed to the read-only
+    # video/plan agents and can never write the requested file.
+    if any(hint in lowered for hint in WEB_ARTIFACT_INTENT):
+        return "dev"
     if _PLAN_INTENT_RE.search(text or "") and not _PATH_RE.search(text or ""):
         return "plan"
+    if any(hint in lowered for hint in CODE_WORK_INTENT):
+        return "dev"
+    if any(hint in lowered for hint in VIDEO_INTENT):
+        return "video"
     return "dev"
 
 
@@ -470,7 +486,9 @@ class AgentRuntime:
         names = [name for name in agent.tools if self.tools.get(name)]
         if not names:
             return []
-        if lite and TOOL_SCHEMA_TRIM:
+        # Plan/video agents already expose a tiny purpose-built toolset; trimming
+        # it would remove their primary deliverable tool (make_plan/make_storyboard).
+        if lite and TOOL_SCHEMA_TRIM and getattr(agent, "kind", "") not in ("plan", "video"):
             allowed = set(LITE_TOOL_SET) | {"plan_task", "update_plan"}
             names = [name for name in names if name in allowed]
         if not SUBAGENT_ENABLED:
