@@ -1,0 +1,127 @@
+From 3b0d1bd5e8d1fe3443b4f33f74aa1da1962a8bc8 Mon Sep 17 00:00:00 2001
+From: haoyuan <haoyuan@local>
+Date: Wed, 4 Nov 2026 15:09:16 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E5=8A=A9=E6=89=8B=E5=9B=9E?=
+ =?UTF-8?q?=E5=A4=8D=E9=87=8D=E5=A4=8D=E6=B8=B2=E6=9F=93=EF=BC=9A=E6=B5=81?=
+ =?UTF-8?q?=E5=BC=8F=E4=BA=8B=E4=BB=B6=E4=B8=8E=E5=85=A5=E5=BA=93=E6=B6=88?=
+ =?UTF-8?q?=E6=81=AF=E5=A4=8D=E7=94=A8=E5=90=8C=E4=B8=80=20msg=5Fid?=
+ =?UTF-8?q?=EF=BC=8C=E5=85=A5=E5=BA=93=E5=90=8E=E6=B8=85=E7=A9=BA=E5=AE=9E?=
+ =?UTF-8?q?=E6=97=B6=E7=BC=93=E5=86=B2?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ api/core/runtime.py                 |  5 ++++-
+ api/tests/test_api.py               | 17 +++++++++++++++++
+ web/src/components/ChatTimeline.vue | 24 ++++++++++++++++++++++--
+ web/src/stores/app.js               |  7 +++++--
+ 4 files changed, 48 insertions(+), 5 deletions(-)
+
+diff --git a/api/core/runtime.py b/api/core/runtime.py
+index 6324d85..be5101f 100644
+--- a/api/core/runtime.py
++++ b/api/core/runtime.py
+@@ -633,7 +633,9 @@ class AgentRuntime:
+             if compaction.get("compacted"):
+                 await self.emit(session_id, "context.compact", compaction, run_id)
+ 
+-            msg_id = uuid.uuid4().hex[:12]
++            # Pre-generate the assistant message id so streaming events (delta/reasoning) and
++            # the persisted row share one id; clients correlate them to replace the live bubble.
++            msg_id = f"m_{uuid.uuid4().hex[:16]}"
+             message: dict[str, Any] | None = None
+             usage: dict[str, Any] = {}
+             actual_provider, actual_model = provider, model
+@@ -688,6 +690,7 @@ class AgentRuntime:
+                 content,
+                 reasoning=reasoning,
+                 tool_args=stored_calls if stored_calls else None,
++                message_id=msg_id,
+             )
+             if usage:
+                 cost = self._cost(actual_provider, usage, actual_model)
+diff --git a/api/tests/test_api.py b/api/tests/test_api.py
+index fedbd98..1cdb0de 100644
+--- a/api/tests/test_api.py
++++ b/api/tests/test_api.py
+@@ -50,6 +50,23 @@ def test_general_chat_mock(client):
+     assert '"type": "delta"' in stream.text or '"type": "message.saved"' in stream.text
+ 
+ 
++def test_stream_msg_id_matches_persisted_message(client):
++    session = client.post("/api/sessions", json={"kind": "general", "title": "stream ids"}).json()["data"]
++    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "hello"})
++    final = wait_status(client, session["id"])
++    assert final["status"] == "done", final.get("error")
++    events = client.get(f"/api/sessions/{session['id']}/events").json()["data"]
++    saved = [e for e in events if e["type"] == "message.saved" and e["payload"].get("role") == "assistant"]
++    deltas = [e for e in events if e["type"] == "delta"]
++    assert saved and deltas
++    saved_ids = {e["payload"]["msg_id"] for e in saved}
++    # Streaming tokens must carry the persisted message id, otherwise the UI cannot tell that the
++    # live bubble and the saved bubble are the same reply (it briefly renders the answer twice).
++    assert {e["payload"]["msg_id"] for e in deltas} <= saved_ids
++    messages = client.get(f"/api/sessions/{session['id']}/messages").json()["data"]
++    assert saved_ids <= {message["id"] for message in messages}
++
++
+ def test_first_message_auto_titles_session(client):
+     session = client.post("/api/sessions", json={"kind": "general", "title": ""}).json()["data"]
+     assert session["title"] == "New conversation"
+diff --git a/web/src/components/ChatTimeline.vue b/web/src/components/ChatTimeline.vue
+index ba6d730..740e537 100644
+--- a/web/src/components/ChatTimeline.vue
++++ b/web/src/components/ChatTimeline.vue
+@@ -149,8 +149,28 @@ const userQuestions = computed(() =>
+     .map((group, index) => ({ id: group.id, order: index + 1, content: group.content || '' }))
+ )
+ 
+-const liveText = computed(() => Object.values(state.live.streams).join(''))
+-const liveReasoning = computed(() => Object.values(state.live.reasoning).join(''))
++const lastAssistantMessage = computed(() => {
++  for (let i = state.messages.length - 1; i >= 0; i -= 1) {
++    if (state.messages[i].role === 'assistant') return state.messages[i]
++  }
++  return null
++})
++
++function sameText(a, b) {
++  const left = String(a || '').trim()
++  return left !== '' && left === String(b || '').trim()
++}
++
++// Guard: a persisted message and its still-open live buffer must never render side by side
++// (duplicate assistant bubble) when events arrive out of order.
++const liveText = computed(() => {
++  const text = Object.values(state.live.streams).join('')
++  return sameText(text, lastAssistantMessage.value?.content) ? '' : text
++})
++const liveReasoning = computed(() => {
++  const text = Object.values(state.live.reasoning).join('')
++  return sameText(text, lastAssistantMessage.value?.reasoning) ? '' : text
++})
+ const liveTools = computed(() => state.live.toolOrder.map((id) => state.live.tools[id]).filter(Boolean))
+ 
+ const isBusy = computed(() => ['running', 'queued', 'waiting_input'].includes(currentSession.value?.status))
+diff --git a/web/src/stores/app.js b/web/src/stores/app.js
+index 93791de..d1135e4 100644
+--- a/web/src/stores/app.js
++++ b/web/src/stores/app.js
+@@ -280,8 +280,11 @@ function applyEvent(event) {
+             created_at: event.time
+           })
+         }
+-        const id = payload.msg_id
+-        delete state.live.streams[id]
++        // The saved message renders from state.messages, so drop this step's live token
++        // buffers. Keying on payload.msg_id alone left stale buffers whenever the streaming
++        // id differed, which rendered the same reply twice until the next refresh.
++        state.live.streams = {}
++        state.live.reasoning = {}
+         state.scrollTick++
+       }
+       break
+-- 
+2.43.0
+
