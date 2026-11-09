@@ -57,12 +57,12 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "mimo": ProviderConfig(
         name="mimo",
         base_url=MIMO_BASE_URL,
-        models=[MIMO_MODEL],
+        models=[MIMO_MODEL, "mimo-v2.6-pro"],
         default_model=MIMO_MODEL,
         api_key=MIMO_API_KEY,
         max_output_tokens=16384,
         supports_thinking=False,
-        tiers={"lite": MIMO_MODEL, "standard": MIMO_MODEL, "pro": MIMO_MODEL},
+        tiers={"lite": MIMO_MODEL, "standard": MIMO_MODEL, "pro": "mimo-v2.6-pro"},
     ),
 }
 

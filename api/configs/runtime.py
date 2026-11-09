@@ -40,6 +40,8 @@ def runtime_port(key: str, fallback: int) -> int:
 
 def port_in_use(host: str, port: int) -> bool:
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 与 uvicorn 监听行为一致：允许复用 TIME_WAIT 端口，避免重启后误判端口占用而漂移
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         probe.bind((host or "127.0.0.1", int(port)))
         return False
