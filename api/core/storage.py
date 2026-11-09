@@ -214,6 +214,9 @@ CREATE TABLE IF NOT EXISTS supervisor_messages (
     role TEXT NOT NULL,
     content TEXT DEFAULT '',
     actions TEXT DEFAULT '[]',
+    model TEXT DEFAULT '',
+    provider TEXT DEFAULT '',
+    usage TEXT DEFAULT '{}',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sup_messages ON supervisor_messages(chat_id, created_at);
@@ -228,7 +231,26 @@ class Storage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         async with self.connect() as db:
             await db.executescript(SCHEMA)
+            await self._migrate(db)
             await db.commit()
+
+    @staticmethod
+    async def _migrate(db) -> None:
+        """Additive migrations for databases created before a schema change."""
+        try:
+            cursor = await db.execute("PRAGMA table_info(supervisor_messages)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            await cursor.close()
+        except Exception:
+            return
+        additions = {
+            "model": "TEXT DEFAULT ''",
+            "provider": "TEXT DEFAULT ''",
+            "usage": "TEXT DEFAULT '{}'",
+        }
+        for name, ddl in additions.items():
+            if name not in columns:
+                await db.execute(f"ALTER TABLE supervisor_messages ADD COLUMN {name} {ddl}")
 
     @asynccontextmanager
     async def connect(self):
@@ -406,6 +428,25 @@ class Storage:
             (session_id, after_rowid, limit),
         )
 
+    async def list_messages_tail(
+        self, session_id: str, limit: int = 200, before_rowid: int = 0
+    ) -> list[dict[str, Any]]:
+        """Most recent messages (optionally older than a rowid cursor), oldest-first."""
+        clauses = ["session_id=?"]
+        params: list[Any] = [session_id]
+        if before_rowid:
+            clauses.append("rowid<?")
+            params.append(int(before_rowid))
+        params.append(max(1, int(limit)))
+        rows = await self._fetch(
+            "SELECT rowid AS seq, * FROM messages WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY rowid DESC LIMIT ?",
+            tuple(params),
+        )
+        rows.reverse()
+        return rows
+
     async def delete_messages(self, session_id: str) -> None:
         await self._write("DELETE FROM messages WHERE session_id=?", (session_id,))
 
@@ -446,11 +487,35 @@ class Storage:
             )
             await db.commit()
 
-    async def list_events(self, session_id: str, after_id: int = 0, limit: int = 2000) -> list[dict[str, Any]]:
-        rows = await self._fetch(
-            "SELECT * FROM events WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?",
-            (session_id, after_id, limit),
-        )
+    async def list_events(
+        self,
+        session_id: str,
+        after_id: int = 0,
+        limit: int = 2000,
+        run_id: str = "",
+        tail: bool = False,
+    ) -> list[dict[str, Any]]:
+        clauses = ["session_id=?"]
+        params: list[Any] = [session_id]
+        if run_id:
+            clauses.append("run_id=?")
+            params.append(run_id)
+        if tail:
+            params.append(max(1, int(limit)))
+            rows = await self._fetch(
+                "SELECT * FROM events WHERE " + " AND ".join(clauses) + " ORDER BY id DESC LIMIT ?",
+                tuple(params),
+            )
+            rows.reverse()
+        else:
+            if after_id:
+                clauses.append("id>?")
+                params.append(int(after_id))
+            params.append(max(1, int(limit)))
+            rows = await self._fetch(
+                "SELECT * FROM events WHERE " + " AND ".join(clauses) + " ORDER BY id ASC LIMIT ?",
+                tuple(params),
+            )
         for row in rows:
             try:
                 row["payload"] = json.loads(row.get("payload") or "{}")

@@ -20,7 +20,7 @@ from extensions.common import fail, ok
 router = APIRouter(prefix=prefix, tags=["marketplace"])
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-CORE_PLUGINS = {"coding", "plans", "video", "supervisor", "orchestrator"}
+CORE_PLUGINS = {"coding", "plans", "video", "orchestrator"}
 SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".pytest_cache", ".mypy_cache"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 

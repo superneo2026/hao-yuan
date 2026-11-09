@@ -23,6 +23,7 @@ import Icon from './components/Icon.vue'
 import LanguageSelect from './components/LanguageSelect.vue'
 import NewTaskModal from './components/NewTaskModal.vue'
 import SessionList from './components/SessionList.vue'
+import SupervisorDock from './components/SupervisorDock.vue'
 import ToastStack from './components/ToastStack.vue'
 import UserAccountModal from './components/UserAccountModal.vue'
 import WorkspaceSetupModal from './components/WorkspaceSetupModal.vue'
@@ -38,8 +39,10 @@ watch(
       return
     }
     if (route.name !== 'workbench' && route.name !== 'session') return
-    const target = `/s/${encodeURIComponent(id)}`
-    if (route.fullPath !== target) router.replace(target)
+    const path = `/s/${encodeURIComponent(id)}`
+    if (route.path === path) return
+    // Preserve query params (e.g. a shared supervisor conversation link).
+    router.replace({ path, query: { ...route.query } })
   }
 )
 
@@ -52,7 +55,7 @@ watch(
       return
     }
     if (route.name === 'workbench' && !id && state.currentId) {
-      router.replace(`/s/${encodeURIComponent(state.currentId)}`)
+      router.replace({ path: `/s/${encodeURIComponent(state.currentId)}`, query: { ...route.query } })
     }
   }
 )
@@ -276,6 +279,7 @@ onBeforeUnmount(() => {
   <NewTaskModal v-if="state.newTaskOpen" @close="state.newTaskOpen = false" />
   <WorkspaceSetupModal v-if="state.workspaceSetupOpen" @close="state.workspaceSetupOpen = false" />
   <UserAccountModal v-if="state.accountOpen" @close="state.accountOpen = false" />
+  <SupervisorDock v-if="!authBlocked && !state.authSetupOpen" />
 </template>
 
 <style scoped>

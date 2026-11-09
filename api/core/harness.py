@@ -15,6 +15,7 @@ from core.session_manager import SessionManager
 from core.storage import Storage
 from core.tools import ToolRegistry
 from harness.skills import SkillLibrary
+from harness.supervisor import watch_loop as supervisor_watch_loop
 from tools.builtin import register_builtin_tools
 
 
@@ -39,6 +40,8 @@ class Harness:
         self.runtime = AgentRuntime(self)
         self.manager = SessionManager(self.storage, self.runtime)
         self.runtime.manager = self.manager
+        # AI supervisor is a built-in capability, not an installable plugin.
+        self.supervisor_task: asyncio.Task | None = None
         self._booted = False
 
     async def boot(self) -> None:
@@ -52,9 +55,18 @@ class Harness:
             await self.manager.resume_interrupted()
         except Exception as exc:
             print(f"[harness] resume scan failed: {exc}")
+        if self.supervisor_task is None or self.supervisor_task.done():
+            self.supervisor_task = asyncio.create_task(supervisor_watch_loop(self))
         self._booted = True
 
     async def shutdown(self) -> None:
+        if self.supervisor_task:
+            self.supervisor_task.cancel()
+            try:
+                await self.supervisor_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self.supervisor_task = None
         await self.plugins.shutdown()
         for task in list(self.manager.tasks.values()):
             task.cancel()

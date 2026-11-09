@@ -89,6 +89,61 @@ function qs(params = {}) {
   return text ? `?${text}` : ''
 }
 
+export async function supervisorChatStream({ message, chatId = '', model = '', onEvent, signal }) {
+  const headers = { 'Content-Type': 'application/json' }
+  const token = getAuthToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const remoteToken = getRemoteToken()
+  if (remoteToken) headers['X-HaoYuan-Remote'] = remoteToken
+  const response = await fetch(`${BASE}/api/supervisor/chat/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message, chat_id: chatId, model }),
+    signal
+  })
+  if (response.status === 401) {
+    clearAuthToken()
+    window.dispatchEvent(new CustomEvent('hy:unauthorized'))
+  }
+  if (!response.ok || !response.body) {
+    let detail = `HTTP ${response.status}`
+    try {
+      const payload = await response.json()
+      detail = payload?.message || payload?.detail || detail
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      const chunk = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      let event = 'message'
+      let data = ''
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        else if (line.startsWith('data:')) data += line.slice(5).trim()
+      }
+      if (data) {
+        try {
+          onEvent?.(event, JSON.parse(data))
+        } catch {
+          /* skip malformed frames */
+        }
+      }
+      boundary = buffer.indexOf('\n\n')
+    }
+  }
+}
+
 export const api = {
   health: () => request('/api/health'),
   info: () => request('/api/info'),
@@ -104,9 +159,9 @@ export const api = {
   unhideSession: (id) => request(`/api/sessions/${id}/unhide`, { method: 'POST' }),
   purgeSession: (id) => request(`/api/sessions/${id}/purge`, { method: 'DELETE' }),
   clearSession: (id) => request(`/api/sessions/${id}/clear`, { method: 'POST' }),
-  messages: (id) => request(`/api/sessions/${id}/messages`),
+  messages: (id, { limit = 0, before = 0 } = {}) => request(`/api/sessions/${id}/messages${qs({ limit, before })}`),
   sendMessage: (id, content, locale = '') => request(`/api/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify({ content, locale }) }),
-  events: (id, afterId = 0) => request(`/api/sessions/${id}/events${qs({ after_id: afterId })}`),
+  events: (id, afterId = 0, { limit = 2000, run_id = '', tail = false } = {}) => request(`/api/sessions/${id}/events${qs({ after_id: afterId, limit, run_id, tail: tail ? 1 : '' })}`),
   cancel: (id) => request(`/api/sessions/${id}/cancel`, { method: 'POST' }),
   resume: (id) => request(`/api/sessions/${id}/resume`, { method: 'POST' }),
   confirm: (id, callId, ok) => request(`/api/sessions/${id}/confirm`, { method: 'POST', body: JSON.stringify({ call_id: callId, ok }) }),
@@ -172,6 +227,10 @@ export const api = {
   supervisorConsole: (page = 1) => request(`/api/supervisor/console${qs({ page })}`),
   supervisorAct: (sessionId, action) => request('/api/supervisor/act', { method: 'POST', body: JSON.stringify({ session_id: sessionId, action }) }),
   supervisorChat: (message, chatId = '', model = '') => request('/api/supervisor/chat', { method: 'POST', body: JSON.stringify({ message, chat_id: chatId, model }) }),
+  supervisorChats: () => request('/api/supervisor/chats'),
+  supervisorMessages: (chatId) => request(`/api/supervisor/chats/${encodeURIComponent(chatId)}/messages`),
+  supervisorCreateChat: () => request('/api/supervisor/chats', { method: 'POST' }),
+  supervisorDeleteChat: (chatId) => request(`/api/supervisor/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' }),
 
   orchestrations: () => request('/api/orchestrations'),
   orchestration: (id) => request(`/api/orchestrations/${id}`),

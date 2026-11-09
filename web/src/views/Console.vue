@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { selectSession, startNewTask, state, supervisorAct, supervisorChat, toast } from '../stores/app'
+import { selectSession, startNewTask, state, supervisorAct, toast } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import Icon from '../components/Icon.vue'
 import StatusPill from '../components/StatusPill.vue'
@@ -9,9 +9,6 @@ import StatusPill from '../components/StatusPill.vue'
 const router = useRouter()
 const filter = ref('all')
 const loading = ref(false)
-const question = ref('')
-const answer = ref('')
-const asking = ref(false)
 let timer = null
 
 const snapshot = computed(() => state.supervisor || { summary: {}, items: [], alerts: [] })
@@ -47,21 +44,6 @@ async function newSession() {
 
 async function act(item, action) {
   await supervisorAct(item.id, action)
-}
-
-async function ask() {
-  if (!question.value.trim() || asking.value) return
-  asking.value = true
-  try {
-    const result = await supervisorChat(question.value.trim())
-    answer.value = result.reply || ''
-    question.value = ''
-    await load()
-  } catch (error) {
-    toast(error.message, 'bad')
-  } finally {
-    asking.value = false
-  }
 }
 
 function percent(item) {
@@ -151,29 +133,6 @@ onBeforeUnmount(() => clearInterval(timer))
           </div>
         </div>
       </section>
-
-      <aside class="supervisor-chat">
-        <div class="chat-head">
-          <span class="chat-avatar">S</span>
-          <div><b>{{ t('console.askSupervisor') }}</b><span>{{ t('console.supervisorSubtitle') }}</span></div>
-        </div>
-        <div class="chat-answer">
-          <div v-if="!answer" class="chat-hint">
-            <Icon name="sparkles" :size="17" />
-            <span>{{ t('console.hint1') }}</span>
-            <span>{{ t('console.hint2') }}</span>
-            <span>{{ t('console.hint3') }}</span>
-          </div>
-          <div v-else class="chat-reply">{{ answer }}</div>
-        </div>
-        <div class="chat-input">
-          <textarea v-model="question" class="textarea" rows="2" :placeholder="t('console.askPlaceholder')" @keydown.ctrl.enter="ask" @keydown.meta.enter="ask" />
-          <button class="btn primary sm" :disabled="asking" @click="ask">
-            <span v-if="asking" class="spinner" style="width: 12px; height: 12px" />
-            <Icon v-else name="send" :size="13" />
-          </button>
-        </div>
-      </aside>
     </div>
   </div>
 </template>
@@ -187,7 +146,7 @@ onBeforeUnmount(() => clearInterval(timer))
 .alert-strip { border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--line)); background: var(--warn-soft); border-radius: 14px; padding: 12px 14px; margin-bottom: 20px; }
 .alert-strip-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-bottom: 8px; }
 .alert-row { display: flex; align-items: center; gap: 9px; padding: 7px 0; border-top: 1px solid color-mix(in srgb, var(--warn) 18%, transparent); font-size: 12px; }
-.console-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; align-items: start; }
+.console-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
 .filter-row { display: flex; align-items: center; gap: 5px; margin-bottom: 11px; }
 .filter-btn { height: 29px; padding: 0 11px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 12px; }
 .filter-btn:hover { color: var(--ink); }
@@ -205,21 +164,8 @@ onBeforeUnmount(() => clearInterval(timer))
 .session-card-foot { display: flex; align-items: center; gap: 9px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10.5px; }
 .empty-card { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); font-size: 12px; }
 .empty-card b { color: var(--ink-2); }
-.supervisor-chat { position: sticky; top: 16px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow-card); }
-.chat-head { display: flex; gap: 9px; align-items: center; padding: 13px 14px; border-bottom: 1px solid var(--line); }
-.chat-avatar { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(140deg, var(--brand), var(--brand-2)); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
-.chat-head b { display: block; font-size: 12.5px; }
-.chat-head span { display: block; color: var(--faint); font-size: 10.5px; }
-.chat-answer { min-height: 180px; max-height: 340px; overflow-y: auto; padding: 14px; }
-.chat-hint { display: flex; flex-direction: column; gap: 8px; color: var(--muted); font-size: 11.5px; }
-.chat-hint span { padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; }
-.chat-reply { white-space: pre-wrap; color: var(--ink-2); font-size: 12.5px; line-height: 1.65; }
-.chat-input { display: flex; gap: 7px; padding: 10px; border-top: 1px solid var(--line); background: var(--surface-2); }
-.chat-input .textarea { font-size: 12px; }
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(3, 1fr); }
-  .console-grid { grid-template-columns: 1fr; }
-  .supervisor-chat { position: static; }
 }
 @media (max-width: 640px) {
   .stat-grid { grid-template-columns: 1fr 1fr; }

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { currentSession, state, toast } from '../stores/app'
+import { currentSession, loadEarlierMessages, state, toast } from '../stores/app'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
 import Markdown from './Markdown.vue'
@@ -368,6 +368,14 @@ async function copy(text, key = '') {
   }
 }
 
+async function loadEarlier() {
+  const el = scroller.value
+  const beforeHeight = el?.scrollHeight || 0
+  await loadEarlierMessages()
+  await nextTick()
+  if (el) el.scrollTop += el.scrollHeight - beforeHeight
+}
+
 function timeLabel(value) {
   if (!value) return ''
   const date = new Date(String(value).replace(' ', 'T'))
@@ -379,7 +387,14 @@ function timeLabel(value) {
 <template>
   <div class="timeline-wrap">
     <div ref="scroller" class="timeline scroll-y" @scroll="onScroll">
-      <div v-if="showEmpty" class="empty-state">
+      <div v-if="state.switching" class="empty-state">
+        <div class="empty-inner">
+          <span class="spinner" style="width: 16px; height: 16px" />
+          <p class="muted">{{ t('chat.loadingSession') }}</p>
+        </div>
+      </div>
+
+      <div v-else-if="showEmpty" class="empty-state">
         <div class="empty-inner">
           <div class="welcome-mark">
             <span class="brand-mark" style="width: 54px; height: 54px; border-radius: 17px; font-size: 23px">H</span>
@@ -393,6 +408,12 @@ function timeLabel(value) {
       </div>
 
       <div v-else class="timeline-inner">
+        <div v-if="state.hasMoreMessages" class="load-earlier">
+          <button class="btn sm" :disabled="state.loadingEarlier" @click="loadEarlier">
+            <span v-if="state.loadingEarlier" class="spinner" style="width: 12px; height: 12px" />
+            {{ state.loadingEarlier ? t('chat.loadingEarlier') : t('chat.loadEarlier') }}
+          </button>
+        </div>
         <div v-for="group in groups" :key="group.id" class="timeline-group slide-up">
           <template v-if="group.kind === 'user'">
             <div class="message user" :data-user-id="group.id">
@@ -553,6 +574,7 @@ function timeLabel(value) {
 .timeline-wrap { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; container-type: inline-size; }
 .timeline { flex: 1; padding: 26px 28px 12px; }
 .timeline-inner { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.load-earlier { display: flex; justify-content: center; }
 .timeline-group { display: flex; flex-direction: column; gap: 8px; }
 .message { display: flex; gap: 11px; align-items: flex-start; }
 .message.user { flex-direction: row-reverse; }

@@ -170,9 +170,18 @@ class EventBus:
         except Exception:
             pass
 
-    async def replay(self, session_id: str, after_id: int = 0, limit: int = 2000) -> list[dict[str, Any]]:
+    async def replay(
+        self,
+        session_id: str,
+        after_id: int = 0,
+        limit: int = 2000,
+        run_id: str = "",
+        tail: bool = False,
+    ) -> list[dict[str, Any]]:
         await self.flush()
-        return await self.storage.list_events(session_id, after_id=after_id, limit=limit)
+        return await self.storage.list_events(
+            session_id, after_id=after_id, limit=limit, run_id=run_id, tail=tail
+        )
 
 
 _bus: EventBus | None = None

@@ -22,7 +22,10 @@ def test_health_and_plugins(client):
     assert health["status"] == "ok"
     assert health["tools"] >= 24
     names = {plugin["name"]: plugin for plugin in health["plugins"]}
-    assert {"coding", "plans", "video", "supervisor", "orchestrator"} <= set(names)
+    assert {"coding", "plans", "video", "orchestrator"} <= set(names)
+    # The AI supervisor is a built-in capability, not an installable plugin.
+    assert "supervisor" not in names
+    assert client.get("/api/supervisor/overview").status_code == 200
     assert names["coding"]["loaded"] is True
     if "embodied" in names:
         assert names["embodied"]["enabled"] is False

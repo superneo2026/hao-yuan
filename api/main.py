@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from configs.configs import APP_NAME, APP_VERSION, SERVER_HOST, SERVER_PORT, WEB_DIST_DIR
 from configs.runtime import resolve_free_port, update_runtime
 from core.harness import harness_instance, init_harness
-from extensions import approvals, fs, marketplace, plugins, sessions, settings, skills, system, usage
+from extensions import approvals, fs, marketplace, plugins, sessions, settings, skills, supervisor, system, usage
 from extensions.ws import ws_endpoint
 
 
@@ -32,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (system, sessions, skills, settings, fs, usage, plugins, marketplace, approvals):
+for module in (system, sessions, skills, settings, fs, usage, plugins, marketplace, approvals, supervisor):
     app.include_router(module.router)
 
 for middleware, kwargs in harness.plugin_middlewares:

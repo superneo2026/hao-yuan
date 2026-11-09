@@ -189,6 +189,45 @@ def _elapsed_seconds(start: str, end: str) -> float:
     return round(max(0.0, (finished - began).total_seconds()), 1)
 
 
+CLIP_MARK = "\n…[truncated for display; full content is stored server-side]"
+
+
+def _clip(value: Any, limit: int) -> tuple[str, bool]:
+    text = value if isinstance(value, str) else ("" if value is None else str(value))
+    if limit <= 0 or len(text) <= limit:
+        return text, False
+    head = int(limit * 0.75)
+    tail = max(0, limit - head)
+    return text[:head] + CLIP_MARK + (text[-tail:] if tail else ""), True
+
+
+def _compact_message(row: dict[str, Any]) -> None:
+    """Trim heavy fields for list rendering.
+
+    Reasoning, tool output and tool args dominate payload size on long sessions
+    (hundreds of KB) but the UI only surfaces summaries. The full values stay in
+    the database; this only affects the paged conversation view.
+    """
+    clipped = False
+    if row.get("role") == "tool":
+        # Tool-call args already live on the assistant row; the tool row copy is
+        # redundant for display.
+        content_limit = 1800
+        if row.get("tool_args"):
+            row["tool_args"] = ""
+            clipped = True
+    else:
+        content_limit = 8000
+        row["tool_args"], hit = _clip(row.get("tool_args"), 1500)
+        clipped = clipped or hit
+    row["content"], hit = _clip(row.get("content"), content_limit)
+    clipped = clipped or hit
+    row["reasoning"], hit = _clip(row.get("reasoning"), 1200)
+    clipped = clipped or hit
+    if clipped:
+        row["truncated"] = True
+
+
 def _message_usage(row: dict[str, Any]) -> dict[str, Any]:
     prompt = int(row.get("prompt_tokens") or 0)
     completion = int(row.get("completion_tokens") or 0)
@@ -390,9 +429,16 @@ async def clear_session(session_id: str):
 
 
 @router.get("/sessions/{session_id}/messages")
-async def get_messages(session_id: str):
+async def get_messages(session_id: str, limit: int = 0, before: int = 0):
     harness = await get_harness()
-    rows = await harness.storage.list_messages(session_id)
+    if limit and limit > 0:
+        rows = await harness.storage.list_messages_tail(
+            session_id, limit=min(limit, 2000), before_rowid=before
+        )
+        for row in rows:
+            _compact_message(row)
+    else:
+        rows = await harness.storage.list_messages(session_id)
     for row in rows:
         row["usage"] = _message_usage(row)
     return ok(rows)
@@ -433,9 +479,15 @@ async def send_message(session_id: str, body: MessageSend):
 
 
 @router.get("/sessions/{session_id}/events")
-async def get_events(session_id: str, after_id: int = 0, limit: int = 2000):
+async def get_events(
+    session_id: str, after_id: int = 0, limit: int = 2000, run_id: str = "", tail: bool = False
+):
     harness = await get_harness()
-    return ok(await harness.events.replay(session_id, after_id=after_id, limit=limit))
+    return ok(
+        await harness.events.replay(
+            session_id, after_id=after_id, limit=limit, run_id=run_id, tail=tail
+        )
+    )
 
 
 @router.get("/sessions/{session_id}/stream")
