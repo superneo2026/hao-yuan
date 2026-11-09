@@ -57,7 +57,7 @@ def _normalize_uri(raw: str) -> str:
         from urllib.parse import unquote
 
         value = unquote(value)
-        if re.match(r"^[A-Za-z]:", value) is False and os.name == "nt":
+        if not value.startswith("/") and re.match(r"^[A-Za-z]:", value) is None:
             value = "/" + value
     return value
 
@@ -198,15 +198,19 @@ def digest(path: str, max_chars: int = 9000) -> str:
         lines.append("title: " + _strip_tags(title_match.group(1))[:180])
     if lang_match:
         lines.append("lang: " + lang_match.group(1))
+    # Python 3.11：f-string 表达式内不能含反斜杠，正则先行计算
+    n_tables = len(re.findall(r"<table\b", raw, re.I))
+    n_svg = len(re.findall(r"<svg\b", raw, re.I))
+    n_code = len(re.findall(r"<pre\b", raw, re.I))
     lines.append(
         "counts: "
         + ", ".join(
             [
                 f"sections={len(_SECTION_RE.findall(raw))}",
                 f"headings={len(_HEADING_RE.findall(raw))}",
-                f"tables={len(re.findall(r'<table\b', raw, re.I))}",
-                f"svg={len(re.findall(r'<svg\b', raw, re.I))}",
-                f"code={len(re.findall(r'<pre\b', raw, re.I))}",
+                f"tables={n_tables}",
+                f"svg={n_svg}",
+                f"code={n_code}",
                 f"keyframes={len(_ANIM_RE.findall(raw))}",
                 f"scripts={len(_SCRIPT_SRC_RE.findall(raw))}",
                 f"classes={len(set(sum((c.split() for c in _CLASS_RE.findall(raw)), [])))}",
