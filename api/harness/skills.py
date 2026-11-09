@@ -261,8 +261,11 @@ class SkillLibrary:
         return [item[1] for item in picked], how
 
     @staticmethod
-    def render(skills: list[Skill], how: str = "") -> str:
+    def render(skills: list[Skill], how: str = "", max_chars: int | None = None) -> str:
         if not skills:
             return ""
         body = "\n\n".join(skill.render() for skill in skills)
-        return f"\n\n--- Active Skills ({how or 'matched'}) ---\n{body}"
+        text = f"\n\n--- Active Skills ({how or 'matched'}) ---\n{body}"
+        if max_chars and len(text) > max_chars:
+            text = text[:max_chars] + "\n...[remaining skill text omitted to save context]"
+        return text

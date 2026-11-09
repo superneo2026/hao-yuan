@@ -18,6 +18,7 @@ from configs.configs import (
     ARTIFACTS_DIR,
     CHECKPOINT_ENABLED,
     CHECKPOINT_EVERY_STEPS,
+    CONTEXT_PACK_MAX_CHARS,
     DEFAULT_AGENT,
     IDEMPOTENT_TOOLS,
     LITE_MODE,
@@ -40,7 +41,7 @@ from configs.configs import (
     VERIFY_GATE,
     VERIFY_MAX_NUDGE,
 )
-from configs.models import price_for, resolve
+from configs.models import THINKING_OFF_PROVIDERS, price_for, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
 from harness import durability, reference, repair, repoindex, sysinfo
 from harness.skills import SkillLibrary
@@ -121,6 +122,75 @@ CHAT_CONTEXT_HINTS = (
 )
 
 READONLY_TOOLS = ("read_file", "read_range", "search_symbol", "glob", "grep", "list_dir", "project_scan")
+
+# Shell commands that materialise workspace files. A task can be completed entirely
+# through the shell (heredoc, redirect, python -c, tee ...), so these writes must be
+# tracked exactly like write_file/edit_file. Otherwise the write/verify gates keep
+# nudging the model to "actually modify the workspace" after it already finished,
+# which costs extra steps and tokens without improving the outcome.
+_SHELL_WRITE_RE = re.compile(
+    r"(?:^|[;&|]\s*)>{1,2}(?!&|\s*/dev/null)\s*\S|"
+    r"\btee\b|\bcp\b|\bmv\b|\btouch\b|\bmkdir\b|\bsed\s+-i\b|\bdd\b|"
+    r"\bopen\([^)]*['\"][wax]+|\bwrite_text\(|\bwrite_bytes\(|"
+    r"\bto_csv\(|\bto_json\(|\bto_parquet\(|\bjson\.dump\(|\byaml\.dump\(|\bsavefig\(|"
+    r"\bnp\.save|\bpd\.to_|\bshutil\.copy|\bshutil\.move",
+    re.I,
+)
+# Interpreted languages: running the script the agent just wrote counts as a real
+# verification step, even when no test/lint/build command is involved.
+_SCRIPT_RUN_RE = re.compile(
+    r"\b(?:python3?|pytest|node|deno|bun|ruby|perl|php|bash|sh|go\s+run|cargo\s+run|"
+    r"java|dotnet\s+run|Rscript)\b",
+    re.I,
+)
+_WEB_TOOL_RE = re.compile(
+    r"\.(?:html?|css|scss|sass|less|vue|svelte|jsx|tsx)\b|"
+    r"\b(?:html|css|web|frontend|front-end|website|landing|page|responsive|react|vue|svelte)\b|"
+    r"网页|页面|站点|网站|前端|响应式|落地页|设计系统|大屏|参考页|参考文件",
+    re.I,
+)
+
+
+def shell_wrote_files(command: str) -> bool:
+    return bool(command and _SHELL_WRITE_RE.search(command))
+
+
+def looks_like_verification(command: str) -> bool:
+    lowered = (command or "").lower()
+    if any(hint in lowered for hint in VERIFY_CMD_HINTS):
+        return True
+    return bool(_SCRIPT_RUN_RE.search(command or ""))
+
+
+def wants_web_tools(text: str) -> bool:
+    return bool(_WEB_TOOL_RE.search(text or ""))
+
+
+_DOC_TEXT_RE = re.compile(r"简历|resume|\bcv\b|求职|报告|提案|文档|自荐|cover\s+letter|portfolio", re.I)
+_DEBUG_TEXT_RE = re.compile(r"修复|调试|报错|失败|排查|\bbug\b|\berror\b|pytest|测试不过|regression|failing", re.I)
+
+
+def relevant_skills(skills: list, text: str) -> list:
+    """Drop domain skills that BM25 pulled in on incidental keyword overlap.
+
+    web/document/debug playbooks are large; shipping them into every prompt for a
+    plain repo or math task bloats each request and distracts the model.
+    """
+    web = wants_web_tools(text)
+    doc = bool(_DOC_TEXT_RE.search(text or ""))
+    debug = bool(_DEBUG_TEXT_RE.search(text or ""))
+    kept = []
+    for skill in skills:
+        name = getattr(skill, "name", "")
+        if name == "web-delivery" and not web:
+            continue
+        if name == "document-delivery" and not doc:
+            continue
+        if name == "debug-loop" and not debug:
+            continue
+        kept.append(skill)
+    return kept
+
 
 SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You work directly in a real workspace and deliver verified changes.
 
@@ -372,6 +442,7 @@ class AgentRuntime:
         matched, skill_how = ([], "no skills") if (qa or casual) and not session.get("skills") else self.skills.match(
             requested, text, self._selected_skills(session)
         )
+        matched = relevant_skills(matched, text)
         payload_skills = [{"name": skill.name, "title": skill.title, "source": skill.source} for skill in matched]
         await self.storage.update_session(session_id, skills_used=json.dumps(payload_skills, ensure_ascii=False), lite_mode=1 if lite else 0)
         await self.emit(session_id, "skills.matched", {"skills": payload_skills, "how": skill_how, "kind": requested}, run_id)
@@ -468,16 +539,27 @@ class AgentRuntime:
         return len(paths) <= LITE_SINGLE_FILE_MAX_PATHS
 
     def _thinking(self, session: dict[str, Any], provider: str, lite: bool, level: str, qa: bool) -> str:
+        # Explicit operator override wins (useful for A/B testing).
+        override = os.getenv("HAOYUAN_FORCE_THINKING", "").strip().lower()
+        if override in ("off", "low", "high"):
+            return override
+        # An explicit per-session choice always wins: reasoning-heavy tasks (constraint
+        # solving, proofs, hard debugging) measurably need it, so never silently
+        # downgrade the caller's request.
         selected = (session.get("thinking") or "").strip()
         if selected in ("off", "low", "high"):
             return selected
+        # Providers in THINKING_OFF_PROVIDERS default to no reasoning budget; this is
+        # only a fallback when the session did not ask for anything specific.
+        if provider in THINKING_OFF_PROVIDERS:
+            return "off"
         if provider == "mock":
             return "off"
         if qa or lite:
             return "off" if qa else "low"
         return "high" if level == "complex" else "low"
 
-    def _tools_for(self, agent, kind: str, lite: bool, workspace: bool) -> list[str]:
+    def _tools_for(self, agent, kind: str, lite: bool, workspace: bool, text: str = "") -> list[str]:
         if not agent.tools:
             return []
         if not workspace and getattr(agent, "kind", "") not in ("plan", "video", "robot"):
@@ -490,6 +572,11 @@ class AgentRuntime:
         # it would remove their primary deliverable tool (make_plan/make_storyboard).
         if lite and TOOL_SCHEMA_TRIM and getattr(agent, "kind", "") not in ("plan", "video"):
             allowed = set(LITE_TOOL_SET) | {"plan_task", "update_plan"}
+            # Web/reference tool schemas are large and irrelevant to ordinary repo
+            # work. Only advertise them when the request is actually about a web
+            # deliverable or a reference file; otherwise they are pure token cost.
+            if not wants_web_tools(text):
+                allowed -= {"web_audit", "web_scaffold", "reference_digest", "reference_compare"}
             names = [name for name in names if name in allowed]
         if not SUBAGENT_ENABLED:
             names = [name for name in names if name != "task"]
@@ -531,7 +618,7 @@ class AgentRuntime:
                 repo_map_text = ""
             try:
                 context_pack_text = await asyncio.to_thread(
-                    repoindex.context_pack, workspace, user_text, 30000, 18
+                    repoindex.context_pack, workspace, user_text, CONTEXT_PACK_MAX_CHARS, 18
                 )
             except Exception:
                 context_pack_text = ""
@@ -571,7 +658,7 @@ class AgentRuntime:
         if summary:
             system += "\n\n--- Compressed history memory ---\n" + summary
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}] + recent
-        tool_names = self._tools_for(agent, kind, lite, bool(workspace))
+        tool_names = self._tools_for(agent, kind, lite, bool(workspace), user_text)
         schemas = self.tools.openai_tools(tool_names)
 
         resumed = self.manager.consume_resume(session_id) if self.manager else False
@@ -902,8 +989,12 @@ class AgentRuntime:
                                 state["reference_outputs"].append(target)
                     await self._register_change_artifact(session_id, call, result)
                 if call.name == "run_shell" and result.ok:
-                    command = str(call.arguments.get("command") or "").lower()
-                    if any(hint in command for hint in VERIFY_CMD_HINTS) and "[exit 0]" in str(result.result):
+                    command = str(call.arguments.get("command") or "")
+                    # A shell redirect/heredoc/script is a real workspace write.
+                    if shell_wrote_files(command):
+                        state["last_write_step"] = state["total_steps"]
+                    # Running the script or tests is a real verification step.
+                    if looks_like_verification(command) and "[exit 0]" in str(result.result):
                         state["last_verify_step"] = state["total_steps"]
                 await self._register_generated_artifact(session_id, call, result)
 
@@ -1372,7 +1463,7 @@ class AgentRuntime:
                     "and rerun the same test. If the same failure fingerprint repeats, change strategy instead of retrying.\n"
                 )
         if matched:
-            parts.append(SkillLibrary.render(matched, skill_how))
+            parts.append(SkillLibrary.render(matched, skill_how, 2600))
         if reference_text:
             parts.append(
                 "\n\n# Reference source contract\n"

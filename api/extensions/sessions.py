@@ -5,6 +5,7 @@ import json
 import os
 import re
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -167,6 +168,40 @@ def _pending(harness, session_id: str):
     return harness.manager.get_pending(session_id)
 
 
+RUN_TERMINAL_STATUSES = {"done", "error", "cancelled", "completed", "failed", "idle"}
+SESSION_TERMINAL_STATUSES = {"done", "error", "cancelled", "idle"}
+
+
+def _parse_ts(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _elapsed_seconds(start: str, end: str) -> float:
+    began = _parse_ts(start)
+    if not began:
+        return 0.0
+    finished = _parse_ts(end) or datetime.now()
+    return round(max(0.0, (finished - began).total_seconds()), 1)
+
+
+def _message_usage(row: dict[str, Any]) -> dict[str, Any]:
+    prompt = int(row.get("prompt_tokens") or 0)
+    completion = int(row.get("completion_tokens") or 0)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "cached_tokens": int(row.get("cached_tokens") or 0),
+        "reasoning_tokens": int(row.get("reasoning_tokens") or 0),
+        "cost_est": float(row.get("cost_est") or 0),
+    }
+
+
 @router.get("/models")
 async def models():
     return ok({"providers": list_models()})
@@ -241,9 +276,30 @@ async def get_session(session_id: str):
     last_event = await harness.storage.last_event(session_id)
     session["last_event_id"] = int(last_event["id"]) if last_event else 0
     runs = await harness.storage._fetch(
-        "SELECT id, status, provider, model, created_at, updated_at FROM runs WHERE session_id=? ORDER BY created_at DESC LIMIT 20",
+        "SELECT id, status, provider, model, output, error, step_count, created_at, updated_at"
+        " FROM runs WHERE session_id=? ORDER BY created_at DESC LIMIT 20",
         (session_id,),
     )
+    for run in runs:
+        # Single canonical lowercase status; callers should not have to normalise.
+        status = str(run.get("status") or "").lower()
+        run["status"] = status
+        run["finished"] = status in RUN_TERMINAL_STATUSES
+        run["started_at"] = run.get("created_at") or ""
+        run["finished_at"] = run.get("updated_at") if run["finished"] else ""
+        run["elapsed_s"] = _elapsed_seconds(run.get("created_at") or "", run.get("updated_at") or "")
+    session["status"] = str(session.get("status") or "").lower()
+    session["active"] = harness.manager.is_active(session_id)
+    latest = runs[0] if runs else {}
+    session["started_at"] = latest.get("created_at") or session.get("created_at") or ""
+    session["finished_at"] = latest.get("finished_at") or ""
+    session["elapsed_s"] = (
+        latest.get("elapsed_s")
+        if latest
+        else _elapsed_seconds(session.get("created_at") or "", session.get("updated_at") or "")
+    )
+    session["finished"] = session["status"] in SESSION_TERMINAL_STATUSES and not session["active"]
+    session["checkpoint"] = await harness.storage.latest_checkpoint(session_id)
     return ok({"session": session, "runs": runs})
 
 
@@ -337,6 +393,8 @@ async def clear_session(session_id: str):
 async def get_messages(session_id: str):
     harness = await get_harness()
     rows = await harness.storage.list_messages(session_id)
+    for row in rows:
+        row["usage"] = _message_usage(row)
     return ok(rows)
 
 

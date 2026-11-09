@@ -56,8 +56,15 @@ TOOL_HEARTBEAT_SEC = float(os.getenv("HAOYUAN_TOOL_HEARTBEAT", "15"))
 SHELL_TIMEOUT = float(os.getenv("HAOYUAN_SHELL_TIMEOUT", "120"))
 
 TOOL_RESULT_MAX_BYTES = int(os.getenv("HAOYUAN_TOOL_RESULT_MAX_BYTES", str(8 * 1024)))
-TOOL_RESULT_CONTEXT_CHARS = int(os.getenv("HAOYUAN_TOOL_RESULT_CONTEXT_CHARS", "6000"))
+# Tool output kept in the model context. Large results dominate history growth on
+# long tasks (every subsequent request re-sends them), so keep this tight; the
+# full result stays in session history for re-reading.
+TOOL_RESULT_CONTEXT_CHARS = int(os.getenv("HAOYUAN_TOOL_RESULT_CONTEXT_CHARS", "4000"))
 TOOL_RESULT_CONTEXT_MARK = "\n...[result truncated; re-read the precise range if needed]"
+# Source preloaded into the system prompt at task start. Re-sent on every step, so it
+# is the single biggest fixed cost on long tasks. 12k chars (~3k tokens) is enough to
+# orient without duplicating what the agent will read on demand.
+CONTEXT_PACK_MAX_CHARS = int(os.getenv("HAOYUAN_CONTEXT_PACK_MAX_CHARS", "12000"))
 
 CONTEXT_COMPACT_TOKENS = int(os.getenv("HAOYUAN_CONTEXT_COMPACT_TOKENS", "32000"))
 CONTEXT_KEEP_RECENT = int(os.getenv("HAOYUAN_CONTEXT_KEEP_RECENT", "10"))
