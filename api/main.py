@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from configs.configs import APP_NAME, APP_VERSION, SERVER_HOST, SERVER_PORT, WEB_DIST_DIR
 from configs.runtime import resolve_free_port, update_runtime
 from core.harness import harness_instance, init_harness
+from core.telemetry import telemetry
 from extensions import approvals, fs, marketplace, plugins, sessions, settings, skills, supervisor, system, usage
 from extensions.ws import ws_endpoint
 
@@ -17,7 +18,9 @@ from extensions.ws import ws_endpoint
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     harness = await init_harness()
+    telemetry.start()
     yield
+    await telemetry.stop()
     await harness.shutdown()
 
 
