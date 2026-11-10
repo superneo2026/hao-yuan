@@ -1274,8 +1274,20 @@ export async function togglePlugin(name, enabled) {
   return result
 }
 
+const DEFAULT_CENTER_URL = 'https://hao-yuan.conductorer.com'
+const LEGACY_CENTER_URLS = ['http://129.226.222.76:8042', 'http://127.0.0.1:8180']
+
+function storedCenterUrl() {
+  const stored = (localStorage.getItem('hy.pluginCenterUrl') || '').trim()
+  if (LEGACY_CENTER_URLS.includes(stored)) {
+    localStorage.setItem('hy.pluginCenterUrl', DEFAULT_CENTER_URL)
+    return DEFAULT_CENTER_URL
+  }
+  return stored
+}
+
 export async function loadMarketplace(center = '') {
-  const target = (center || localStorage.getItem('hy.pluginCenterUrl') || '').trim()
+  const target = (center || storedCenterUrl() || DEFAULT_CENTER_URL).trim()
   state.market.loading = true
   try {
     const data = await api.marketplace(target)

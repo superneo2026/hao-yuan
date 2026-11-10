@@ -30,7 +30,9 @@ const route = useRoute()
 const router = useRouter()
 const corePlugins = new Set(['coding', 'plans', 'video', 'supervisor', 'orchestrator'])
 const tab = computed(() => (route.name === 'plugin-center' || route.query.tab === 'market' ? 'market' : 'installed'))
-const centerInput = ref(localStorage.getItem('hy.pluginCenterUrl') || state.market.centerUrl || 'http://127.0.0.1:8180')
+const DEFAULT_CENTER_URL = 'https://hao-yuan.conductorer.com'
+
+const centerInput = ref(localStorage.getItem('hy.pluginCenterUrl') || state.market.centerUrl || DEFAULT_CENTER_URL)
 const query = ref('')
 const category = ref('all')
 const busyName = ref('')
