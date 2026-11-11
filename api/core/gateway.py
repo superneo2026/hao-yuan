@@ -65,7 +65,7 @@ class ModelGateway:
             handler = self.providers.get(prov)
             if handler is None:
                 continue
-            for attempt in range(2):
+            for attempt in range(3):
                 produced = False
                 try:
                     async for event in handler.stream(messages, tools or [], conf, mdl, thinking):

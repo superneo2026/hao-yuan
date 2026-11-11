@@ -50,9 +50,9 @@ GATE_CONFIRM_TIMEOUT = float(os.getenv("HAOYUAN_GATE_TIMEOUT", "600"))
 AUTO_APPROVE_HIGH_RISK = os.getenv("HAOYUAN_AUTO_APPROVE", "0").strip() in {"1", "true", "yes"}
 
 LLM_CONNECT_TIMEOUT = float(os.getenv("HAOYUAN_LLM_CONNECT_TIMEOUT", "20"))
-LLM_FIRST_CHUNK_TIMEOUT = float(os.getenv("HAOYUAN_LLM_FIRST_CHUNK_TIMEOUT", "90"))
-LLM_STREAM_IDLE_TIMEOUT = float(os.getenv("HAOYUAN_LLM_STREAM_IDLE_TIMEOUT", "60"))
-LLM_TOTAL_TIMEOUT = float(os.getenv("HAOYUAN_LLM_TOTAL_TIMEOUT", "900"))
+LLM_FIRST_CHUNK_TIMEOUT = float(os.getenv("HAOYUAN_LLM_FIRST_CHUNK_TIMEOUT", "180"))
+LLM_STREAM_IDLE_TIMEOUT = float(os.getenv("HAOYUAN_LLM_STREAM_IDLE_TIMEOUT", "300"))
+LLM_TOTAL_TIMEOUT = float(os.getenv("HAOYUAN_LLM_TOTAL_TIMEOUT", "1800"))
 TOOL_TIMEOUT_SEC = float(os.getenv("HAOYUAN_TOOL_TIMEOUT", "300"))
 TOOL_HEARTBEAT_SEC = float(os.getenv("HAOYUAN_TOOL_HEARTBEAT", "15"))
 SHELL_TIMEOUT = float(os.getenv("HAOYUAN_SHELL_TIMEOUT", "120"))
@@ -61,22 +61,22 @@ TOOL_RESULT_MAX_BYTES = int(os.getenv("HAOYUAN_TOOL_RESULT_MAX_BYTES", str(8 * 1
 # Tool output kept in the model context. Large results dominate history growth on
 # long tasks (every subsequent request re-sends them), so keep this tight; the
 # full result stays in session history for re-reading.
-TOOL_RESULT_CONTEXT_CHARS = int(os.getenv("HAOYUAN_TOOL_RESULT_CONTEXT_CHARS", "4000"))
+TOOL_RESULT_CONTEXT_CHARS = int(os.getenv("HAOYUAN_TOOL_RESULT_CONTEXT_CHARS", "2000"))
 TOOL_RESULT_CONTEXT_MARK = "\n...[result truncated; re-read the precise range if needed]"
 # Source preloaded into the system prompt at task start. Re-sent on every step, so it
 # is the single biggest fixed cost on long tasks. 12k chars (~3k tokens) is enough to
 # orient without duplicating what the agent will read on demand.
-CONTEXT_PACK_MAX_CHARS = int(os.getenv("HAOYUAN_CONTEXT_PACK_MAX_CHARS", "12000"))
+CONTEXT_PACK_MAX_CHARS = int(os.getenv("HAOYUAN_CONTEXT_PACK_MAX_CHARS", "6000"))
 
-CONTEXT_COMPACT_TOKENS = int(os.getenv("HAOYUAN_CONTEXT_COMPACT_TOKENS", "32000"))
-CONTEXT_KEEP_RECENT = int(os.getenv("HAOYUAN_CONTEXT_KEEP_RECENT", "10"))
+CONTEXT_COMPACT_TOKENS = int(os.getenv("HAOYUAN_CONTEXT_COMPACT_TOKENS", "20000"))
+CONTEXT_KEEP_RECENT = int(os.getenv("HAOYUAN_CONTEXT_KEEP_RECENT", "8"))
 CONTEXT_SUMMARY_MAX_CHARS = int(os.getenv("HAOYUAN_CONTEXT_SUMMARY_MAX_CHARS", "2400"))
-MID_COMPACT_EVERY = int(os.getenv("HAOYUAN_MID_COMPACT_EVERY", "8"))
-MID_COMPACT_TOKENS = int(os.getenv("HAOYUAN_MID_COMPACT_TOKENS", "24000"))
+MID_COMPACT_EVERY = int(os.getenv("HAOYUAN_MID_COMPACT_EVERY", "4"))
+MID_COMPACT_TOKENS = int(os.getenv("HAOYUAN_MID_COMPACT_TOKENS", "14000"))
 MID_COMPACT_MIN_MSGS = int(os.getenv("HAOYUAN_MID_COMPACT_MIN_MSGS", "14"))
 TOOL_AGING_KEEP = int(os.getenv("HAOYUAN_TOOL_AGING_KEEP", "4"))
 TOOL_AGING_CHARS = int(os.getenv("HAOYUAN_TOOL_AGING_CHARS", "300"))
-CONTEXT_HARD_LIMIT = int(os.getenv("HAOYUAN_CONTEXT_HARD_LIMIT", "96000"))
+CONTEXT_HARD_LIMIT = int(os.getenv("HAOYUAN_CONTEXT_HARD_LIMIT", "48000"))
 CONTEXT_HARD_TRUNCATE_CHARS = int(os.getenv("HAOYUAN_CONTEXT_HARD_TRUNCATE_CHARS", "800"))
 STRUCTURED_DIGEST_ENABLED = os.getenv("HAOYUAN_STRUCTURED_DIGEST", "1").strip() not in {"0", "false"}
 DIGEST_HEAD_CHARS = int(os.getenv("HAOYUAN_DIGEST_HEAD_CHARS", "500"))

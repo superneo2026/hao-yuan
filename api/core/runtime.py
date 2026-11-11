@@ -1450,6 +1450,13 @@ class AgentRuntime:
                 "4. After code edits, run the relevant verification command once.\n"
                 "5. Finish with a short summary of files changed, verification result, and any remaining risk.\n"
             )
+            parts.append(
+                "\n# Acceptance protocol (highest priority)\n"
+                "- If the task ships a checker or test entry (e.g. /app/check_*.py, /app/tests, run-tests.sh, *_test.py, pytest), run it and keep iterating until it passes before you finish.\n"
+                "- Produce every deliverable at the exact path/format the task names; re-read the requirement before writing the final file.\n"
+                "- You are running unattended: never ask the user questions. If something is ambiguous, choose the most literal reading and proceed.\n"
+                "- Do not end the turn with a plan or an apology: end only after the artifacts exist and (if available) the checker passes.\n"
+            )
             if lite:
                 parts.append("This is a lightweight task: keep the loop short, avoid unnecessary planning, and verify once.\n")
             if TWO_PHASE_PLAN and not lite:
