@@ -1,0 +1,16 @@
+api/env1/
+api/data/*
+!api/data/.gitkeep
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+web/node_modules/
+web/dist/
+web/.vite/
+web/.vite-temp/
+test/
+patches/
+*.bundle
+*.log
+.env
+api/configs/secrets_local.py
