@@ -179,6 +179,13 @@ export const api = {
   plugins: () => request('/api/plugins'),
   pluginContributions: () => request('/api/plugins/contributions'),
 
+  notes: (page = 1, pageSize = 8, q = '') => request(`/api/notes${qs({ page, page_size: pageSize, q })}`),
+  note: (id) => request(`/api/notes/${encodeURIComponent(id)}`),
+  createNote: (body) => request('/api/notes', { method: 'POST', body: JSON.stringify(body) }),
+  updateNote: (id, body) => request(`/api/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteNote: (id) => request(`/api/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  reorderNote: (noteId, targetIndex) => request('/api/notes/reorder', { method: 'PUT', body: JSON.stringify({ note_id: noteId, target_index: targetIndex }) }),
+
   remoteOverview: () => request('/api/remote-management/overview'),
   remoteSettings: (body) => request('/api/remote-management/settings', { method: 'PUT', body: JSON.stringify(body) }),
   remoteCreateKey: (body) => request('/api/remote-management/keys', { method: 'POST', body: JSON.stringify(body) }),

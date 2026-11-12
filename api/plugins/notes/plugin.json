@@ -1,0 +1,13 @@
+{
+  "name": "notes",
+  "title": "Notes",
+  "version": "1.0.0",
+  "description": "A lightweight global notes drawer with CRUD, pagination and drag-to-reorder.",
+  "author": "HaoYuan",
+  "default_enabled": true,
+  "backend": "plugin.py",
+  "routes": "routes.py",
+  "contributes": {
+    "routes": ["/notes"]
+  }
+}

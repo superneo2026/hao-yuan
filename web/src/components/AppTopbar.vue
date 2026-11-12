@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { openPalette, setTheme, state } from '../stores/app'
+import { openPalette, setTheme, state, toggleNotes } from '../stores/app'
 import { t } from '../i18n'
 import AccountMenu from './AccountMenu.vue'
 import Icon from './Icon.vue'
@@ -49,6 +49,10 @@ const connectionLabel = computed(() => {
         <span class="status-dot" :class="state.connection === 'connected' ? 'done' : state.connection === 'connecting' ? 'running' : 'error'" />
         {{ connectionLabel }}
       </span>
+      <button class="notes-top-btn" :title="`${t('notes.button')} (Ctrl/⌘ + Alt + N)`" @click="toggleNotes">
+        <Icon name="document" :size="15" />
+        <span>{{ t('notes.button') }}</span>
+      </button>
       <button class="icon-btn top-icon" :title="state.theme === 'dark' ? t('nav.switchLight') : t('nav.switchDark')" @click="setTheme(state.theme === 'dark' ? 'light' : 'dark')">
         <Icon :name="state.theme === 'dark' ? 'sun' : 'moon'" :size="16" />
       </button>
@@ -134,9 +138,33 @@ const connectionLabel = computed(() => {
   font-weight: 560;
 }
 .top-icon { width: 30px; height: 30px; }
+.notes-top-btn {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--brand-line);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11.5px;
+  font-weight: 620;
+  transition: background .16s var(--ease), border-color .16s var(--ease), transform .16s var(--ease);
+}
+.notes-top-btn:hover {
+  background: color-mix(in srgb, var(--brand) 20%, transparent);
+  border-color: var(--brand);
+  transform: translateY(-1px);
+}
+.notes-top-btn:active { transform: translateY(0); }
 .top-sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
 @media (max-width: 900px) {
   .command-pill, .conn-pill, .crumb-brand { display: none; }
+}
+@media (max-width: 820px) {
+  .notes-top-btn span { display: none; }
+  .notes-top-btn { padding: 0 8px; }
 }
 @media (max-width: 720px) {
   .app-topbar { padding: 0 14px; gap: 8px; }

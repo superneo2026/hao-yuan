@@ -74,6 +74,7 @@ export const state = reactive({
   pluginNavOpen: localStorage.getItem('hy.pluginNav') !== '0',
   remoteNavOpen: localStorage.getItem('hy.remoteNav') !== '0',
   mobileNavOpen: false,
+  notesOpen: false,
   paletteOpen: false,
   newTaskOpen: false,
   theme: localStorage.getItem(THEME) || 'light',
@@ -166,6 +167,13 @@ export function openPalette() {
 }
 export function closePalette() {
   state.paletteOpen = false
+}
+
+export function closeNotes() {
+  state.notesOpen = false
+}
+export function toggleNotes() {
+  state.notesOpen = !state.notesOpen
 }
 
 export function togglePluginNav() {

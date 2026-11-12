@@ -55,6 +55,7 @@ const icons = {
   layers: '<path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  grip: '<circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>',
   panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
   trash2: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   circle: '<circle cx="12" cy="12" r="8"/>',

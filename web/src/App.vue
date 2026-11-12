@@ -11,6 +11,7 @@ import {
   setTheme,
   startNewTask,
   state,
+  toggleNotes,
   togglePluginNav,
   toggleRemoteNav,
   toggleSidebar
@@ -22,6 +23,7 @@ import CommandPalette from './components/CommandPalette.vue'
 import Icon from './components/Icon.vue'
 import LanguageSelect from './components/LanguageSelect.vue'
 import NewTaskModal from './components/NewTaskModal.vue'
+import NotesDrawer from './components/NotesDrawer.vue'
 import SessionList from './components/SessionList.vue'
 import SupervisorDock from './components/SupervisorDock.vue'
 import ToastStack from './components/ToastStack.vue'
@@ -109,6 +111,9 @@ function onGlobalKey(event) {
   if (meta && event.key.toLowerCase() === 'k') {
     event.preventDefault()
     openPalette()
+  } else if (meta && event.altKey && event.key.toLowerCase() === 'n') {
+    event.preventDefault()
+    toggleNotes()
   } else if (meta && event.key.toLowerCase() === 'n') {
     event.preventDefault()
     newTask()
@@ -276,6 +281,7 @@ onBeforeUnmount(() => {
 
   <CommandPalette />
   <ToastStack />
+  <NotesDrawer v-if="!authBlocked && !state.authSetupOpen" />
   <NewTaskModal v-if="state.newTaskOpen" @close="state.newTaskOpen = false" />
   <WorkspaceSetupModal v-if="state.workspaceSetupOpen" @close="state.workspaceSetupOpen = false" />
   <UserAccountModal v-if="state.accountOpen" @close="state.accountOpen = false" />

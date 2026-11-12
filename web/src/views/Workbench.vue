@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { closeSessionTab, openDiff, renameSession, selectSession, startNewTask, state } from '../stores/app'
+import { closeSessionTab, openDiff, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
@@ -145,6 +145,7 @@ function closeDiff() {
         <LanguageSelect />
         <button class="btn sm" :title="t('nav.newTask')" @click="openNew"><Icon name="plus" :size="14" /><span class="hide-sm">{{ t('nav.newTask') }}</span></button>
         <button class="icon-btn console-btn" :title="t('nav.console')" @click="goConsole"><Icon name="activity" :size="17" /></button>
+        <button class="icon-btn" :class="{ active: state.notesOpen }" :title="`${t('notes.button')} (Ctrl/⌘ + Alt + N)`" @click="toggleNotes"><Icon name="document" :size="17" /></button>
         <button class="icon-btn" :class="{ active: rightOpen }" :title="t('session.togglePanel')" @click="toggleRight">
           <Icon name="panel" :size="17" />
         </button>
