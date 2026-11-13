@@ -144,7 +144,6 @@ function closeDiff() {
       <div class="topbar-actions">
         <LanguageSelect />
         <button class="btn sm" :title="t('nav.newTask')" @click="openNew"><Icon name="plus" :size="14" /><span class="hide-sm">{{ t('nav.newTask') }}</span></button>
-        <button class="icon-btn console-btn" :title="t('nav.console')" @click="goConsole"><Icon name="activity" :size="17" /></button>
         <button class="icon-btn" :class="{ active: state.notesOpen }" :title="`${t('notes.button')} (Ctrl/⌘ + Alt + N)`" @click="toggleNotes"><Icon name="document" :size="17" /></button>
         <button class="icon-btn" :class="{ active: rightOpen }" :title="t('session.togglePanel')" @click="toggleRight">
           <Icon name="panel" :size="17" />
@@ -331,7 +330,6 @@ function closeDiff() {
 @media (max-width: 640px) {
   .topbar-meta { display: none; }
   .topbar-title { max-width: 46vw; }
-  .console-btn { display: none; }
   .session-tabs { padding: 6px 10px; }
   .session-tab { max-width: 168px; }
   .session-tab .tab-title { max-width: 112px; }
