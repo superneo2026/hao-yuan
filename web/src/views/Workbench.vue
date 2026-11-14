@@ -1,7 +1,7 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { closeSessionTab, openDiff, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
+import { closeSessionTab, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
@@ -49,6 +49,36 @@ function openTab(tab) {
 
 function closeTab(id) {
   closeSessionTab(id)
+}
+
+const tabDrag = reactive({ id: '', overId: '', edge: '' })
+
+function clearTabDrag() {
+  tabDrag.id = ''
+  tabDrag.overId = ''
+  tabDrag.edge = ''
+}
+
+function onTabDragStart(event, tab) {
+  tabDrag.id = tab.id
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', tab.id)
+}
+
+function onTabDragOver(event, tab) {
+  if (!tabDrag.id || tab.id === tabDrag.id) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  const rect = event.currentTarget.getBoundingClientRect()
+  tabDrag.overId = tab.id
+  tabDrag.edge = event.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+}
+
+function onTabDrop(event, tab) {
+  if (!tabDrag.id || tab.id === tabDrag.id) return
+  event.preventDefault()
+  reorderSessionTabs(tabDrag.id, tab.id, tabDrag.edge)
+  clearTabDrag()
 }
 
 function onTabsWheel(event) {
@@ -157,15 +187,26 @@ function closeDiff() {
         v-for="tab in tabs"
         :key="tab.id"
         class="session-tab"
-        :class="{ active: tab.id === state.currentId }"
+        :class="{
+          active: tab.id === state.currentId,
+          dragging: tabDrag.id === tab.id,
+          'drop-before': tabDrag.overId === tab.id && tabDrag.edge === 'before',
+          'drop-after': tabDrag.overId === tab.id && tabDrag.edge === 'after'
+        }"
         role="tab"
         tabindex="0"
         :aria-selected="tab.id === state.currentId"
         :data-tab-id="tab.id"
         :title="sessionTitle(tab)"
+        draggable="true"
         @click="openTab(tab)"
         @keydown.enter.prevent="openTab(tab)"
         @keydown.space.prevent="openTab(tab)"
+        @dragstart="onTabDragStart($event, tab)"
+        @dragenter="onTabDragOver($event, tab)"
+        @dragover="onTabDragOver($event, tab)"
+        @drop="onTabDrop($event, tab)"
+        @dragend="clearTabDrag"
       >
         <span class="status-dot" :class="tab.status === 'waiting_input' ? 'waiting' : tab.status" />
         <span class="tab-title truncate">{{ sessionTitle(tab) }}</span>
@@ -300,6 +341,11 @@ function closeDiff() {
 .session-tab:hover .tab-close, .session-tab.active .tab-close { opacity: 1; }
 .session-tab .tab-close:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .session-tab:focus-visible, .session-tab .tab-close:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.session-tab.dragging { opacity: .4; }
+.session-tab.drop-before { box-shadow: -2px 0 0 0 var(--brand); }
+.session-tab.drop-after { box-shadow: 2px 0 0 0 var(--brand); }
+.session-tab * { pointer-events: none; }
+.session-tab .tab-close { pointer-events: auto; }
 .workbench-body { flex: 1; min-height: 0; display: grid; }
 .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .resizer { width: 5px; cursor: col-resize; background: transparent; position: relative; z-index: 4; }

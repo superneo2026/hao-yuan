@@ -869,6 +869,22 @@ export async function closeSessionTab(id) {
   else clearCurrentSession()
 }
 
+export function reorderSessionTabs(fromId, toId, edge = 'before') {
+  if (!fromId || !toId || fromId === toId) return
+  const from = state.openSessionIds.indexOf(fromId)
+  if (from < 0) return
+  state.openSessionIds.splice(from, 1)
+  let target = state.openSessionIds.indexOf(toId)
+  if (target < 0) {
+    state.openSessionIds.splice(Math.min(from, state.openSessionIds.length), 0, fromId)
+    persistOpenTabs()
+    return
+  }
+  if (edge === 'after') target += 1
+  state.openSessionIds.splice(target, 0, fromId)
+  persistOpenTabs()
+}
+
 export async function refreshCurrent() {
   if (!state.currentId) return
   try {
