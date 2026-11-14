@@ -346,6 +346,7 @@ button { cursor: pointer; }
 }
 @media (max-width: 640px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .app-shell.mobile-nav-open { z-index: auto; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: 280px; z-index: 70; transform: translateX(-100%); transition: transform .24s var(--ease); }
   .app-shell.mobile-nav-open .sidebar { transform: translateX(0); }
   .sidebar .collapse-btn { display: none; }

@@ -280,3 +280,18 @@ def test_orchestrator_requires_git(client, tmp_path):
     body = response.json()
     assert body["code"] == 500
     assert "git" in body["message"].lower()
+
+
+def test_purge_all_sessions(client):
+    ids = []
+    for index in range(2):
+        session = client.post("/api/sessions", json={"kind": "general", "title": f"bulk-{index}"}).json()["data"]
+        client.post(f"/api/sessions/{session['id']}/messages", json={"content": f"message-{index}"})
+        ids.append(session["id"])
+    result = client.delete("/api/sessions")
+    assert result.status_code == 200
+    assert result.json()["data"]["purged"] >= 2
+    for session_id in ids:
+        assert client.get(f"/api/sessions/{session_id}").json()["code"] == 404
+    assert client.get(f"/api/sessions/{ids[0]}/messages").json()["data"] == []
+    assert client.get("/api/sessions").json()["data"] == []

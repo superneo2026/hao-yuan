@@ -74,6 +74,7 @@ export const state = reactive({
   pluginNavOpen: localStorage.getItem('hy.pluginNav') !== '0',
   remoteNavOpen: localStorage.getItem('hy.remoteNav') !== '0',
   mobileNavOpen: false,
+  homeRequested: false,
   notesOpen: false,
   paletteOpen: false,
   newTaskOpen: false,
@@ -1086,6 +1087,16 @@ export async function clearMessages() {
   state.messages = []
   state.artifacts = []
   toast(t('toast.conversationCleared'), 'good')
+}
+
+export async function purgeAllSessions() {
+  const result = await api.purgeAllSessions()
+  state.openSessionIds = []
+  persistOpenTabs()
+  clearCurrentSession()
+  await loadSessions()
+  toast(t('toast.allSessionsDeleted', { count: result?.purged ?? 0 }), 'good')
+  return result
 }
 
 export async function renameSession(title) {

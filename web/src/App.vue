@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   authBlocked,
@@ -7,10 +7,12 @@ import {
   closePalette,
   markUnauthorized,
   openPalette,
+  purgeAllSessions,
   selectSession,
   setTheme,
   startNewTask,
   state,
+  toast,
   toggleNotes,
   togglePluginNav,
   toggleRemoteNav,
@@ -22,6 +24,7 @@ import AuthGate from './components/AuthGate.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import Icon from './components/Icon.vue'
 import LanguageSelect from './components/LanguageSelect.vue'
+import Modal from './components/Modal.vue'
 import NewTaskModal from './components/NewTaskModal.vue'
 import NotesDrawer from './components/NotesDrawer.vue'
 import SessionList from './components/SessionList.vue'
@@ -53,10 +56,11 @@ watch(
   () => {
     const id = typeof route.params.id === 'string' ? route.params.id : ''
     if (route.name === 'session') {
+      state.homeRequested = false
       if (id && id !== state.currentId) selectSession(id, false)
       return
     }
-    if (route.name === 'workbench' && !id && state.currentId) {
+    if (route.name === 'workbench' && !id && state.currentId && !state.homeRequested) {
       router.replace({ path: `/s/${encodeURIComponent(state.currentId)}`, query: { ...route.query } })
     }
   }
@@ -106,6 +110,34 @@ async function newTask() {
   if (session) router.push(`/s/${encodeURIComponent(session.id)}`)
 }
 
+function goHome() {
+  state.mobileNavOpen = false
+  state.homeRequested = true
+  router.push('/')
+}
+
+const clearConfirmOpen = ref(false)
+const clearing = ref(false)
+const sessionCount = computed(() => state.sessions.length)
+
+function openClearConfirm() {
+  state.mobileNavOpen = false
+  clearConfirmOpen.value = true
+}
+
+async function doClearHistory() {
+  if (clearing.value) return
+  clearing.value = true
+  try {
+    await purgeAllSessions()
+    clearConfirmOpen.value = false
+  } catch (error) {
+    toast(error?.message || String(error), 'bad')
+  } finally {
+    clearing.value = false
+  }
+}
+
 function onGlobalKey(event) {
   const meta = event.metaKey || event.ctrlKey
   if (meta && event.key.toLowerCase() === 'k') {
@@ -145,11 +177,13 @@ onBeforeUnmount(() => {
   <div v-else class="app-shell" :class="{ 'sidebar-collapsed': state.sidebarCollapsed, 'mobile-nav-open': state.mobileNavOpen }">
     <aside class="sidebar">
       <div class="sidebar-head">
-        <div class="brand-mark">H</div>
-        <div class="brand-text">
-          <b>{{ t('app.title') }}</b>
-          <span>{{ t('app.tagline') }}</span>
-        </div>
+        <button type="button" class="brand-btn" :title="t('nav.workbench')" @click="goHome">
+          <div class="brand-mark">H</div>
+          <div class="brand-text">
+            <b>{{ t('app.title') }}</b>
+            <span>{{ t('app.tagline') }}</span>
+          </div>
+        </button>
         <button
           class="icon-btn collapse-btn"
           :title="state.sidebarCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')"
@@ -253,6 +287,18 @@ onBeforeUnmount(() => {
         <SessionList @new="newTask" />
       </div>
 
+      <div class="sidebar-clear">
+        <button
+          type="button"
+          class="clear-history-btn"
+          :title="t('nav.clearHistory')"
+          @click="openClearConfirm"
+        >
+          <Icon name="trash" :size="15" />
+          <span class="clear-history-label">{{ t('nav.clearHistory') }}</span>
+        </button>
+      </div>
+
       <div class="sidebar-foot">
         <span class="status-dot" :class="state.connection === 'connected' ? 'done' : state.connection === 'connecting' ? 'running' : 'error'" />
         <span class="foot-text tiny muted">{{ connectionLabel }}</span>
@@ -283,6 +329,17 @@ onBeforeUnmount(() => {
   <ToastStack />
   <NotesDrawer v-if="!authBlocked && !state.authSetupOpen" />
   <NewTaskModal v-if="state.newTaskOpen" @close="state.newTaskOpen = false" />
+  <Modal v-if="clearConfirmOpen" :title="t('nav.clearHistory')" width="440px" @close="clearConfirmOpen = false">
+    <p class="clear-history-desc">
+      {{ sessionCount ? t('clearHistory.desc', { count: sessionCount }) : t('clearHistory.empty') }}
+    </p>
+    <template #footer>
+      <button class="btn" :disabled="clearing" @click="clearConfirmOpen = false">{{ t('common.cancel') }}</button>
+      <button v-if="sessionCount" class="btn danger" :disabled="clearing" @click="doClearHistory">
+        {{ clearing ? t('clearHistory.clearing') : t('clearHistory.confirm') }}
+      </button>
+    </template>
+  </Modal>
   <WorkspaceSetupModal v-if="state.workspaceSetupOpen" @close="state.workspaceSetupOpen = false" />
   <UserAccountModal v-if="state.accountOpen" @close="state.accountOpen = false" />
   <SupervisorDock v-if="!authBlocked && !state.authSetupOpen" />
@@ -301,6 +358,23 @@ onBeforeUnmount(() => {
   box-shadow: inset -1px 0 0 color-mix(in srgb, #fff 5%, transparent);
 }
 .sidebar-head { padding: 20px 16px 14px; gap: 12px; }
+.brand-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 13px;
+  transition: filter .16s var(--ease), transform .16s var(--ease);
+}
+.brand-btn:hover .brand-mark { filter: brightness(1.1) saturate(1.05); }
+.brand-btn:active { transform: scale(.985); }
+.brand-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .brand-mark {
   border-radius: 13px;
   box-shadow: 0 12px 32px color-mix(in srgb, var(--brand) 38%, transparent);
@@ -308,6 +382,32 @@ onBeforeUnmount(() => {
 .brand-text b { font-size: 15.5px; letter-spacing: -.02em; }
 .brand-text span { font-size: 9.5px; letter-spacing: .15em; text-transform: uppercase; color: var(--faint); }
 .collapse-btn { width: 30px; height: 30px; }
+
+.sidebar-clear { padding: 8px 12px; }
+.clear-history-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 11px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--bad) 26%, var(--line));
+  background: transparent;
+  color: color-mix(in srgb, var(--bad) 72%, var(--muted));
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 560;
+  cursor: pointer;
+  transition: background .16s var(--ease), color .16s var(--ease), border-color .16s var(--ease);
+}
+.clear-history-btn:hover {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+.clear-history-btn:disabled { opacity: .55; cursor: default; }
+.clear-history-desc { margin: 0; font-size: 13px; line-height: 1.65; color: var(--ink-2); }
 
 .new-task-btn {
   position: relative;
@@ -420,6 +520,8 @@ onBeforeUnmount(() => {
 .sidebar-collapsed .nav-parent { justify-content: center; padding: 9px 0; }
 .sidebar-collapsed .new-task-btn { padding: 0; }
 .sidebar-collapsed .sidebar-foot { flex-direction: column; gap: 7px; padding: 10px 8px; }
+.sidebar-collapsed .clear-history-label { display: none; }
+.sidebar-collapsed .clear-history-btn { justify-content: center; padding: 9px 0; }
 .sidebar-collapsed .sidebar-foot .spacer { display: none; }
 .sidebar-collapsed .sidebar-foot .foot-text { display: none; }
 @media (min-width: 641px) and (max-width: 860px) {

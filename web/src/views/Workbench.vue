@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { closeSessionTab, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
@@ -15,6 +15,7 @@ import RightPanel from '../components/RightPanel.vue'
 import StatusPill from '../components/StatusPill.vue'
 
 const router = useRouter()
+const route = useRoute()
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
 const shortcutLabel = isMac ? '⌘ N' : 'Ctrl N'
 const RIGHT_PANEL_KEY = 'hy.rightOpen.v2'
@@ -42,7 +43,13 @@ watch(
 )
 
 function openTab(tab) {
-  if (tab.id === state.currentId) return
+  if (tab.id === state.currentId) {
+    if (state.homeRequested) {
+      state.homeRequested = false
+      router.push(`/s/${encodeURIComponent(tab.id)}`)
+    }
+    return
+  }
   selectSession(tab.id)
   router.push(`/s/${encodeURIComponent(tab.id)}`)
 }
@@ -224,7 +231,7 @@ function closeDiff() {
       </div>
     </div>
 
-    <div v-if="!session" class="no-session">
+    <div v-if="!session || state.homeRequested" class="no-session">
       <div class="empty-state">
         <div class="empty-inner">
           <div class="welcome-mark">

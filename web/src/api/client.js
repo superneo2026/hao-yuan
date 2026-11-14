@@ -158,6 +158,7 @@ export const api = {
   hideSession: (id) => request(`/api/sessions/${id}`, { method: 'DELETE' }),
   unhideSession: (id) => request(`/api/sessions/${id}/unhide`, { method: 'POST' }),
   purgeSession: (id) => request(`/api/sessions/${id}/purge`, { method: 'DELETE' }),
+  purgeAllSessions: () => request('/api/sessions', { method: 'DELETE' }),
   clearSession: (id) => request(`/api/sessions/${id}/clear`, { method: 'POST' }),
   messages: (id, { limit = 0, before = 0 } = {}) => request(`/api/sessions/${id}/messages${qs({ limit, before })}`),
   sendMessage: (id, content, locale = '') => request(`/api/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify({ content, locale }) }),

@@ -385,6 +385,21 @@ async def patch_session(session_id: str, body: dict[str, Any]):
     return ok(await harness.manager.get_session(session_id))
 
 
+@router.delete("/sessions")
+async def purge_all_sessions():
+    harness = await get_harness()
+    rows = await harness.storage._fetch("SELECT id FROM sessions")
+    purged = 0
+    for row in rows:
+        try:
+            await harness.manager.purge(row["id"])
+            purged += 1
+        except Exception:
+            continue
+    await harness.storage.vacuum()
+    return ok({"purged": purged})
+
+
 @router.delete("/sessions/{session_id}")
 async def hide_session(session_id: str):
     harness = await get_harness()
