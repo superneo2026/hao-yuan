@@ -12,6 +12,7 @@ from configs.secrets import (
     MIMO_MODEL,
     ZHIPU_API_KEY,
     ZHIPU_BASE_URL,
+    global_config,
 )
 
 
@@ -102,6 +103,17 @@ def price_for(provider: str, model: str | None = None) -> dict[str, float]:
 def auto_default() -> tuple[str, str]:
     if os.getenv("HAOYUAN_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes"}:
         return "mock", "mock-deterministic"
+    gp = global_config("PROVIDER")
+    gm = global_config("MODEL")
+    if gp and gp != "auto" and gp in PROVIDERS:
+        conf = PROVIDERS[gp]
+        if gm and gm != "auto" and gm in conf.models:
+            return gp, gm
+        return gp, conf.default_model
+    if gm and gm != "auto":
+        for name, conf in PROVIDERS.items():
+            if gm in conf.models:
+                return name, gm
     if DEEPSEEK_API_KEY:
         return "deepseek", DEEPSEEK_MODEL
     if ZHIPU_API_KEY:

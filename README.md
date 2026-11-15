@@ -109,6 +109,38 @@ Kernel（会话 / 事件 / 工具注册 / 策略 / 模型网关 / 审批）
 - Node.js 18+
 - Windows / Linux / macOS
 
+### npm 安装（推荐）
+
+```bash
+# 前提：Node.js 18+、Python 3.10+
+npm install -g haoyuan
+
+# 国内加速：
+npm install -g haoyuan --registry=https://registry.npmmirror.com
+
+# 终端对话（首次自动创建 venv、安装依赖）
+haoyuan
+
+# 启动服务并自动打开网页
+haoyuan web
+```
+
+| 命令 | 作用 |
+|---|---|
+| `haoyuan` | 终端对话（流式输出、工具调用、审批确认） |
+| `haoyuan --model x/y` | 以指定模型启动对话（如 `--model deepseek/deepseek-flash`） |
+| `haoyuan web` | 启动服务并自动打开网页 |
+| `haoyuan web --no-open` | 启动服务但不打开浏览器 |
+| `haoyuan --version` / `-V` | 查看版本号 |
+| `haoyuan config` | 全局配置文件（模型 Key 等），`--open` 直接打开编辑 |
+| `haoyuan login` / `haoyuan logout` | 账号保护开启时登录 / 清除本地令牌 |
+| `haoyuan setup` | 仅预装依赖 |
+| `haoyuan help` | 显示帮助 |
+
+终端内命令：`/models` 查看/选择模型（序号选择，`/model x/y` 直选）、`/new` 新建会话、`/web` 在浏览器打开当前会话、`/cancel` 取消当前任务、`/exit` 退出（Ctrl+C 同样有效）。
+
+网页默认地址 `http://127.0.0.1:8030`，端口被占用自动 +1。未配置模型 Key 时使用内置 `mock` 模型，会话、工具调用、审批与前端均可完整运行。
+
 ### Windows 一键启动
 
 ```bat
@@ -164,31 +196,44 @@ npm run dev                     # http://localhost:8130，被占用时自动 +1�
 
 ### 配置模型
 
+**全局配置文件（推荐）** —— 固定用户级路径，重装/升级不受影响：
+
+```bash
+haoyuan config          # 首次运行自动创建配置文件并显示路径
+haoyuan config --open   # 直接在编辑器中打开
+```
+
+路径：`~/.config/haoyuan/config.json`（Windows 即 `C:\Users\<你>\.config\haoyuan\config.json`，可用环境变量 `HAOYUAN_CONFIG` 覆盖）：
+
+```json
+{
+  "DEEPSEEK_API_KEY": "sk-...",
+  "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+  "DEEPSEEK_MODEL": "deepseek-flash",
+  "ZHIPU_API_KEY": "",
+  "MIMO_API_KEY": "",
+  "PROVIDER": "",
+  "MODEL": ""
+}
+```
+
+`PROVIDER` / `MODEL` 可锁定默认模型（如 `"MODEL": "deepseek-v4-pro"`，留空则按已配置 Key 自动选择）。
+
+**包内配置（可选）**：
+
 ```bash
 copy api\configs\secrets_example.py api\configs\secrets_local.py
 ```
 
-编辑 `api/configs/secrets_local.py`：
+编辑 `api/configs/secrets_local.py`，字段同上（Python 常量格式）。适用于源码部署；npm 全局安装时该文件位于包目录内，升级会被清除，建议优先用全局配置。
 
-```python
-DEEPSEEK_API_KEY = "sk-..."
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-flash"
-
-# 可选：智谱
-ZHIPU_API_KEY = ""
-
-# 可选：小米 MiMo（公平评测使用的模型）
-MIMO_API_KEY = "tp-..."
-MIMO_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
-MIMO_MODEL = "mimo-v2.6-flash"
-```
-
-也可以使用环境变量（优先级高于文件）：
+**环境变量**（优先级最高）：
 
 ```powershell
 $env:DEEPSEEK_API_KEY="sk-..."
 ```
+
+优先级：环境变量 > 全局配置文件 > `secrets_local.py`。保存后重新运行 `haoyuan` 生效；服务健康检查 `GET /api/health` 的 `key_source` 会显示 Key 来源。
 
 **未配置任何 Key 时自动使用本地 `mock` 模型**，完整跑通会话、工具调用、审批、事件与前端。
 

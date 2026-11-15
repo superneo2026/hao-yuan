@@ -1,6 +1,6 @@
 {
   "name": "haoyuan",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "豪源 · HaoYuan — 个人指挥 AI 实现多个 AI 员工异步并行工作的 AI 工作室",
   "bin": {
     "haoyuan": "bin/haoyuan.js"
@@ -13,9 +13,9 @@
     "api/data/.gitkeep",
     "!api/**/__pycache__/**",
     "!api/**/*.pyc",
+    "!api/configs/secrets_local.py",
     "web/**",
     "!web/node_modules/**",
-    "!web/dist/**",
     "desktop/",
     "docs/",
     "start.sh",
@@ -27,7 +27,7 @@
     "AGENTS.md"
   ],
   "scripts": {
-    "postinstall": "node bin/haoyuan.js setup",
+    "postinstall": "node bin/haoyuan.js postinstall",
     "setup": "node bin/haoyuan.js setup",
     "build": "node bin/haoyuan.js build",
     "start": "node bin/haoyuan.js start"
