@@ -627,4 +627,4 @@ npm run dev        # 开发模式，/api 与 /ws 自动代理到后端实际端�
 
 ## License
 
-Private project. All rights reserved.
+本项目基于 [MIT License](LICENSE) 开源发布，可自由使用、修改与分发。
