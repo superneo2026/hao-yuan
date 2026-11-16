@@ -347,6 +347,45 @@ def needs_write(text: str, qa: bool, kind: str, workspace: bool) -> bool:
     return not any(hint in value for hint in READ_ONLY_HINTS)
 
 
+_OUTPUT_HINT_RE = re.compile(
+    r"(?:输出|保存|写到|写入|生成|交付|放到|存到|放在|导出|output|save|write|deliver)"
+    r"[^\n]{0,40}?[:：]?\s*"
+    r"((?:[A-Za-z]:[\\/]|/)[^\s\"'<>|，。；、）】]+)",
+    re.I,
+)
+
+
+def extract_output_targets(text: str, workspace: str) -> list[str]:
+    targets: list[str] = []
+    for match in _OUTPUT_HINT_RE.finditer(text or ""):
+        raw = match.group(1).strip().rstrip(".,;:!?)]}\"'")
+        if not raw:
+            continue
+        full = raw if os.path.isabs(raw) else os.path.join(workspace, raw)
+        full = os.path.normpath(full)
+        if full not in targets:
+            targets.append(full)
+    return targets
+
+
+def output_target_ready(target: str, since: float) -> bool:
+    if os.path.isdir(target):
+        for root, _dirs, files in os.walk(target):
+            for name in files:
+                try:
+                    if os.path.getmtime(os.path.join(root, name)) >= since:
+                        return True
+                except OSError:
+                    continue
+        return False
+    if os.path.isfile(target):
+        try:
+            return os.path.getmtime(target) >= since
+        except OSError:
+            return False
+    return False
+
+
 def _workspace_diff(workspace: str, limit: int = 24000) -> str:
     if not workspace:
         return ""
@@ -696,6 +735,9 @@ class AgentRuntime:
             "reference_outputs": [],
             "reference_drift": "",
             "fidelity_nudges": 0,
+            "output_targets": extract_output_targets(user_text, workspace) if write_required else [],
+            "delivery_since": time.time(),
+            "output_nudges": 0,
         }
         max_total = AGENT_MAX_TOTAL_STEPS
         session = await self.storage.get_session(session_id) or session
@@ -816,10 +858,11 @@ class AgentRuntime:
             if fallbacks:
                 await self.emit(session_id, "model.fallback", {"fallbacks": fallbacks}, run_id)
 
-            assistant_message: dict[str, Any] = {"role": "assistant", "content": content or None}
-            if stored_calls:
-                assistant_message["tool_calls"] = stored_calls
-            messages.append(assistant_message)
+            if content or stored_calls:
+                assistant_message: dict[str, Any] = {"role": "assistant", "content": content or None}
+                if stored_calls:
+                    assistant_message["tool_calls"] = stored_calls
+                messages.append(assistant_message)
             await self.emit(
                 session_id,
                 "message.saved",
@@ -915,6 +958,25 @@ class AgentRuntime:
                                 "design system. Restore the reference exactly: same palette, font stack, theme mode, "
                                 "layout width, breakpoints and component classes. Do not redesign, and do not add "
                                 "sections the user did not request.\n\n" + state["reference_drift"]
+                            ),
+                        }
+                    )
+                    continue
+                missing_outputs = [
+                    target for target in state["output_targets"]
+                    if not output_target_ready(target, state["delivery_since"])
+                ]
+                if missing_outputs and state["output_nudges"] < 2:
+                    state["output_nudges"] += 1
+                    await self.emit(session_id, "delivery.nudge", {"missing": missing_outputs}, run_id)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[system delivery contract] No new deliverable exists at the requested path: "
+                                + ", ".join(missing_outputs)
+                                + ". Write the final artifact to that exact path now (create the directory if needed). "
+                                "Do not finish with a summary until the file exists."
                             ),
                         }
                     )

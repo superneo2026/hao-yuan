@@ -193,6 +193,7 @@ def test_mimo_provider_is_wired():
     assert resolve("mimo", "mimo-v2.6-flash") == ("mimo", "mimo-v2.6-flash")
     assert PROVIDERS["mimo"].supports_thinking is True
     assert "mimo-v2.6-flash" in PROVIDERS["mimo"].thinking_models
+    assert PROVIDERS["mimo"].max_output_tokens >= 32768
 
 def test_lite_mode_keeps_domain_tools_for_plan():
     harness = harness_instance()
