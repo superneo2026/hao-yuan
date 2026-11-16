@@ -30,3 +30,9 @@ def test_render_budget_keeps_matched_skills():
     assert "omitted" not in text
     for skill in matched:
         assert skill.name in text
+
+
+def test_tech_eval_contract_requires_benchmarks_and_fidelity():
+    body = _library().get("tech-eval").body
+    for token in ("ARC-e", "CIDEr", "reference_compare", "Batch independent tool calls"):
+        assert token in body
