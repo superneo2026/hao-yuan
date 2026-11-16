@@ -50,6 +50,7 @@ const status = computed(() => props.item.status || (props.item.ok === false ? 'e
 const subtitle = computed(() => {
   const value = args.value
   if (value.path) return value.path
+  if (value.file || value.filename || value.target) return value.file || value.filename || value.target
   if (value.command) return value.command
   if (value.pattern) return value.pattern
   if (value.query || value.name) return value.name || value.query
@@ -59,10 +60,35 @@ const subtitle = computed(() => {
   if (value.edits) return `${value.edits.length} edits`
   return ''
 })
+
+function oneLine(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim()
+}
+
+const changeLines = computed(() => {
+  const value = args.value
+  if (value.old !== undefined && value.new !== undefined) {
+    return [
+      ...String(value.old).split('\n').map((text) => ({ type: 'del', text })),
+      ...String(value.new).split('\n').map((text) => ({ type: 'add', text }))
+    ]
+  }
+  if (typeof value.patch === 'string' && value.patch.trim()) {
+    return value.patch.split('\n').slice(0, 400).map((text) => {
+      let type = 'ctx'
+      if (text.startsWith('+') && !text.startsWith('+++')) type = 'add'
+      else if (text.startsWith('-') && !text.startsWith('---')) type = 'del'
+      else if (text.startsWith('@@')) type = 'hunk'
+      return { type, text }
+    })
+  }
+  return null
+})
+
 const detail = computed(() => {
   const value = args.value
-  if (value.patch) return value.patch
-  if (value.old !== undefined) return `- ${String(value.old).slice(0, 1200)}\n+ ${String(value.new || '').slice(0, 1200)}`
+  if (changeLines.value) return ''
+  if (value.command !== undefined && typeof value.command === 'string') return value.command
   if (value.content !== undefined) return String(value.content).slice(0, 1600)
   if (value.prompt) return value.prompt
   if (value.edits) return JSON.stringify(value.edits, null, 2)
@@ -74,7 +100,10 @@ const resultText = computed(() => {
   if (typeof raw === 'string') return raw
   try { return JSON.stringify(raw, null, 2) } catch { return String(raw) }
 })
-const hasBody = computed(() => Boolean(detail.value || resultText.value || props.item.error))
+const hasBody = computed(() => Boolean(changeLines.value?.length || detail.value || resultText.value || props.item.error))
+const hasChange = computed(() => Boolean(changeLines.value?.length))
+const addedCount = computed(() => changeLines.value?.filter((line) => line.type === 'add').length || 0)
+const removedCount = computed(() => changeLines.value?.filter((line) => line.type === 'del').length || 0)
 
 function formatDuration(ms) {
   if (ms === undefined || ms === null || Number.isNaN(Number(ms))) return ''
@@ -115,40 +144,50 @@ const resultTag = computed(() => {
   }
   return null
 })
+
+const statusLabel = computed(() => {
+  if (status.value === 'running') return t('tool.running')
+  if (status.value === 'error') return t('tool.failed')
+  return t('tool.done')
+})
 </script>
 
 <template>
-  <div class="tool-card" :class="[status, { open }]">
-    <button class="tool-head" @click="open = !open">
-      <span v-if="step" class="tool-step mono">{{ step }}</span>
-      <span class="tool-icon">
-        <span v-if="status === 'running'" class="spinner" style="width: 12px; height: 12px" />
-        <Icon v-else-if="status === 'error'" name="alert" :size="13" />
-        <Icon v-else name="check" :size="13" />
+  <div class="tool-row" :class="[status, { open }]">
+    <button class="tool-line" type="button" :title="`${title}${subtitle ? ` · ${oneLine(subtitle)}` : ''} · ${statusLabel}`" @click="open = !open">
+      <span class="tool-state">
+        <span v-if="status === 'running'" class="spinner" style="width: 11px; height: 11px" />
+        <Icon v-else-if="status === 'error'" name="alert" :size="12" />
+        <Icon v-else name="check" :size="12" />
       </span>
-      <span class="tool-main">
-        <span class="tool-title">
-          {{ title }}
-          <span v-if="subtitle" class="tool-sub truncate">{{ subtitle }}</span>
-        </span>
-        <span class="tool-meta">
-          <span v-if="errorTag" class="tool-tag bad">{{ errorTag }}</span>
-          <span v-if="resultTag" class="tool-tag" :class="resultTag.kind">{{ resultTag.label }}</span>
-          <span v-if="duration" class="tool-dur mono">{{ duration }}</span>
-          <span v-else-if="status === 'running'" class="tool-dur running">{{ t('run.running') }}</span>
-          <span v-else-if="status === 'error'" style="color: var(--bad)">{{ t('tool.failed') }}</span>
-          <span v-else style="color: var(--good)">{{ t('tool.done') }}</span>
-        </span>
+      <Icon :name="icon" :size="12" class="tool-icon" />
+      <span class="tool-name">{{ title }}</span>
+      <span v-if="subtitle" class="tool-target truncate">{{ oneLine(subtitle) }}</span>
+      <span class="spacer" />
+      <span v-if="errorTag" class="tool-tag bad">{{ errorTag }}</span>
+      <span v-else-if="resultTag" class="tool-tag" :class="resultTag.kind">{{ resultTag.label }}</span>
+      <span v-if="hasChange" class="tool-diffstat mono">
+        <span v-if="addedCount" class="add">+{{ addedCount }}</span>
+        <span v-if="removedCount" class="del">-{{ removedCount }}</span>
       </span>
-      <Icon :name="open ? 'chevron-down' : 'chevron-right'" :size="14" class="tool-chevron" />
+      <span v-if="duration" class="tool-dur mono">{{ duration }}</span>
+      <span v-else-if="status === 'running'" class="tool-dur mono running">{{ t('run.running') }}</span>
+      <Icon :name="open && hasBody ? 'chevron-down' : 'chevron-right'" :size="12" class="tool-chevron" :class="{ hidden: !hasBody }" />
     </button>
+
     <div v-if="open && hasBody" class="tool-body">
-      <div v-if="detail" class="tool-section">
+      <div v-if="hasChange" class="tool-diff">
+        <div v-for="(line, index) in changeLines" :key="index" class="tool-diff-line" :class="line.type">
+          <span class="tool-diff-sign">{{ line.type === 'add' ? '+' : line.type === 'del' ? '-' : line.type === 'hunk' ? '@' : ' ' }}</span>
+          <span class="tool-diff-text">{{ line.text || ' ' }}</span>
+        </div>
+      </div>
+      <div v-else-if="detail" class="tool-section">
         <div class="tool-section-label">{{ t('tool.input') }}</div>
         <pre class="mono-pre tool-pre">{{ detail }}</pre>
       </div>
       <div v-if="item.error" class="tool-section">
-        <div class="tool-section-label" style="color: var(--bad)">{{ t('tool.error') }}</div>
+        <div class="tool-section-label bad">{{ t('tool.error') }}</div>
         <pre class="mono-pre tool-pre">{{ item.error }}</pre>
       </div>
       <div v-if="resultText" class="tool-section">
@@ -160,29 +199,41 @@ const resultTag = computed(() => {
 </template>
 
 <style scoped>
-.tool-card { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); overflow: hidden; transition: border-color .16s var(--ease), box-shadow .16s var(--ease); }
-.tool-card.running { border-color: var(--brand-line); box-shadow: 0 0 0 3px var(--brand-soft); }
-.tool-card.error { border-color: color-mix(in srgb, var(--bad) 38%, var(--line)); }
-.tool-head { width: 100%; display: flex; align-items: center; gap: 9px; padding: 8px 10px; background: transparent; border: none; text-align: left; color: var(--ink-2); }
-.tool-head:hover { background: var(--surface-2); }
-.tool-step { flex: 0 0 18px; width: 18px; height: 18px; border-radius: 6px; background: var(--surface-3); color: var(--muted); font-size: 9.5px; display: grid; place-items: center; }
-.tool-icon { width: 26px; height: 26px; border-radius: 7px; background: var(--surface-2); color: var(--muted); display: grid; place-items: center; flex: 0 0 26px; }
-.tool-card.running .tool-icon { color: var(--brand); background: var(--brand-soft); }
-.tool-card.running .tool-icon .spinner { border-color: color-mix(in srgb, var(--brand) 30%, transparent); border-top-color: var(--brand); }
-.tool-card.done .tool-icon { color: var(--good); background: var(--good-soft); }
-.tool-card.error .tool-icon { color: var(--bad); background: var(--bad-soft); }
-.tool-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.tool-title { font-size: 12px; font-weight: 560; display: flex; gap: 7px; align-items: baseline; min-width: 0; }
-.tool-sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); font-weight: 400; }
-.tool-meta { display: flex; gap: 8px; color: var(--faint); font-size: 10px; align-items: center; }
-.tool-tag { padding: 0 6px; height: 15px; display: inline-flex; align-items: center; border-radius: 5px; font-size: 9.5px; font-weight: 560; background: var(--surface-3); color: var(--muted); }
+.tool-row { min-width: 0; background: transparent; }
+.tool-row.running { background: color-mix(in srgb, var(--brand) 5%, transparent); }
+.tool-line { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 0; background: transparent; color: var(--ink-2); text-align: left; }
+.tool-line:hover { background: color-mix(in srgb, var(--surface-3) 45%, transparent); }
+.tool-state { width: 14px; height: 14px; flex: 0 0 14px; display: grid; place-items: center; color: var(--good); }
+.tool-row.running .tool-state { color: var(--brand); }
+.tool-row.error .tool-state { color: var(--bad); }
+.tool-icon { color: var(--faint); flex: 0 0 12px; }
+.tool-name { flex: 0 0 auto; font-size: 11.5px; font-weight: 560; color: var(--ink); }
+.tool-target { min-width: 0; flex: 0 1 auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); }
+.tool-line .spacer { flex: 1 1 auto; }
+.tool-tag { flex: 0 0 auto; padding: 0 5px; height: 15px; display: inline-flex; align-items: center; border-radius: 4px; font-size: 9.5px; font-weight: 560; background: var(--surface-3); color: var(--muted); }
 .tool-tag.good { background: var(--good-soft); color: var(--good); }
 .tool-tag.bad { background: var(--bad-soft); color: var(--bad); }
-.tool-tag.muted { background: var(--surface-3); color: var(--muted); }
-.tool-dur { color: var(--muted); }
+.tool-diffstat { display: inline-flex; gap: 4px; font-size: 9.5px; }
+.tool-diffstat .add { color: var(--good); }
+.tool-diffstat .del { color: var(--bad); }
+.tool-dur { flex: 0 0 auto; font-size: 9.5px; color: var(--faint); }
 .tool-dur.running { color: var(--brand); }
-.tool-chevron { color: var(--faint); flex: 0 0 14px; }
-.tool-body { border-top: 1px solid var(--line); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-2); }
-.tool-section-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); margin-bottom: 4px; font-weight: 620; }
-.tool-pre { margin: 0; max-height: 280px; background: var(--code-bg); color: #dbe2ee; border-radius: 8px; padding: 9px 10px; border: 1px solid #232a38; }
+.tool-chevron { flex: 0 0 12px; color: var(--faint); transition: transform .16s var(--ease); }
+.tool-chevron.hidden { visibility: hidden; }
+.tool-body { border-top: 1px solid var(--line); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; background: color-mix(in srgb, var(--surface) 60%, transparent); }
+.tool-section-label { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); margin-bottom: 4px; font-weight: 620; }
+.tool-section-label.bad { color: var(--bad); }
+.tool-pre { margin: 0; max-height: 300px; overflow: auto; background: var(--code-bg); color: #dbe2ee; border-radius: 7px; padding: 8px 10px; border: 1px solid #232a38; font-size: 11px; line-height: 1.55; }
+.tool-diff { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--code-bg); font-family: var(--font-mono); font-size: 11px; line-height: 1.55; }
+.tool-diff-line { display: flex; gap: 7px; padding: 0 8px; color: #aab4c6; white-space: pre-wrap; word-break: break-word; }
+.tool-diff-line .tool-diff-sign { flex: 0 0 8px; color: #5d6679; user-select: none; }
+.tool-diff-line.add { background: rgba(55, 211, 155, .1); color: #9fe8c8; }
+.tool-diff-line.add .tool-diff-sign { color: var(--good); }
+.tool-diff-line.del { background: rgba(242, 109, 125, .1); color: #f4b3bc; }
+.tool-diff-line.del .tool-diff-sign { color: var(--bad); }
+.tool-diff-line.hunk { color: #8ea0c0; background: rgba(124, 108, 255, .08); }
+@media (max-width: 720px) {
+  .tool-target { max-width: 42vw; }
+  .tool-diffstat { display: none; }
+}
 </style>

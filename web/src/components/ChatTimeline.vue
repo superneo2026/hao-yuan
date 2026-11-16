@@ -9,7 +9,7 @@ import ToolCard from './ToolCard.vue'
 const scroller = ref(null)
 const autoScroll = ref(true)
 const activityOpen = ref({})
-const liveActivityOpen = ref(false)
+const liveActivityOpen = ref(true)
 const activeQuestionId = ref('')
 const now = ref(Date.now())
 const copiedKey = ref('')
@@ -121,22 +121,18 @@ const groups = computed(() => {
     let step = 0
     const reasoningParts = []
     let reasoningCount = 0
-    let lastText = ''
     for (const segment of group.segments) {
       if (segment.reasoning.trim()) {
         reasoningParts.push(segment.reasoning.trim())
         reasoningCount++
       }
       for (const tool of segment.tools) tool.step = ++step
-      if (segment.content.trim()) lastText = segment.id
-      segment.hasMeta = false
     }
     group.reasoning = reasoningParts.join('\n\n')
     group.reasoningCount = reasoningCount
     group.stepCount = step
     for (let index = group.segments.length - 1; index >= 0; index--) {
       if (group.segments[index].content.trim()) {
-        group.segments[index].hasMeta = true
         group.lastSegment = group.segments[index]
         break
       }
@@ -224,12 +220,14 @@ function groupDuration(tools) {
   return total ? formatDuration(total) : ''
 }
 
-function toggleActivity(id) {
-  activityOpen.value[id] = !activityOpen.value[id]
+function activityVisible(id, count = 0) {
+  const value = activityOpen.value[id]
+  if (value === undefined) return count <= 6
+  return value
 }
 
-function activityVisible(id) {
-  return activityOpen.value[id] === true
+function toggleActivity(id, visible) {
+  activityOpen.value[id] = !visible
 }
 
 function toggleLiveActivity() {
@@ -296,7 +294,8 @@ watch(
   () => state.currentId,
   () => {
     autoScroll.value = true
-    liveActivityOpen.value = false
+    liveActivityOpen.value = true
+    activityOpen.value = {}
     activeQuestionId.value = ''
     scrollBottom(false)
     nextTick(syncActiveQuestion)
@@ -414,112 +413,123 @@ function timeLabel(value) {
             {{ state.loadingEarlier ? t('chat.loadingEarlier') : t('chat.loadEarlier') }}
           </button>
         </div>
-        <div v-for="group in groups" :key="group.id" class="timeline-group slide-up">
+
+        <div v-for="group in groups" :key="group.id" class="log-entry slide-up" :class="group.kind">
           <template v-if="group.kind === 'user'">
-            <div class="message user" :data-user-id="group.id">
-              <div class="avatar user-avatar">{{ t('chat.you') }}</div>
-              <div class="bubble-wrap">
-                <div class="bubble user-bubble">{{ group.content }}</div>
-                <div class="message-meta">
-                  <span>{{ timeLabel(group.created_at) }}</span>
-                  <button class="icon-btn" style="width: 20px; height: 20px" :title="t('common.copy')" @click="copy(group.content, group.id)">
-                    <Icon :name="copiedKey === group.id ? 'check' : 'copy'" :size="11" />
-                  </button>
-                </div>
+            <div class="log-row" :data-user-id="group.id">
+              <div class="log-head">
+                <span class="role-badge user">{{ t('chat.you') }}</span>
+                <span v-if="timeLabel(group.created_at)" class="log-time">{{ timeLabel(group.created_at) }}</span>
+                <span class="spacer" />
+                <button class="ghost-icon" :title="t('common.copy')" @click="copy(group.content, group.id)">
+                  <Icon :name="copiedKey === group.id ? 'check' : 'copy'" :size="12" />
+                </button>
               </div>
+              <div class="user-text">{{ group.content }}</div>
             </div>
           </template>
 
           <template v-else-if="group.kind === 'turn'">
-            <div class="message assistant turn">
-              <div class="avatar assistant-avatar">H</div>
-              <div class="assistant-body turn-body">
-                <details v-if="group.reasoning" class="reasoning turn-reasoning">
-                  <summary>
-                    <Icon name="brain" :size="13" /> {{ t('chat.reasoning') }}
-                    <span v-if="group.reasoningCount > 1" class="reasoning-count">{{ t('run.reasoningSegments', { n: group.reasoningCount }) }}</span>
-                    <span class="spacer" />
-                    <Icon name="chevron-right" :size="12" class="reasoning-caret" />
-                  </summary>
-                  <div class="reasoning-body">{{ group.reasoning }}</div>
-                </details>
-
-                <template v-for="segment in group.segments" :key="segment.id">
-                  <div v-if="segment.content || segment.tools.length" class="turn-step">
-                    <span class="turn-dot" />
-                    <div class="turn-step-body">
-                      <div v-if="segment.content" class="bubble assistant-bubble">
-                        <Markdown :content="segment.content" />
-                      </div>
-                      <div v-if="segment.tools.length" class="activity">
-                        <button class="activity-head" @click="toggleActivity(segment.id)">
-                          <Icon name="layers" :size="12" />
-                          <span>{{ t('run.activity') }}</span>
-                          <span class="activity-count">{{ segment.tools.length }}</span>
-                          <span class="spacer" />
-                          <span v-if="groupDuration(segment.tools)" class="activity-dur mono">{{ groupDuration(segment.tools) }}</span>
-                          <Icon :name="activityVisible(segment.id) ? 'chevron-down' : 'chevron-right'" :size="13" />
-                        </button>
-                        <div v-show="activityVisible(segment.id)" class="activity-steps">
-                          <ToolCard v-for="tool in segment.tools" :key="tool.call_id" :item="tool" :step="tool.step" />
-                        </div>
-                      </div>
-                      <div v-if="segment.hasMeta" class="message-meta">
-                        <span>{{ timeLabel(segment.created_at) }}</span>
-                        <button class="icon-btn" style="width: 20px; height: 20px" :title="t('common.copy')" @click="copy(segment.content, segment.id)">
-                          <Icon :name="copiedKey === segment.id ? 'check' : 'copy'" :size="11" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </template>
+            <div class="log-row">
+              <div class="log-head">
+                <span class="role-badge bot">H</span>
+                <span v-if="timeLabel(group.created_at)" class="log-time">{{ timeLabel(group.created_at) }}</span>
+                <span v-if="group.stepCount" class="log-stat mono">{{ t('run.steps') }} {{ group.stepCount }}</span>
+                <span class="spacer" />
+                <button v-if="group.lastSegment" class="ghost-icon" :title="t('common.copy')" @click="copy(group.lastSegment.content, group.lastSegment.id)">
+                  <Icon :name="copiedKey === group.lastSegment.id ? 'check' : 'copy'" :size="12" />
+                </button>
               </div>
+
+              <details v-if="group.reasoning" class="thinking">
+                <summary>
+                  <Icon name="brain" :size="12" />
+                  <span>{{ t('chat.reasoning') }}</span>
+                  <span v-if="group.reasoningCount > 1" class="thinking-count">{{ t('run.reasoningSegments', { n: group.reasoningCount }) }}</span>
+                  <span class="spacer" />
+                  <Icon name="chevron-right" :size="12" class="thinking-caret" />
+                </summary>
+                <div class="thinking-body">{{ group.reasoning }}</div>
+              </details>
+
+              <template v-for="segment in group.segments" :key="segment.id">
+                <div v-if="segment.content" class="assistant-text">
+                  <Markdown :content="segment.content" />
+                </div>
+                <div v-if="segment.tools.length" class="tool-group">
+                  <button class="tool-group-head" type="button" @click="toggleActivity(segment.id, activityVisible(segment.id, segment.tools.length))">
+                    <Icon name="layers" :size="12" />
+                    <span>{{ t('run.activity') }}</span>
+                    <span class="tool-group-count mono">{{ segment.tools.length }}</span>
+                    <span class="spacer" />
+                    <span v-if="groupDuration(segment.tools)" class="tool-group-dur mono">{{ groupDuration(segment.tools) }}</span>
+                    <Icon :name="activityVisible(segment.id, segment.tools.length) ? 'chevron-down' : 'chevron-right'" :size="12" />
+                  </button>
+                  <div v-show="activityVisible(segment.id, segment.tools.length)" class="tool-list">
+                    <ToolCard v-for="tool in segment.tools" :key="tool.call_id" :item="tool" :step="tool.step" />
+                  </div>
+                </div>
+              </template>
             </div>
           </template>
 
           <template v-else>
-            <div class="tool-only">
-              <ToolCard v-for="tool in group.tools" :key="tool.call_id" :item="tool" />
+            <div class="log-row tool-only">
+              <div class="tool-list">
+                <ToolCard v-for="tool in group.tools" :key="tool.call_id" :item="tool" />
+              </div>
             </div>
           </template>
         </div>
 
-        <div v-if="isBusy" class="live-run">
+        <div v-if="isBusy && !liveTools.length && !liveText && !liveReasoning" class="live-run">
           <span class="live-run-dot" />
           <span class="live-run-phase">{{ livePhase }}</span>
-          <span v-if="liveElapsed" class="live-run-elapsed mono">{{ liveElapsed }}</span>
-          <span v-if="liveTotal" class="live-run-sep" />
-          <span v-if="liveTotal" class="live-run-ops mono">{{ liveDone }}/{{ liveTotal }}</span>
-          <span v-if="liveFailed" class="live-run-fail">{{ t('run.failedCount', { n: liveFailed }) }}</span>
+          <span v-if="liveElapsed" class="mono">{{ liveElapsed }}</span>
+          <span v-if="liveTotal" class="mono">{{ liveDone }}/{{ liveTotal }}</span>
           <span class="spacer" />
           <span v-if="currentSession?.model" class="live-run-model mono">{{ currentSession.model }}</span>
         </div>
 
-        <div v-if="liveTools.length || liveText || liveReasoning" class="message assistant live">
-          <div class="avatar assistant-avatar live-avatar">H</div>
-          <div class="assistant-body">
-            <div v-if="liveReasoning || liveText" class="bubble assistant-bubble" :class="{ streaming: isBusy && !!liveText }">
-              <details v-if="liveReasoning" class="reasoning" open>
-                <summary><Icon name="brain" :size="13" /> {{ t('chat.reasoning') }} <span class="spinner" v-if="isBusy && !liveText" style="width: 10px; height: 10px" /></summary>
-                <div class="reasoning-body">{{ liveReasoning }}</div>
-              </details>
-              <Markdown v-if="liveText" :content="liveText" />
+        <div v-if="liveTools.length || liveText || liveReasoning" class="log-entry live">
+          <div class="log-row">
+            <div class="log-head">
+              <span v-if="isBusy" class="live-run-dot" />
+              <span class="role-badge bot live-badge">H</span>
+              <span v-if="isBusy" class="live-run-phase">{{ livePhase }}</span>
+              <span v-if="isBusy && liveElapsed" class="mono log-time">{{ liveElapsed }}</span>
+              <span v-if="isBusy && liveTotal" class="mono log-time">{{ liveDone }}/{{ liveTotal }}</span>
+              <span v-if="isBusy && liveFailed" class="live-run-fail">{{ t('run.failedCount', { n: liveFailed }) }}</span>
+              <span class="spacer" />
+              <span v-if="currentSession?.model" class="live-run-model mono">{{ currentSession.model }}</span>
             </div>
-            <div class="thinking-line" v-if="isBusy && !liveText && !liveReasoning">
-              <span class="thinking-dots"><i /><i /><i /></span>
-              <span>{{ currentSession?.status === 'waiting_input' ? t('chat.waitingForApproval') : t('chat.working') }}</span>
+
+            <details v-if="liveReasoning" class="thinking" open>
+              <summary>
+                <Icon name="brain" :size="12" />
+                <span>{{ t('chat.reasoning') }}</span>
+                <span v-if="isBusy && !liveText" class="spinner" style="width: 10px; height: 10px" />
+                <span class="spacer" />
+                <Icon name="chevron-right" :size="12" class="thinking-caret" />
+              </summary>
+              <div class="thinking-body">{{ liveReasoning }}</div>
+            </details>
+
+            <div v-if="liveText" class="assistant-text" :class="{ streaming: isBusy }">
+              <Markdown :content="liveText" />
             </div>
-            <div v-if="liveTools.length" class="activity">
-              <button class="activity-head" type="button" :aria-expanded="liveActivityOpen" @click="toggleLiveActivity">
+
+            <div v-if="liveTools.length" class="tool-group">
+              <button class="tool-group-head" type="button" :aria-expanded="liveActivityOpen" @click="toggleLiveActivity">
                 <Icon name="layers" :size="12" />
                 <span>{{ t('run.activity') }}</span>
-                <span class="activity-count">{{ liveDone }}/{{ liveTools.length }}</span>
+                <span class="tool-group-count mono">{{ liveDone }}/{{ liveTools.length }}</span>
                 <span class="spacer" />
-                <span v-if="liveFailed" class="activity-fail">{{ t('run.failedCount', { n: liveFailed }) }}</span>
+                <span v-if="liveFailed" class="live-run-fail">{{ t('run.failedCount', { n: liveFailed }) }}</span>
                 <span v-if="isBusy" class="spinner" style="width: 10px; height: 10px" />
-                <Icon :name="liveActivityOpen ? 'chevron-down' : 'chevron-right'" :size="13" />
+                <Icon :name="liveActivityOpen ? 'chevron-down' : 'chevron-right'" :size="12" />
               </button>
-              <div v-show="liveActivityOpen" class="activity-steps">
+              <div v-show="liveActivityOpen" class="tool-list">
                 <ToolCard v-for="(tool, index) in liveTools" :key="tool.call_id" :item="tool" :step="index + 1" />
               </div>
             </div>
@@ -527,20 +537,15 @@ function timeLabel(value) {
         </div>
 
         <div v-if="showSummary" class="run-summary" :class="{ hasError: toolFailed }">
-          <div class="run-summary-head">
-            <span class="run-summary-icon">
-              <Icon :name="toolFailed ? 'alert' : 'check'" :size="13" />
-            </span>
-            <b>{{ toolFailed ? t('run.summaryError') : t('run.summaryTitle') }}</b>
-            <span class="spacer" />
-            <span v-if="runElapsed" class="run-summary-time mono">{{ t('run.elapsed') }} {{ runElapsed }}</span>
-          </div>
-          <div class="run-summary-grid">
-            <span><b>{{ runSteps }}</b><em>{{ t('run.steps') }}</em></span>
-            <span><b>{{ toolTotal }}</b><em>{{ t('run.ops') }}</em></span>
-            <span :class="{ bad: toolFailed }"><b>{{ toolFailed }}</b><em>{{ t('run.failed') }}</em></span>
-            <span><b class="mono">¥{{ runCost.toFixed(4) }}</b><em>{{ t('run.cost') }}</em></span>
-          </div>
+          <Icon :name="toolFailed ? 'alert' : 'check'" :size="13" />
+          <b>{{ toolFailed ? t('run.summaryError') : t('run.summaryTitle') }}</b>
+          <span class="summary-items">
+            <span v-if="runElapsed">{{ t('run.elapsed') }} {{ runElapsed }}</span>
+            <span>{{ t('run.steps') }} {{ runSteps }}</span>
+            <span>{{ t('run.ops') }} {{ toolTotal }}</span>
+            <span :class="{ bad: toolFailed }">{{ t('run.failed') }} {{ toolFailed }}</span>
+            <span class="mono">¥{{ runCost.toFixed(4) }}</span>
+          </span>
         </div>
         <div style="height: 12px" />
       </div>
@@ -572,39 +577,31 @@ function timeLabel(value) {
 
 <style scoped>
 .timeline-wrap { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; container-type: inline-size; }
-.timeline { flex: 1; padding: 26px 28px 12px; }
-.timeline-inner { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.timeline { flex: 1; padding: 24px 28px 12px; }
+.timeline-inner { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
 .load-earlier { display: flex; justify-content: center; }
-.timeline-group { display: flex; flex-direction: column; gap: 8px; }
-.message { display: flex; gap: 11px; align-items: flex-start; }
-.message.user { flex-direction: row-reverse; }
-.message.assistant { flex-direction: row; }
-.avatar { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: 0 0 28px; margin-top: 1px; }
-.user-avatar { background: color-mix(in srgb, var(--user-brand) 12%, transparent); color: var(--user-brand); border: 1px solid color-mix(in srgb, var(--user-brand) 30%, transparent); font-size: 9px; letter-spacing: .02em; }
-.assistant-avatar { background: linear-gradient(140deg, var(--brand), var(--brand-2)); color: #fff; box-shadow: 0 6px 18px rgba(124, 108, 255, .28); }
-.live-avatar { animation: pulse 2s infinite; }
-.bubble-wrap { flex: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: min(760px, 100%); }
-.bubble { padding: 10px 15px; color: var(--ink); white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.68; }
-.bubble.user-bubble {
-  border-radius: 16px 5px 16px 16px;
-  background: var(--user-bubble);
-  border: 1px solid color-mix(in srgb, var(--user-brand) 42%, transparent);
-  color: var(--user-bubble-ink);
-  box-shadow: 0 10px 26px var(--user-glow);
+.log-entry { display: flex; flex-direction: column; }
+.log-row { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.log-head { display: flex; align-items: center; gap: 8px; min-height: 18px; }
+.role-badge { height: 18px; padding: 0 7px; border-radius: 5px; display: inline-flex; align-items: center; font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.role-badge.user { background: color-mix(in srgb, var(--user-brand) 13%, transparent); color: var(--user-brand); }
+.role-badge.bot { background: var(--surface-3); color: var(--muted); }
+.live-badge { animation: pulse 2s infinite; }
+.log-time { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.log-stat { font-size: 10px; color: var(--faint); }
+.user-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.5px;
+  line-height: 1.72;
+  color: var(--ink);
+  padding: 8px 12px;
+  border-left: 2px solid var(--user-brand);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--user-brand) 6%, var(--surface-2));
 }
-.assistant-body { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 2px; }
-.bubble.assistant-bubble {
-  border-radius: 5px 16px 16px 16px;
-  background: var(--bot-bubble);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  box-shadow: 0 2px 10px color-mix(in srgb, #000 6%, transparent);
-  max-width: min(760px, 100%);
-  white-space: normal;
-}
-.assistant-bubble .reasoning { background: transparent; }
-.assistant-bubble .reasoning-body { color: var(--muted); }
-.assistant-bubble.streaming .markdown > :last-child::after {
+.assistant-text { min-width: 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.76; }
+.assistant-text.streaming .markdown > :last-child::after {
   content: '';
   display: inline-block;
   width: 6px;
@@ -616,63 +613,42 @@ function timeLabel(value) {
   animation: caret 1s steps(1) infinite;
 }
 @keyframes caret { 50% { opacity: 0 } }
-.message-meta { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; opacity: .55; transition: opacity .16s var(--ease); }
-.message:hover .message-meta { opacity: .9; }
-.turn-body { gap: 10px; }
-.turn-reasoning { width: 100%; max-width: min(760px, 100%); }
-.reasoning-count { font-size: 10px; color: var(--faint); }
-.reasoning-caret { transition: transform .18s var(--ease); }
-.reasoning[open] .reasoning-caret { transform: rotate(90deg); }
-.turn-step { position: relative; display: flex; gap: 10px; width: 100%; }
-.turn-step + .turn-step { margin-top: 12px; }
-.turn-dot { position: relative; z-index: 1; width: 7px; height: 7px; border-radius: 50%; background: var(--surface-3); border: 1px solid var(--line-strong); margin-top: 12px; flex: 0 0 7px; }
-.turn-step::before { content: ''; position: absolute; left: 3px; top: -12px; bottom: -12px; width: 1px; background: var(--line); }
-.turn-step:first-of-type::before { display: none; }
-.turn-step-body { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.reasoning { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); overflow: hidden; }
-.reasoning summary { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--muted); font-size: 11.5px; cursor: pointer; list-style: none; }
-.reasoning summary::-webkit-details-marker { display: none; }
-.reasoning-body { padding: 0 12px 10px; color: var(--muted); font-size: 12px; line-height: 1.65; white-space: pre-wrap; max-height: 280px; overflow-y: auto; }
+.ghost-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; flex: 0 0 auto; transition: opacity .15s var(--ease), color .15s var(--ease), background .15s var(--ease); }
+.log-row:hover .ghost-icon { opacity: .8; }
+.ghost-icon:hover { color: var(--ink); background: var(--surface-3); opacity: 1; }
 
-.activity { align-self: stretch; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--surface-2) 55%, transparent); overflow: hidden; }
-.activity-head { width: 100%; display: flex; align-items: center; gap: 7px; padding: 8px 11px; background: transparent; border: none; color: var(--muted); font-size: 11.5px; font-weight: 560; text-align: left; }
-.activity-head:not(.static):hover { color: var(--ink); background: color-mix(in srgb, var(--surface-3) 55%, transparent); }
-.activity-head .spacer { flex: 1; }
-.activity-count { font-family: var(--font-mono); font-size: 10px; padding: 0 6px; height: 16px; display: inline-flex; align-items: center; border-radius: 6px; background: var(--surface-3); color: var(--muted); }
-.activity-dur { font-size: 10px; color: var(--faint); }
-.activity-fail { font-size: 10px; color: var(--bad); }
-.activity-steps { display: flex; flex-direction: column; gap: 6px; padding: 2px 8px 9px; }
-.activity-steps > * { position: relative; }
+.thinking { align-self: stretch; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface-2) 60%, transparent); overflow: hidden; }
+.thinking summary { display: flex; align-items: center; gap: 6px; padding: 6px 10px; color: var(--muted); font-size: 11.5px; cursor: pointer; list-style: none; }
+.thinking summary::-webkit-details-marker { display: none; }
+.thinking-count { font-size: 10px; color: var(--faint); }
+.thinking-caret { transition: transform .18s var(--ease); }
+.thinking[open] .thinking-caret { transform: rotate(90deg); }
+.thinking-body { padding: 0 12px 9px; color: var(--muted); font-size: 12px; line-height: 1.68; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
 
-.live-run { align-self: stretch; display: flex; align-items: center; gap: 9px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--brand-line); background: color-mix(in srgb, var(--brand) 7%, var(--surface)); font-size: 11.5px; color: var(--ink-2); box-shadow: 0 4px 16px color-mix(in srgb, var(--brand) 10%, transparent); }
-.live-run-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 18%, transparent); animation: pulse 1.6s infinite; }
-.live-run-phase { font-weight: 620; color: var(--ink); }
-.live-run-elapsed { color: var(--muted); font-size: 10.5px; }
-.live-run-sep { width: 1px; height: 12px; background: var(--line-strong); }
-.live-run-ops { color: var(--muted); font-size: 10.5px; }
+.tool-group { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
+.tool-group-head { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 2px 2px; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 560; text-align: left; border-radius: 6px; }
+.tool-group-head:hover { color: var(--ink); }
+.tool-group-head .spacer { flex: 1; }
+.tool-group-count { font-size: 9.5px; padding: 0 5px; height: 15px; display: inline-flex; align-items: center; border-radius: 4px; background: var(--surface-3); color: var(--muted); }
+.tool-group-dur { font-size: 10px; color: var(--faint); }
+.tool-list { border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)); overflow: hidden; }
+.tool-list > * + * { border-top: 1px solid var(--line); }
+
+.live-run { display: flex; align-items: center; gap: 9px; padding: 2px 2px; font-size: 11.5px; color: var(--muted); }
+.live-run-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 16%, transparent); animation: pulse 1.6s infinite; }
+.live-run-phase { font-weight: 600; color: var(--ink-2); }
 .live-run-fail { color: var(--bad); font-size: 10.5px; }
-.live-run-model { color: var(--faint); font-size: 10px; }
+.live-run-model { color: var(--faint); font-size: 10px; margin-left: auto; }
 
-.thinking-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; padding: 2px 0; }
-.thinking-dots { display: inline-flex; gap: 3px; }
-.thinking-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--brand); animation: dot 1.2s infinite ease-in-out; }
-.thinking-dots i:nth-child(2) { animation-delay: .15s; }
-.thinking-dots i:nth-child(3) { animation-delay: .3s; }
-@keyframes dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+.run-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 7px 2px 0; border-top: 1px dashed var(--line); color: var(--muted); font-size: 11px; }
+.run-summary b { color: var(--good); font-size: 11.5px; font-weight: 600; }
+.run-summary.hasError b { color: var(--bad); }
+.run-summary > .icon { color: var(--good); }
+.run-summary.hasError > .icon { color: var(--bad); }
+.summary-items { display: flex; flex-wrap: wrap; gap: 12px; color: var(--faint); font-size: 10.5px; }
+.summary-items .bad { color: var(--bad); }
 
-.run-summary { align-self: stretch; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--good-soft) 55%, var(--surface)); padding: 11px 14px; }
-.run-summary.hasError { background: color-mix(in srgb, var(--bad-soft) 45%, var(--surface)); border-color: color-mix(in srgb, var(--bad) 30%, var(--line)); }
-.run-summary-head { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink); }
-.run-summary-icon { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: var(--good); color: #fff; }
-.run-summary.hasError .run-summary-icon { background: var(--bad); }
-.run-summary-time { font-size: 10.5px; color: var(--muted); }
-.run-summary-grid { display: flex; gap: 20px; margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); flex-wrap: wrap; }
-.run-summary-grid > span { display: flex; flex-direction: column; gap: 1px; }
-.run-summary-grid b { font-size: 13px; color: var(--ink); letter-spacing: -.01em; }
-.run-summary-grid em { font-style: normal; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
-.run-summary-grid .bad b { color: var(--bad); }
-
-.tool-only { padding-left: 39px; display: flex; flex-direction: column; gap: 6px; }
+.tool-only { padding-left: 0; }
 .welcome-mark { display: flex; justify-content: center; margin-bottom: 18px; }
 .jump-bottom { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; padding: 6px 11px; border-radius: 99px; border: 1px solid var(--line-strong); background: var(--elevated); color: var(--ink-2); font-size: 11.5px; box-shadow: var(--shadow-card); }
 .jump-bottom:hover { color: var(--ink); border-color: var(--brand-line); }
@@ -784,7 +760,8 @@ function timeLabel(value) {
 }
 @media (max-width: 720px) {
   .timeline { padding: 18px 16px 8px; }
+  .timeline-inner { gap: 22px; }
   .tool-only { padding-left: 0; }
-  .run-summary-grid { gap: 14px; }
+  .ghost-icon { opacity: .6; }
 }
 </style>
