@@ -106,7 +106,7 @@ onMounted(() => loadSkills())
     <div class="filter-row">
       <input v-model="query" class="field" style="max-width: 320px" :placeholder="t('skills.search')" />
       <div class="row" style="gap: 4px">
-        <button v-for="kind in ['all', 'dev', 'plan', 'video', '*']" :key="kind" class="filter-btn" :class="{ active: filter === kind }" @click="filter = kind">
+        <button v-for="kind in ['all', 'dev', 'plan', '*']" :key="kind" class="filter-btn" :class="{ active: filter === kind }" @click="filter = kind">
           {{ kind === 'all' ? t('skills.all') : kind === '*' ? t('skills.global') : kindLabel(kind) }}
         </button>
       </div>
@@ -155,7 +155,7 @@ onMounted(() => loadSkills())
       <input v-model="editing.description" class="field" :placeholder="t('skills.descPlaceholder')" />
       <label class="label" style="margin-top: 12px">{{ t('skills.kinds') }}</label>
       <div class="row wrap" style="gap: 5px">
-        <button v-for="kind in ['*', 'dev', 'plan', 'video']" :key="kind" class="kind-chip" :class="{ active: editing.kinds.includes(kind) }" @click="toggleKind(kind)">
+        <button v-for="kind in ['*', 'dev', 'plan']" :key="kind" class="kind-chip" :class="{ active: editing.kinds.includes(kind) }" @click="toggleKind(kind)">
           {{ kind === '*' ? t('skills.global') : kindLabel(kind) }}
         </button>
       </div>

@@ -157,36 +157,6 @@ async def make_plan(ctx: ToolContext, args: dict[str, Any]) -> str:
     )
 
 
-async def make_storyboard(ctx: ToolContext, args: dict[str, Any]) -> str:
-    title = str(args.get("title") or "视频分镜脚本")
-    theme = str(args.get("theme") or args.get("summary") or "")
-    shots = args.get("shots") or []
-    rows = []
-    for index, shot in enumerate(shots, 1):
-        if isinstance(shot, dict):
-            scene = html.escape(str(shot.get("scene") or shot.get("shot") or f"镜头 {index}"))
-            duration = html.escape(str(shot.get("duration") or shot.get("d") or ""))
-            narration = html.escape(str(shot.get("narration") or shot.get("voiceover") or ""))
-            visual = html.escape(str(shot.get("visual") or shot.get("desc") or ""))
-        else:
-            scene, duration, narration, visual = f"镜头 {index}", "", str(shot), ""
-        rows.append(
-            f"<tr><td>{scene}</td><td>{duration}</td><td>{visual}</td><td>{narration}</td></tr>"
-        )
-    body = (
-        '<section class="sec"><h2>分镜表</h2>'
-        '<table class="tw"><thead><tr><th>镜头</th><th>时长</th><th>画面</th><th>口播 / 字幕</th></tr></thead>'
-        f"<tbody>{''.join(rows)}</tbody></table></section>"
-    )
-    content = _doc_html(title, theme, body)
-    artifact = _artifact(ctx, f"storyboard-{datetime.now().strftime('%Y%m%d-%H%M%S')}.html", content, "storyboard")
-    await _register(ctx, artifact)
-    return json.dumps(
-        {"ok": True, "title": title, "path": artifact["path"], "artifact_kind": "storyboard"},
-        ensure_ascii=False,
-    )
-
-
 async def reset_if_done(ctx: ToolContext) -> None:
     plan = _current_plan(ctx)
     steps = plan.get("steps") or []
@@ -250,24 +220,6 @@ def tool_specs(source: str = "plans") -> list[ToolSpec]:
             readonly=False,
             source=source,
         ),
-        ToolSpec(
-            name="make_storyboard",
-            description="Generate a video storyboard HTML document (shot, duration, visual, narration).",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "theme": {"type": "string"},
-                    "shots": {"type": "array", "items": {"type": "object"}},
-                },
-                "required": ["title", "shots"],
-            },
-            risk="medium",
-            side_effect="write",
-            confirm=True,
-            readonly=False,
-            source=source,
-        ),
     ]
 
 
@@ -276,7 +228,6 @@ def register_plan_tools(registry, source: str = "plans") -> None:
         "plan_task": plan_task,
         "update_plan": update_plan,
         "make_plan": make_plan,
-        "make_storyboard": make_storyboard,
     }
     for spec in tool_specs(source):
         registry.register(spec, handlers[spec.name])

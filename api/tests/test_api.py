@@ -22,7 +22,7 @@ def test_health_and_plugins(client):
     assert health["status"] == "ok"
     assert health["tools"] >= 24
     names = {plugin["name"]: plugin for plugin in health["plugins"]}
-    assert {"coding", "plans", "video", "orchestrator"} <= set(names)
+    assert {"coding", "plans", "orchestrator"} <= set(names)
     # The AI supervisor is a built-in capability, not an installable plugin.
     assert "supervisor" not in names
     assert client.get("/api/supervisor/overview").status_code == 200
@@ -233,7 +233,7 @@ def test_settings_and_usage(client):
 
 def test_plugin_toggle_persists(client):
     plugins = client.get("/api/plugins").json()["data"]
-    name = "embodied" if any(item["name"] == "embodied" for item in plugins) else "video"
+    name = "embodied" if any(item["name"] == "embodied" for item in plugins) else "notes"
     result = client.post(f"/api/plugins/{name}/toggle", json={"enabled": True}).json()["data"]
     assert result["enabled"] is True
     assert result["restart_required"] is False

@@ -51,13 +51,12 @@
 
 - Markdown + front-matter，声明 `name / title / description / kinds / triggers`。
 - 按任务类型与关键词自动匹配；技能多了自动切 BM25 排序。
-- 内置：核心方法论、仓库工程闭环、Debug 闭环、网页交付、方案写作、视频分镜。
+- 内置：核心方法论、仓库工程闭环、Debug 闭环、网页交付、方案写作。
 - 支持在 UI 中新建、编辑、删除技能，保存即生效。
 
-### 1.5 方案 / 分镜文档
+### 1.5 方案文档
 
 - `make_plan`：生成独立 HTML 方案/计划书，含 KPI、章节、表格、风险、里程碑。
-- `make_storyboard`：生成视频分镜脚本（镜头、时长、画面、口播）。
 - 产物登记到 `api/data/artifacts/`，工作台右侧可直接预览/下载。
 
 ### 1.6 插件化架构
@@ -69,7 +68,6 @@ Kernel（会话 / 事件 / 工具注册 / 策略 / 模型网关 / 审批）
         │
         ├── coding      编码 Agent + 工程工具 + 技能
         ├── plans       方案工具 + Planner Agent
-        ├── video       分镜工具 + Video Agent
         ├── supervisor  巡检 + 控制台路由
         ├── orchestrator 任务 DAG + worktree + 合并
         └── embodied    具身 Agent Harness（默认关闭，可安装启用）
@@ -299,7 +297,7 @@ hao-yuan/
 │   ├── harness/                   沙箱 / 技能 / 符号索引 / 修复环 / 监督 / 编排 / 具身
 │   ├── tools/                     builtin / dev / plan
 │   ├── adapters/providers/        deepseek / mimo / mock
-│   ├── plugins/                   coding / plans / video / supervisor / orchestrator / embodied
+│   ├── plugins/                   coding / plans / supervisor / orchestrator / embodied
 │   ├── extensions/                系统 / 会话 / 技能 / 设置 / 文件 / 用量 / 插件 / 审批 / 实时事件（SSE / WebSocket）
 │   ├── skills/                    核心技能
 │   ├── tests/                     28 个后端测试
@@ -450,7 +448,7 @@ npm run build
 - 工具级：沙箱越界、读写/编辑/patch/multi_edit、glob/grep/符号、shell、删除/移动
 - 危险 shell 命令硬阻断
 - 符号索引、repo map、pytest 解析、修复指引
-- 方案 HTML 与分镜 HTML 产物生成
+- 方案 HTML 产物生成
 - 意图分流：寒暄、闲聊与通用问答（如「你好吗」「今天天气不错」「什么是依赖注入」）直接回复，不扫描工作区、不触发工具或写入（含真实 deepseek-flash 验证）
 - 首条消息自动生成会话标题（跟随界面语言；mock 覆盖回退与真实模型验证）
 - 会话独立路由：`/#/s/<session-id>` 深链、标签切换、地址栏编辑、刷新恢复与关闭回退
@@ -546,7 +544,6 @@ python make_report.py
 | 权限门禁 / diff 审批 | ✅ | 审批卡片、预览、超时、并发槽让出 |
 | 技能库 | ✅ | front-matter + 规则/BM25 + UI 编辑 |
 | 方案计划书 | ✅ | 独立 HTML 产物 |
-| 视频分镜 | ✅ | HTML 分镜脚本；不包含 ffmpeg 成片渲染 |
 | AI 总管 | ✅ | 快照、告警、控制台对话、调度动作 |
 | 多智能体编排 | ✅ | 任务 DAG + git worktree + 合并指标 |
 | Token / 成本统计 | ✅ | 日聚合、按模型、CSV 导出 |

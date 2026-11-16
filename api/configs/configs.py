@@ -11,6 +11,14 @@ SERVER_HOST = os.getenv("HAOYUAN_HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("HAOYUAN_PORT", "8030"))
 prefix = "/api"
 
+# 浏览器跨域白名单：默认只允许本机开发前端，避免任意网站读取本地 API。
+CORS_ORIGINS = tuple(
+    item.strip() for item in os.getenv("HAOYUAN_CORS_ORIGINS", "").split(",") if item.strip()
+)
+CORS_ORIGIN_REGEX = os.getenv(
+    "HAOYUAN_CORS_ORIGIN_REGEX", r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+)
+
 API_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = API_DIR.parent
 WEB_DIST_DIR = PROJECT_DIR / "web" / "dist"
@@ -28,6 +36,11 @@ GITIGNORE_PLUGINS_DIR = Path(
 PLUGIN_DIRS = (PLUGINS_DIR, GITIGNORE_PLUGINS_DIR)
 PLUGIN_CENTER_URL = os.getenv("HAOYUAN_PLUGIN_CENTER_URL", "http://127.0.0.1:8180").rstrip("/")
 PLUGIN_PACKAGE_MAX_BYTES = int(os.getenv("HAOYUAN_PLUGIN_PACKAGE_MAX_BYTES", str(20 * 1024 * 1024)))
+PLUGIN_PACKAGE_MAX_UNCOMPRESSED_BYTES = int(
+    os.getenv("HAOYUAN_PLUGIN_PACKAGE_MAX_UNCOMPRESSED_BYTES", str(64 * 1024 * 1024))
+)
+PLUGIN_PACKAGE_MAX_FILES = int(os.getenv("HAOYUAN_PLUGIN_PACKAGE_MAX_FILES", "2000"))
+PLUGIN_CATALOG_MAX_BYTES = int(os.getenv("HAOYUAN_PLUGIN_CATALOG_MAX_BYTES", str(4 * 1024 * 1024)))
 # 匿名统计心跳（透明可关闭：HAOYUAN_TELEMETRY=0），密钥与服务端一致，仅用于过滤无关流量
 PLUGIN_CENTER_APP_KEY = os.getenv("HAOYUAN_TELEMETRY_APP_KEY", "haoyuan-plugin-center-v1")
 

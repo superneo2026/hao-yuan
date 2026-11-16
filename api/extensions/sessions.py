@@ -27,7 +27,6 @@ DEFAULT_SESSION_TITLES = {
     "New task",
     "New coding task",
     "New plan",
-    "New storyboard",
     "Robot task",
     "New conversation",
     "Untitled",
@@ -38,7 +37,6 @@ DEFAULT_SESSION_TITLES = {
     "新建会话",
     "未命名会话",
     "新方案",
-    "新分镜",
     "机器人任务",
 }
 TITLE_LANGUAGES = {
@@ -261,8 +259,8 @@ async def tools():
 @router.post("/sessions")
 async def create_session(body: SessionCreate):
     harness = await get_harness()
-    if body.kind not in ("auto", "dev", "coding", "plan", "video", "robot", "general"):
-        return fail("kind must be auto/dev/plan/video/robot/general")
+    if body.kind not in ("auto", "dev", "coding", "plan", "robot", "general"):
+        return fail("kind must be auto/dev/plan/robot/general")
     if body.thinking not in THINKING_LEVELS:
         return fail("thinking must be empty/auto/off/low/high")
     if body.workspace and not os.path.isdir(body.workspace):
@@ -273,7 +271,6 @@ async def create_session(body: SessionCreate):
         "dev": "New coding task",
         "coding": "New coding task",
         "plan": "New plan",
-        "video": "New storyboard",
         "robot": "Robot task",
         "general": "New conversation",
     }.get(body.kind, "New task")
@@ -377,7 +374,7 @@ async def patch_session(session_id: str, body: dict[str, Any]):
         fields["gate_allow"] = json.dumps(body.get("gate_allow") or [], ensure_ascii=False) if body.get("gate_allow") else ""
     if "skills" in body:
         fields["skills"] = json.dumps([s for s in body.get("skills") or [] if isinstance(s, str)], ensure_ascii=False)
-    if "kind" in body and body["kind"] in ("auto", "dev", "coding", "plan", "video", "robot", "general"):
+    if "kind" in body and body["kind"] in ("auto", "dev", "coding", "plan", "robot", "general"):
         fields["kind"] = body["kind"]
     if fields:
         await harness.storage.update_session(session_id, **fields)

@@ -279,7 +279,6 @@ class PluginManager:
                     "error": self.errors.get(name, ""),
                     "contributes": manifest.get("contributes", {}),
                     "frontend": manifest.get("frontend", {}),
-                    "config": (self.contexts.get(name).config if self.contexts.get(name) else manifest.get("config", {})),
                 }
             )
         return out

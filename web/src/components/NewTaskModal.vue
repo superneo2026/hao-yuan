@@ -14,7 +14,6 @@ const allKinds = [
   { id: 'auto', titleKey: 'newTask.auto', descKey: 'newTask.autoDesc', icon: 'sparkles' },
   { id: 'dev', titleKey: 'newTask.coding', descKey: 'newTask.codingDesc', icon: 'terminal' },
   { id: 'plan', titleKey: 'newTask.plan', descKey: 'newTask.planDesc', icon: 'document' },
-  { id: 'video', titleKey: 'newTask.video', descKey: 'newTask.videoDesc', icon: 'video' },
   { id: 'robot', titleKey: 'newTask.robot', descKey: 'newTask.robotDesc', icon: 'cpu' },
   { id: 'general', titleKey: 'newTask.chat', descKey: 'newTask.chatDesc', icon: 'message' }
 ]

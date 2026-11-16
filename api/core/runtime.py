@@ -65,7 +65,6 @@ DEBUG_HINTS = (
 )
 TERMINAL_HINTS = ("命令", "终端", "环境", "安装", "部署", "启动服务", "docker", "install", "deploy", "setup", "shell")
 REPORT_HINTS = ("报告", "分析", "总结", "方案", "计划书", "调研", "report", "analysis")
-VIDEO_INTENT = ("视频", "剪辑", "分镜", "配音", "口播", "字幕", "成片", "宣传片", "短视频", "storyboard")
 WEB_ARTIFACT_INTENT = (
     "html", "htm", "css", "javascript", "typescript", "vue", "react", "svelte",
     "网页", "页面", "网站", "站点", "前端", "代码", "程序",
@@ -260,17 +259,15 @@ def detect_task_type(text: str) -> str:
 def detect_kind(text: str) -> str:
     lowered = (text or "").lower()
     # Explicit code/web artifacts must win over incidental keyword matches: a
-    # task that only mentions "视频" while publishing, or that references an
+    # task that only mentions a video while publishing, or that references an
     # HTML page, is a coding task. Otherwise it is routed to the read-only
-    # video/plan agents and can never write the requested file.
+    # plan agent and can never write the requested file.
     if any(hint in lowered for hint in WEB_ARTIFACT_INTENT):
         return "dev"
     if _PLAN_INTENT_RE.search(text or "") and not _PATH_RE.search(text or ""):
         return "plan"
     if any(hint in lowered for hint in CODE_WORK_INTENT):
         return "dev"
-    if any(hint in lowered for hint in VIDEO_INTENT):
-        return "video"
     return "dev"
 
 
@@ -517,8 +514,6 @@ class AgentRuntime:
             return self.agents.get("general")
         if kind == "plan":
             return self.agents.get("planner")
-        if kind == "video":
-            return self.agents.get("video")
         if kind == "robot":
             return self.agents.get("robot")
         if kind == "general":
@@ -562,15 +557,15 @@ class AgentRuntime:
     def _tools_for(self, agent, kind: str, lite: bool, workspace: bool, text: str = "") -> list[str]:
         if not agent.tools:
             return []
-        if not workspace and getattr(agent, "kind", "") not in ("plan", "video", "robot"):
+        if not workspace and getattr(agent, "kind", "") not in ("plan", "robot"):
             chat_safe = {"system_info", "calculator", "now", "echo"}
             return [name for name in agent.tools if name in chat_safe and self.tools.get(name)]
         names = [name for name in agent.tools if self.tools.get(name)]
         if not names:
             return []
-        # Plan/video agents already expose a tiny purpose-built toolset; trimming
-        # it would remove their primary deliverable tool (make_plan/make_storyboard).
-        if lite and TOOL_SCHEMA_TRIM and getattr(agent, "kind", "") not in ("plan", "video"):
+        # Plan agents already expose a tiny purpose-built toolset; trimming it
+        # would remove their primary deliverable tool (make_plan).
+        if lite and TOOL_SCHEMA_TRIM and getattr(agent, "kind", "") != "plan":
             allowed = set(LITE_TOOL_SET) | {"plan_task", "update_plan"}
             # Web/reference tool schemas are large and irrelevant to ordinary repo
             # work. Only advertise them when the request is actually about a web
@@ -1336,7 +1331,7 @@ class AgentRuntime:
             pass
 
     async def _register_generated_artifact(self, session_id: str, call: ToolCall, result: ToolResult) -> None:
-        if call.name not in ("make_plan", "make_storyboard") or not result.ok:
+        if call.name != "make_plan" or not result.ok:
             return
         try:
             info = json.loads(str(result.result))
@@ -1435,11 +1430,6 @@ class AgentRuntime:
             parts.append(
                 "\n# Plan document mode\nWrite a rigorous proposal. Use make_plan to produce a standalone HTML document with "
                 "executive summary, KPIs, sections, tables, risks, milestones, and budget. Keep the document self-contained.\n"
-            )
-        if kind == "video":
-            parts.append(
-                "\n# Video storyboard mode\nProduce a shot-by-shot storyboard with duration, visuals, narration, and on-screen text. "
-                "Use make_storyboard to generate the deliverable. Do not claim to render actual video.\n"
             )
         if kind in ("dev", "coding") and workspace and not qa:
             parts.append(

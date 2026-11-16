@@ -7,7 +7,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from configs.configs import APP_NAME, APP_VERSION, SERVER_HOST, SERVER_PORT, WEB_DIST_DIR
+from configs.configs import (
+    APP_NAME,
+    APP_VERSION,
+    CORS_ORIGIN_REGEX,
+    CORS_ORIGINS,
+    SERVER_HOST,
+    SERVER_PORT,
+    WEB_DIST_DIR,
+)
 from configs.runtime import resolve_free_port, update_runtime
 from core.harness import harness_instance, init_harness
 from core.telemetry import telemetry
@@ -27,13 +35,22 @@ async def lifespan(app: FastAPI):
 harness = harness_instance()
 app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(CORS_ORIGINS),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=CORS_ORIGIN_REGEX,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 for module in (system, sessions, skills, settings, fs, usage, plugins, marketplace, approvals, supervisor):
     app.include_router(module.router)

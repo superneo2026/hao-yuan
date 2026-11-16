@@ -76,10 +76,6 @@ def test_html_document_with_video_mentions_routes_to_coding():
     assert detect_kind(text) == "dev"
 
 
-def test_video_storyboard_request_routes_to_video():
-    assert detect_kind("帮我写一个短视频分镜脚本") == "video"
-
-
 def test_plan_request_routes_to_plan():
     assert detect_kind("写一份商业计划书") == "plan"
 

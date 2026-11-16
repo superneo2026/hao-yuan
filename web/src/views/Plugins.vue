@@ -18,7 +18,6 @@ import Icon from '../components/Icon.vue'
 const icons = {
   coding: 'terminal',
   plans: 'document',
-  video: 'video',
   supervisor: 'activity',
   orchestrator: 'network',
   embodied: 'cpu',
@@ -28,7 +27,7 @@ const icons = {
 
 const route = useRoute()
 const router = useRouter()
-const corePlugins = new Set(['coding', 'plans', 'video', 'supervisor', 'orchestrator'])
+const corePlugins = new Set(['coding', 'plans', 'supervisor', 'orchestrator'])
 const tab = computed(() => (route.name === 'plugin-center' || route.query.tab === 'market' ? 'market' : 'installed'))
 const DEFAULT_CENTER_URL = 'https://hao-yuan.conductorer.com'
 
@@ -229,9 +228,12 @@ onMounted(() => {
         <button class="btn hero-btn" @click="refresh">
           <Icon name="refresh" :size="15" /> {{ t('common.refresh') }}
         </button>
-        <button class="btn primary hero-btn" @click="uploadOpen = true">
+        <button v-if="tab === 'installed'" class="btn primary hero-btn" @click="uploadOpen = true">
           <Icon name="upload" :size="15" /> {{ t('plugins.upload') }}
         </button>
+        <span v-else class="badge warn upload-unsupported">
+          <Icon name="alert" :size="13" /> {{ t('plugins.centerUploadHint') }}
+        </span>
       </div>
     </header>
 
@@ -754,6 +756,7 @@ onMounted(() => {
 .empty-market b { color: var(--ink-2); font-size: 14px; }
 .empty-market span { font-size: 12px; }
 
+.upload-unsupported { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 6px 14px; border-radius: 11px; white-space: normal; }
 .upload-modal { width: min(560px, calc(100vw - 32px)); }
 .upload-head-icon { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); border: 1px solid var(--brand-line); }
 .drop-zone { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 30px 20px; border: 1.5px dashed var(--line-strong); border-radius: 15px; background: var(--surface-2); text-align: center; cursor: pointer; transition: all .16s var(--ease); }

@@ -140,7 +140,7 @@ bank.py:12: AssertionError
     assert "test_withdraw" in guidance
 
 
-def test_plan_and_storyboard_documents(client, tmp_path):
+def test_plan_documents(client, tmp_path):
     harness = harness_instance()
     session = asyncio.run(
         harness.manager.create_session(
@@ -177,15 +177,6 @@ def test_plan_and_storyboard_documents(client, tmp_path):
     info = json.loads(document)
     assert os.path.isfile(info["path"])
     assert "<!doctype html>" in open(info["path"], encoding="utf-8").read().lower()
-    story = asyncio.run(
-        plan_tools.make_storyboard(
-            context,
-            {"title": "Launch", "theme": "developer tool", "shots": [{"scene": "Hook", "duration": "3s"}]},
-        )
-    )
-    story_info = json.loads(story)
-    assert os.path.isfile(story_info["path"])
-
 def test_repo_map_ranks_query_files(tmp_path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "pricing.py").write_text("def stack_discounts(items):\n    return items\n", encoding="utf-8")
@@ -202,12 +193,8 @@ def test_mimo_provider_is_wired():
     assert resolve("mimo", "mimo-v2.6-flash") == ("mimo", "mimo-v2.6-flash")
     assert PROVIDERS["mimo"].supports_thinking is False
 
-def test_lite_mode_keeps_domain_tools_for_plan_and_video():
+def test_lite_mode_keeps_domain_tools_for_plan():
     harness = harness_instance()
-    video = harness.agents.get("video")
-    video_names = harness.runtime._tools_for(video, "video", True, True)
-    assert "make_storyboard" in video_names
-    assert "read_file" in video_names
     planner = harness.agents.get("planner")
     plan_names = harness.runtime._tools_for(planner, "plan", True, True)
     assert "make_plan" in plan_names
