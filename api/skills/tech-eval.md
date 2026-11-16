@@ -35,12 +35,13 @@ Never ship a nav link without a matching `id`. If budget runs low, finish every 
 Name which components are frozen vs trained, the data volume, memory peak, pure and wall time, card choice, expected benchmark range and the hard limit. State why training the reused components from scratch is infeasible in budget.
 
 ## Benchmark-anchored acceptance
-Use small standard benchmarks where they exist (ARC-e/PIQA/HellaSwag, VQA-v2/POPE/CIDEr, LIBERO/CALVIN, PSNR/SSIM, ASR WER) plus a task-specific dialogue set. Give explicit pass lines and a 10% pilot gate with a primary and an anti-regression metric.
+Use small standard benchmarks where they exist; list at least one named metric per category even for tiny models: ARC-e/PIQA/HellaSwag for LLM, VQA-v2/POPE/CIDEr for VLM, LIBERO/CALVIN for VLA, PSNR/SSIM/FVD for world models, ASR WER/MOS for S2S. Add a task-specific dialogue set, explicit pass lines and a 10% pilot gate with a primary and an anti-regression metric.
 
 ## Finish and verify
-Include infeasibility alternatives, key risks with mitigations and a delivery checklist. Run web_audit; fix every must-fix item, especially broken in-page anchors and stray helper files. Include a diagram (SVG pipeline or budget bar) when the reference uses one, and follow the reference design exactly.
+Include infeasibility alternatives, key risks with mitigations and a delivery checklist. Run web_audit; fix every must-fix item, especially broken in-page anchors and stray helper files. When the user supplied a reference page, call reference_compare after writing, report the score, and reuse its component vocabulary (.qa / .code / .sb / .kpi / .callout). Include a diagram (SVG pipeline or budget bar) when the reference uses one, and follow the reference design exactly.
 
 ## Work within a tool budget
+- Batch independent tool calls: put all reads/searches in one assistant message and all writes/patches in the next. Target at least two tool calls per step.
 - Do arithmetic in ONE python script, run it, fix once, then reuse the result. Do not run ad-hoc shell checks per number.
 - Write each section once; do not rewrite a finished section for style. Keep total file-writing calls to roughly ten.
 - Run web_audit and reference_compare once after the final write, fix must-fix items, then stop. Do not re-audit cosmetic changes.
