@@ -113,3 +113,16 @@ def test_reference_digest_and_compare_tools(tmp_path):
     assert "fidelity" in dev.reference_compare(context, {"reference": "ref.html", "target": "target.html"})
     audit = dev.web_audit(context, {"path": ".", "reference": "ref.html"})
     assert "reference_compare" in audit
+
+
+def test_web_audit_flags_broken_in_page_anchors(tmp_path):
+    page = tmp_path / "page.html"
+    page.write_text(
+        '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"></head>'
+        '<body><nav><a href="#s1">ok</a><a href="#s2">missing</a></nav>'
+        '<h1>Report</h1><section id="s1">content</section></body></html>',
+        encoding="utf-8",
+    )
+    audit = dev.web_audit(ctx_for(tmp_path), {"path": "."})
+    assert "broken in-page anchors" in audit
+    assert "s2" in audit

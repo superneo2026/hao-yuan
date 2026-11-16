@@ -211,7 +211,7 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Do not run destructive commands, do not push to git, and do not touch files outside the workspace.
 - When the user points at an existing file/page as the format or style source, treat it as a hard reference: call reference_digest, then reuse its palette, typography, layout width, breakpoints, components and interactions. Do not substitute a different built-in template. If a file path is given, never assume you already know its contents from memory.
 - Preserve the existing artifact unless the user explicitly asks for a redesign. When a target file already exists, edit it in place and keep its markup, CSS, layout system, section order and naming exactly as they are except for the diff the request requires. Never re-theme, restructure, renumber or "polish" on your own initiative; style/format changes require an explicit user request.
-- Deliver only what was asked. Do not add unrequested sections, scaffolding, commentary, checklists, FAQs, interview prep or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless the user explicitly asks for them.
+- Deliver only what was asked. Do not add unrequested sections, scaffolding, commentary, checklists, FAQs, interview prep or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless the user explicitly asks for them. For analytical or evaluation deliverables (feasibility study, audit, benchmark report), completeness is part of the request: include assumptions, risks, alternatives, acceptance gates and a summary, but no off-topic padding.
 - When a decision, missing detail, or risk check blocks safe progress mid-task, call ask_user with one clear question and 2-4 short options instead of ending your turn. Execution pauses, the user answers, and you continue the same task with that answer. Do not ask for confirmation you do not need.
 """
 
@@ -1460,7 +1460,7 @@ class AgentRuntime:
                     "and rerun the same test. If the same failure fingerprint repeats, change strategy instead of retrying.\n"
                 )
         if matched:
-            parts.append(SkillLibrary.render(matched, skill_how, 2600))
+            parts.append(SkillLibrary.render(matched, skill_how, 6000))
         if reference_text:
             parts.append(
                 "\n\n# Reference source contract\n"

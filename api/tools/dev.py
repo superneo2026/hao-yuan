@@ -700,6 +700,14 @@ def web_audit(ctx: ToolContext, args: dict[str, Any]) -> str:
     css_files = sorted(css_files)[:40]
     if not html_files:
         return f"[web_audit] no HTML files found under {base}"
+    stray_files = []
+    if base.is_dir():
+        deliverable_exts = (".html", ".htm", ".css", ".js", ".json", ".md", ".svg", ".png",
+                            ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".woff", ".woff2")
+        for name in sorted(os.listdir(base)):
+            full = os.path.join(base, name)
+            if os.path.isfile(full) and not name.lower().endswith(deliverable_exts):
+                stray_files.append(name)
     css_blob = ""
     for path in css_files:
         try:
@@ -742,6 +750,11 @@ def web_audit(ctx: ToolContext, args: dict[str, Any]) -> str:
         duplicates = sorted({item for item in ids if ids.count(item) > 1})
         if duplicates:
             page_issues.append("duplicate ids: " + ", ".join(duplicates[:6]))
+        id_set = set(ids)
+        anchors = re.findall(r'href=["\']#([^"\']+)["\']', text, re.I)
+        broken_anchors = sorted({a for a in anchors if a not in id_set})
+        if broken_anchors:
+            page_issues.append("broken in-page anchors: " + ", ".join(broken_anchors[:8]))
         missing = []
         for ref in re.findall(r'(?:href|src)=["\']([^"\'#]+)["\']', text, re.I):
             if ref.lower().startswith(("http://", "https://", "//", "data:", "mailto:", "javascript:", "tel:")):
@@ -773,6 +786,12 @@ def web_audit(ctx: ToolContext, args: dict[str, Any]) -> str:
         f"design system: shared CSS={'yes' if css_files else 'no'} @media={'yes' if css_has_media else 'no'} variables={'yes' if css_has_vars else 'no'}",
         f"score: {score}/100 - {grade}",
     ]
+    if stray_files:
+        lines.append(
+            "note: non-deliverable files in output directory: "
+            + ", ".join(stray_files[:10])
+            + " (move helper scripts to a temp dir before delivery)"
+        )
     if issues:
         lines.append("must fix:")
         lines += [f"  {index}. {item}" for index, item in enumerate(issues[:24])]

@@ -17,7 +17,7 @@ Inspect before editing. Locate the exact file and line. Prefer a minimal patch o
 When the target file already exists, treat it as an in-place edit. Keep its markup, CSS, layout system, section order and naming unchanged except for the exact diff requested. Never re-theme, restructure, renumber or "polish" on your own initiative; a visual or structural change needs an explicit request.
 
 ## Only what was asked
-Deliver the requested content, nothing extra. Do not append unrequested sections, FAQs, checklists, commentary or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless explicitly requested.
+Deliver the requested content, nothing extra. Do not append unrequested sections, FAQs, checklists, commentary or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless explicitly requested. For analytical or evaluation deliverables (feasibility study, audit, benchmark report), completeness is part of the request: cover assumptions, risks, alternatives, acceptance gates and a summary, but never pad with off-topic sections.
 
 ## Evidence over claims
 Any statement of completion must name the verification command and its result. If verification was impossible, say what is unverified.
