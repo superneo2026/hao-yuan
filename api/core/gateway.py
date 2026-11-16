@@ -42,7 +42,7 @@ class ModelGateway:
                 item = (name, other.default_model)
                 if item not in out:
                     out.append(item)
-        if provider != "mock":
+        if not conf or not conf.api_key:
             out.append(("mock", "mock-deterministic"))
         if not out:
             out.append(("mock", "mock-deterministic"))
