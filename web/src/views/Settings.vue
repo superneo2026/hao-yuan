@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api/client'
-import { loadSettings, saveDefaultWorkspace, saveGate, saveSetting, setTheme, state, toast } from '../stores/app'
+import { loadSettings, refreshModels, saveDefaultWorkspace, saveGate, saveSetting, setTheme, state, toast } from '../stores/app'
 import { i18n, localeOptions, setLocale, t } from '../i18n'
 import DirPicker from '../components/DirPicker.vue'
 import Icon from '../components/Icon.vue'
@@ -17,6 +17,136 @@ const checkpoints = ref(state.settings.checkpoints !== '0')
 const confirmTools = computed(() => (info.value?.tools || []).filter((tool) => tool.confirm))
 
 const providers = computed(() => state.health?.providers || [])
+
+const modelConfig = ref({ path: '', providers: [], default_provider: '', default_model: '' })
+const modelDraft = ref(null)
+const savingModel = ref(false)
+
+const routeOptions = computed(() => {
+  const out = []
+  for (const provider of modelConfig.value.providers || []) {
+    for (const model of provider.models || []) out.push({ provider: provider.name, model, label: `${provider.name} / ${model}` })
+  }
+  return out
+})
+const routeValue = computed(() => {
+  const { default_provider: provider, default_model: model } = modelConfig.value
+  return provider && model ? `${provider}|${model}` : ''
+})
+const draftModels = computed(() => splitList(modelDraft.value?.modelsText))
+
+function splitList(text) {
+  return String(text || '')
+    .split(/[\n,;]+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
+
+function applyModelConfig(view) {
+  modelConfig.value = view
+  refreshModels().catch(() => {})
+}
+
+function startAddProvider() {
+  modelDraft.value = {
+    name: '',
+    builtin: false,
+    base_url: '',
+    api_key: '',
+    clear_key: false,
+    has_key: false,
+    modelsText: '',
+    default_model: '',
+    supports_thinking: true,
+    thinkingText: '',
+    max_output_tokens: 8192
+  }
+}
+
+function startEditProvider(provider) {
+  modelDraft.value = {
+    name: provider.name,
+    builtin: provider.builtin,
+    base_url: provider.base_url || '',
+    api_key: '',
+    clear_key: false,
+    has_key: provider.has_key,
+    modelsText: (provider.models || []).join('\n'),
+    default_model: provider.default_model || '',
+    supports_thinking: provider.supports_thinking !== false,
+    thinkingText: (provider.thinking_models || []).join(','),
+    max_output_tokens: provider.max_output_tokens || 8192
+  }
+}
+
+function cancelModelDraft() {
+  modelDraft.value = null
+}
+
+async function reloadModelConfig() {
+  try {
+    applyModelConfig(await api.config())
+  } catch (error) {
+    toast(error.message, 'bad')
+  }
+}
+
+async function saveProvider() {
+  const draft = modelDraft.value
+  if (!draft) return
+  if (!/^[A-Za-z0-9._-]+$/.test(draft.name.trim())) {
+    toast(t('settings.providerName'), 'bad')
+    return
+  }
+  savingModel.value = true
+  try {
+    const view = await api.saveConfig({
+      providers: [
+        {
+          name: draft.name.trim(),
+          base_url: draft.base_url.trim(),
+          api_key: draft.api_key.trim(),
+          clear_key: draft.clear_key,
+          models: splitList(draft.modelsText),
+          default_model: draft.default_model.trim(),
+          supports_thinking: draft.supports_thinking,
+          thinking_models: splitList(draft.thinkingText),
+          max_output_tokens: Number(draft.max_output_tokens) || 0
+        }
+      ]
+    })
+    applyModelConfig(view)
+    modelDraft.value = null
+    toast(t('settings.savedConfig'), 'good')
+  } catch (error) {
+    toast(error.message, 'bad')
+  } finally {
+    savingModel.value = false
+  }
+}
+
+async function removeProvider(provider) {
+  if (!provider || provider.builtin) return
+  if (!window.confirm(`${t('common.delete')} ${provider.name}?`)) return
+  try {
+    applyModelConfig(await api.saveConfig({ removed: [provider.name] }))
+    toast(t('settings.savedConfig'), 'good')
+  } catch (error) {
+    toast(error.message, 'bad')
+  }
+}
+
+async function saveDefaultRoute(event) {
+  const [provider, model] = String(event.target.value || '').split('|')
+  if (!provider || !model) return
+  modelConfig.value = { ...modelConfig.value, default_provider: provider, default_model: model }
+  try {
+    applyModelConfig(await api.saveConfig({ default_provider: provider, default_model: model }))
+    toast(t('settings.savedConfig'), 'good')
+  } catch (error) {
+    toast(error.message, 'bad')
+  }
+}
 
 function sync() {
   gate.value = {
@@ -79,6 +209,11 @@ onMounted(async () => {
   sync()
   try {
     info.value = await api.info()
+  } catch {
+    /* optional */
+  }
+  try {
+    modelConfig.value = await api.config()
   } catch {
     /* optional */
   }
@@ -187,6 +322,95 @@ onMounted(async () => {
 
       <section class="settings-card wide">
         <div class="settings-head">
+          <span class="settings-icon"><Icon name="zap" :size="17" /></span>
+          <div><b>{{ t('settings.models') }}</b><span>{{ t('settings.modelsDesc') }}</span></div>
+        </div>
+        <div class="config-path mono">{{ modelConfig.path }}</div>
+        <div class="model-defaults">
+          <label class="label">{{ t('settings.defaultRoute') }}</label>
+          <select class="select" :value="routeValue" @change="saveDefaultRoute">
+            <option value="">{{ t('settings.defaultRoute') }}</option>
+            <option v-for="option in routeOptions" :key="`${option.provider}|${option.model}`" :value="`${option.provider}|${option.model}`">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <div class="provider-grid">
+          <div v-for="provider in modelConfig.providers" :key="provider.name" class="provider-card">
+            <div class="row" style="justify-content: space-between">
+              <b>{{ provider.name }}</b>
+              <span class="badge" :class="provider.has_key ? 'good' : 'warn'">{{ provider.has_key ? t('settings.ready') : t('settings.noKey') }}</span>
+            </div>
+            <div class="tiny faint mono">{{ provider.base_url || '—' }}</div>
+            <div class="model-chip-row">
+              <span v-for="model in provider.models" :key="model" class="model-chip" :class="{ active: model === provider.default_model }">{{ model }}</span>
+            </div>
+            <div class="tiny faint">{{ t('settings.source', { source: provider.key_source }) }} · {{ provider.max_output_tokens }} tokens</div>
+            <div class="row" style="margin-top: 8px">
+              <button class="btn sm" @click="startEditProvider(provider)">{{ t('common.edit') }}</button>
+              <button v-if="!provider.builtin" class="btn sm danger" @click="removeProvider(provider)">{{ t('common.delete') }}</button>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px">
+          <button class="btn primary sm" @click="startAddProvider">{{ t('settings.addProvider') }}</button>
+          <button class="btn sm" @click="reloadModelConfig">{{ t('settings.refreshConfig') }}</button>
+          <span class="tiny faint">{{ t('settings.modelsHint') }}</span>
+        </div>
+
+        <div v-if="modelDraft" class="model-editor">
+          <div class="settings-head" style="margin-bottom: 10px">
+            <span class="settings-icon"><Icon name="plus" :size="16" /></span>
+            <div><b>{{ modelDraft.builtin ? t('settings.editProvider') : t('settings.addProvider') }}</b><span>{{ modelDraft.name || t('settings.providerName') }}</span></div>
+          </div>
+          <div class="editor-grid">
+            <label>
+              <span>{{ t('settings.providerName') }}</span>
+              <input v-model="modelDraft.name" class="field mono" :disabled="modelDraft.builtin" placeholder="my-provider" />
+            </label>
+            <label>
+              <span>{{ t('settings.baseUrl') }}</span>
+              <input v-model="modelDraft.base_url" class="field mono" placeholder="https://api.example.com/v1" />
+            </label>
+            <label>
+              <span>{{ t('settings.apiKey') }}</span>
+              <input v-model="modelDraft.api_key" class="field mono" type="password" :placeholder="modelDraft.has_key ? t('settings.keyKeep') : 'sk-...'" autocomplete="off" />
+            </label>
+            <label>
+              <span>{{ t('settings.maxOutput') }}</span>
+              <input v-model="modelDraft.max_output_tokens" class="field mono" type="number" min="256" step="256" />
+            </label>
+            <label class="wide">
+              <span>{{ t('settings.modelsList') }}</span>
+              <textarea v-model="modelDraft.modelsText" class="field mono" rows="4" placeholder="model-a&#10;model-b" />
+            </label>
+            <label>
+              <span>{{ t('settings.defaultModelField') }}</span>
+              <select v-model="modelDraft.default_model" class="select">
+                <option value="">{{ t('settings.defaultModelField') }}</option>
+                <option v-for="model in draftModels" :key="model" :value="model">{{ model }}</option>
+              </select>
+            </label>
+            <label>
+              <span>{{ t('settings.thinkingModels') }}</span>
+              <input v-model="modelDraft.thinkingText" class="field mono" placeholder="model-a,model-b" />
+            </label>
+          </div>
+          <div class="editor-flags">
+            <label class="check"><input v-model="modelDraft.supports_thinking" type="checkbox" /> {{ t('settings.supportsThinking') }}</label>
+            <label v-if="modelDraft.has_key" class="check"><input v-model="modelDraft.clear_key" type="checkbox" /> {{ t('settings.clearKey') }}</label>
+          </div>
+          <div class="row">
+            <button class="btn primary sm" :disabled="savingModel" @click="saveProvider">
+              <span v-if="savingModel" class="spinner" style="width: 12px; height: 12px" /> {{ t('common.save') }}
+            </button>
+            <button class="btn sm" @click="cancelModelDraft">{{ t('common.cancel') }}</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-card wide">
+        <div class="settings-head">
           <span class="settings-icon"><Icon name="brain" :size="17" /></span>
           <div><b>{{ t('settings.providers') }}</b><span>{{ t('settings.providersDesc') }}</span></div>
         </div>
@@ -275,4 +499,21 @@ onMounted(async () => {
 .about-grid span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
 .about-grid b { font-size: 12px; font-weight: 560; }
 @media (max-width: 860px) { .settings-grid { grid-template-columns: 1fr; } .about-grid { grid-template-columns: 1fr 1fr; } }
+
+.config-path { font-size: 11px; color: var(--faint); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; margin-bottom: 10px; word-break: break-all; }
+.model-defaults { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.model-defaults .label { font-size: 11px; color: var(--muted); }
+.model-chip-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 7px 0 5px; }
+.model-chip { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface-2); }
+.model-chip.active { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand); }
+.model-editor { margin-top: 14px; padding: 13px; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--surface-2); }
+.editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.editor-grid label { display: flex; flex-direction: column; gap: 4px; }
+.editor-grid label > span { font-size: 10.5px; color: var(--faint); }
+.editor-grid label.wide { grid-column: 1 / -1; }
+.editor-grid textarea { resize: vertical; min-height: 84px; }
+.editor-flags { display: flex; flex-wrap: wrap; gap: 14px; margin: 9px 0; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.btn.danger { color: var(--bad, #d33); }
+@media (max-width: 720px) { .editor-grid { grid-template-columns: 1fr; } }
 </style>

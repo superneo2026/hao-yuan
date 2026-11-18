@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 _DATA = tempfile.mkdtemp(prefix="haoyuan-test-")
 os.environ["HAOYUAN_DATA_DIR"] = _DATA
+os.environ["HAOYUAN_CONFIG"] = os.path.join(_DATA, "config.json")
 os.environ["HAOYUAN_AUTO_APPROVE"] = "0"
 os.environ["HAOYUAN_AUTO_RESUME"] = "0"
 os.environ["HAOYUAN_SUPERVISOR_INTERVAL"] = "3600"

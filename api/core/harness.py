@@ -68,6 +68,10 @@ class Harness:
                 pass
             self.supervisor_task = None
         await self.plugins.shutdown()
+        try:
+            await self.gateway.aclose()
+        except Exception:
+            pass
         for task in list(self.manager.tasks.values()):
             task.cancel()
         await self.events.stop()

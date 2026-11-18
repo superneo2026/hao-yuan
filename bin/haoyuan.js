@@ -132,16 +132,40 @@ function ensureVenv() {
   return run(py, ["-m", "venv", VENV]);
 }
 
+function pipArgs() {
+  const args = ["-m", "pip", "install"];
+  const index = (process.env.HAOYUAN_PIP_INDEX_URL || "").trim();
+  if (index) args.push("--index-url", index);
+  return args;
+}
+
 function installBackend() {
   if (!ensureVenv()) return false;
-  run(PYTHON, ["-m", "pip", "install", "--upgrade", "pip"]);
-  return run(PYTHON, ["-m", "pip", "install", "-r", path.join(API, "requirements.txt")]);
+  run(PYTHON, [...pipArgs(), "--upgrade", "pip"], { lenient: true });
+  return run(PYTHON, [...pipArgs(), "-r", path.join(API, "requirements.txt")]);
+}
+
+function npmArgs() {
+  const args = ["install", "--no-audit", "--no-fund"];
+  const registry = (process.env.HAOYUAN_NPM_REGISTRY || "").trim();
+  if (registry) {
+    log(`使用自定义 npm 源: ${registry}`);
+    args.push("--registry", registry);
+  } else {
+    log("使用当前 npm 配置的 registry（可用 HAOYUAN_NPM_REGISTRY 覆盖）");
+  }
+  return args;
 }
 
 function installFrontend() {
   if (!fs.existsSync(path.join(WEB, "node_modules"))) {
     log("安装前端依赖 ...");
-    return run(NPM, ["install", "--no-audit", "--no-fund"], { cwd: WEB });
+    const ok = run(NPM, npmArgs(), { cwd: WEB, lenient: true });
+    if (!ok && fs.existsSync(DIST_INDEX)) {
+      warn("前端依赖安装失败，改用已包含的预构建前端（web/dist）继续。");
+      return true;
+    }
+    return ok;
   }
   return true;
 }
@@ -153,6 +177,7 @@ function buildFrontend() {
 }
 
 function setup({ build = true } = {}) {
+  ensureConfigFile();
   const ok = installBackend();
   if (build && fs.existsSync(DIST_INDEX)) {
     log("已包含预构建前端（web/dist），跳过前端构建。");
@@ -209,6 +234,7 @@ function openBrowser(url) {
 }
 
 function postinstall() {
+  ensureConfigFile();
   if (!findPython()) {
     warn("未检测到 Python 3.10+：npm 安装继续，但首次运行 haoyuan 前请先安装 Python。");
     return;
@@ -266,6 +292,7 @@ async function web(options = {}) {
 }
 
 async function ensureServer() {
+  ensureConfigFile();
   const running = await healthyPort(readApiPort());
   if (running) return { port: running, child: null };
 
@@ -420,13 +447,24 @@ function logoutCommand() {
 
 const CONFIG_TEMPLATE = JSON.stringify(
   {
+    _help:
+      "HaoYuan 全局配置。优先级：环境变量 > 本文件 > api/configs/secrets_local.py。" +
+      "内置渠道用 DEEPSEEK_* / ZHIPU_* / MIMO_* 字段；任意 OpenAI 兼容渠道写到 providers 对象，" +
+      "例如 providers: {\"my-provider\": {\"base_url\": \"https://...\", \"api_key\": \"...\", " +
+      "\"models\": [\"model-a\", \"model-b\"], \"default_model\": \"model-a\"}}。" +
+      "网页设置页保存时会同步写入本文件。",
+    PROVIDER: "",
+    MODEL: "",
     DEEPSEEK_API_KEY: "",
     DEEPSEEK_BASE_URL: "https://api.deepseek.com",
     DEEPSEEK_MODEL: "deepseek-flash",
     ZHIPU_API_KEY: "",
+    ZHIPU_BASE_URL: "https://open.bigmodel.cn/api/coding/paas/v4",
+    ZHIPU_MODEL: "glm-5.3-flash",
     MIMO_API_KEY: "",
-    PROVIDER: "",
-    MODEL: "",
+    MIMO_BASE_URL: "https://token-plan-cn.xiaomimimo.com/v1",
+    MIMO_MODEL: "mimo-v2.6-flash",
+    providers: {},
   },
   null,
   2
@@ -438,15 +476,24 @@ function configFilePath() {
     : path.join(os.homedir(), ".config", "haoyuan", "config.json");
 }
 
-function configCommand({ open = false } = {}) {
+function ensureConfigFile() {
   const file = configFilePath();
-  let created = false;
-  if (!fs.existsSync(file)) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${CONFIG_TEMPLATE}\n`);
-    created = true;
+  try {
+    if (!fs.existsSync(file)) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${CONFIG_TEMPLATE}\n`, { mode: 0o600 });
+      log(`已生成全局配置文件: ${file}`);
+    }
+  } catch (err) {
+    warn(`无法创建全局配置文件 ${file}: ${err.message}`);
   }
-  log(`全局配置文件: ${file}${created ? "（已创建）" : ""}`);
+  return file;
+}
+
+function configCommand({ open = false } = {}) {
+  const existed = fs.existsSync(configFilePath());
+  const file = ensureConfigFile();
+  log(`全局配置文件: ${file}${existed ? "" : "（已创建）"}${open ? "" : "（可用 --open 打开编辑）"}`);
   if (open && IS_WIN) {
     spawn("cmd", ["/c", "start", "", "notepad.exe", file], { detached: true, stdio: "ignore" }).unref();
   } else if (open && process.platform === "darwin") {
@@ -460,7 +507,7 @@ function configCommand({ open = false } = {}) {
       "填写示例（JSON，优先级：环境变量 > 本文件 > api/configs/secrets_local.py）：",
       CONFIG_TEMPLATE.replace(/: "",/g, ': "",'),
       "",
-      "保存后重新运行 haoyuan 生效。",
+      "保存后无需重启：服务会自动热加载；网页「设置 → 模型配置」也会双向同步本文件。",
       "",
     ].join("\n")
   );

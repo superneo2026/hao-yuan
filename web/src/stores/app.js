@@ -1368,6 +1368,13 @@ export async function uninstallPluginByName(name) {
   return data
 }
 
+export async function refreshModels() {
+  const [health, models] = await Promise.all([api.health(), api.models()])
+  state.health = health
+  state.models = models.providers || models || []
+  return state.models
+}
+
 export async function loadSettings() {
   state.settings = await api.settings()
   return state.settings

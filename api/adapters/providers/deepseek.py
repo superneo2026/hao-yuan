@@ -8,11 +8,38 @@ from typing import Any, AsyncGenerator
 import httpx
 
 from configs.configs import LLM_FIRST_CHUNK_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, LLM_TOTAL_TIMEOUT
+from configs.configs import LLM_CONNECT_TIMEOUT
 from configs.models import ProviderConfig
 
 
+class ProviderHTTPError(RuntimeError):
+    def __init__(self, status: int, body: str, retry_after: str | None = None):
+        self.status = int(status)
+        self.body = body
+        self.retry_after = retry_after
+        super().__init__(f"model gateway HTTP {status}: {body[:600]}")
+
+
+# 复用一个长连接客户端：每一次模型调用都重新建 TLS 连接会明显拖慢多步任务。
+
 class DeepSeekProvider:
     name = "deepseek"
+
+    def __init__(self):
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(None, connect=LLM_CONNECT_TIMEOUT),
+                limits=httpx.Limits(max_connections=32, max_keepalive_connections=16, keepalive_expiry=300),
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def stream(
         self,
@@ -62,59 +89,61 @@ class DeepSeekProvider:
         started = time.monotonic()
         first = True
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=20)) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                if response.status_code >= 400:
-                    body = (await response.aread()).decode("utf-8", errors="replace")
-                    raise RuntimeError(f"model gateway HTTP {response.status_code}: {body[:600]}")
-                lines = response.aiter_lines()
-                while True:
-                    budget = LLM_FIRST_CHUNK_TIMEOUT if first else LLM_STREAM_IDLE_TIMEOUT
-                    if LLM_TOTAL_TIMEOUT:
-                        budget = min(budget, max(1.0, LLM_TOTAL_TIMEOUT - (time.monotonic() - started)))
-                    try:
-                        line = await asyncio.wait_for(lines.__anext__(), timeout=budget)
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError as exc:
-                        phase = "first chunk" if first else "stream idle"
-                        raise TimeoutError(f"model response {phase} timeout ({int(budget)}s)") from exc
-                    first = False
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    if chunk.get("usage"):
-                        usage = chunk["usage"]
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    finish_reason = choice.get("finish_reason") or finish_reason
-                    delta = choice.get("delta") or {}
-                    reasoning = delta.get("reasoning_content")
-                    if reasoning:
-                        reasoning_parts.append(reasoning)
-                        yield {"type": "reasoning", "text": reasoning}
-                    content = delta.get("content")
-                    if content:
-                        text_parts.append(content)
-                        yield {"type": "delta", "text": content}
-                    for item in delta.get("tool_calls") or []:
-                        index = int(item.get("index", 0))
-                        buf = tool_buffers.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                        if item.get("id"):
-                            buf["id"] = item["id"]
-                        function = item.get("function") or {}
-                        if function.get("name"):
-                            buf["name"] = function["name"]
-                        if function.get("arguments"):
-                            buf["arguments"] += function["arguments"]
+        client = self._get_client()
+        async with client.stream("POST", url, json=payload, headers=headers) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", errors="replace")
+                raise ProviderHTTPError(
+                    response.status_code, body, response.headers.get("retry-after")
+                )
+            lines = response.aiter_lines()
+            while True:
+                budget = LLM_FIRST_CHUNK_TIMEOUT if first else LLM_STREAM_IDLE_TIMEOUT
+                if LLM_TOTAL_TIMEOUT:
+                    budget = min(budget, max(1.0, LLM_TOTAL_TIMEOUT - (time.monotonic() - started)))
+                try:
+                    line = await asyncio.wait_for(lines.__anext__(), timeout=budget)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError as exc:
+                    phase = "first chunk" if first else "stream idle"
+                    raise TimeoutError(f"model response {phase} timeout ({int(budget)}s)") from exc
+                first = False
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                finish_reason = choice.get("finish_reason") or finish_reason
+                delta = choice.get("delta") or {}
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+                    yield {"type": "reasoning", "text": reasoning}
+                content = delta.get("content")
+                if content:
+                    text_parts.append(content)
+                    yield {"type": "delta", "text": content}
+                for item in delta.get("tool_calls") or []:
+                    index = int(item.get("index", 0))
+                    buf = tool_buffers.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    if item.get("id"):
+                        buf["id"] = item["id"]
+                    function = item.get("function") or {}
+                    if function.get("name"):
+                        buf["name"] = function["name"]
+                    if function.get("arguments"):
+                        buf["arguments"] += function["arguments"]
 
         calls = []
         for index in sorted(tool_buffers):

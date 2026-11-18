@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from configs.configs import DEFAULT_PROVIDER, prefix
+from configs.configs import prefix
 from configs.models import list_models, resolve
 from core.harness import get_harness
 from core.storage import now
@@ -77,7 +77,7 @@ async def _generate_session_title(harness, session: dict[str, Any], content: str
     language = TITLE_LANGUAGES.get(locale)
     if not language:
         return
-    provider = session.get("provider") or DEFAULT_PROVIDER
+    provider = session.get("provider") or resolve(None, None)[0]
     model = session.get("model") or ""
     title = ""
     if provider != "mock":
@@ -119,7 +119,7 @@ def _spawn_title_task(harness, session: dict[str, Any], content: str, locale: st
 class SessionCreate(BaseModel):
     kind: str = "auto"
     title: str = ""
-    provider: str = DEFAULT_PROVIDER
+    provider: str = ""
     model: str = ""
     workspace: str = ""
     template_id: str = ""

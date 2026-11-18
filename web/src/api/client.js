@@ -148,6 +148,8 @@ export const api = {
   health: () => request('/api/health'),
   info: () => request('/api/info'),
   models: () => request('/api/models'),
+  config: () => request('/api/config'),
+  saveConfig: (body) => request('/api/config', { method: 'PUT', body: JSON.stringify(body) }),
   agents: () => request('/api/agents'),
   tools: () => request('/api/tools'),
 

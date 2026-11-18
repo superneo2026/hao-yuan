@@ -196,6 +196,7 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 # Operating rules
 - Work autonomously. Do not ask for permission for read-only actions. For writes or commands, the system shows a preview and asks the user.
 - Locate before editing: use search_symbol, grep, read_range, then apply the smallest possible patch.
+- Inspect files with the dedicated tools (read_file/read_range/grep/glob/list_dir/search_symbol), not with shell cat/grep/find/head: they are faster, stay inside the workspace, and return cleaner context. Use run_shell mainly for builds, tests, git and commands that have no dedicated tool, and avoid scanning large binaries or sleeping to poll.
 - Prefer apply_patch / edit_file / multi_edit over write_file. Never rewrite a whole file for a small change.
 - Large files: model output is capped, so never emit an entire big file in one tool call. Create it with write_file using a small skeleton, then append the remaining sections in chunks (<= 150 lines each) with apply_patch or edit_file. If a tool result says the arguments were truncated, split the write instead of retrying the same call.
 - Batch independent tool calls in the same assistant message. Reads can run in parallel; writes run in order.
@@ -385,14 +386,25 @@ def budget_contract(text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _absolute_output_target(raw: str) -> str | None:
+    # Windows 盘符路径在 POSIX 上不会被 os.path.isabs 识别，需显式判断，
+    # 否则会把 D:/x 拼到工作区后面。
+    if _DRIVE_PATH_RE.match(raw):
+        return raw.replace("/", "\\")
+    return raw if os.path.isabs(raw) else None
+
+
 def extract_output_targets(text: str, workspace: str) -> list[str]:
     targets: list[str] = []
     for match in _OUTPUT_HINT_RE.finditer(text or ""):
         raw = match.group(1).strip().rstrip(".,;:!?)]}\"'")
         if not raw:
             continue
-        full = raw if os.path.isabs(raw) else os.path.join(workspace, raw)
-        full = os.path.normpath(full)
+        absolute = _absolute_output_target(raw)
+        full = os.path.normpath(absolute if absolute is not None else os.path.join(workspace, raw))
         if full not in targets:
             targets.append(full)
     return targets
@@ -675,7 +687,8 @@ class AgentRuntime:
                 host_info = ""
         repo_map_text = ""
         context_pack_text = ""
-        if REPO_MAP_ENABLED and workspace and kind in ("dev", "coding") and not lite and not qa:
+        broad_root = _is_broad_root(workspace)
+        if REPO_MAP_ENABLED and workspace and not broad_root and kind in ("dev", "coding") and not lite and not qa:
             try:
                 repo_map_text = await asyncio.to_thread(repoindex.repo_map, workspace, None, user_text)
             except Exception:
@@ -1617,6 +1630,24 @@ class AgentRuntime:
             if len(chunks) >= 2:
                 break
         return "\n\n".join(chunks)
+
+
+_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[\\/]?$")
+
+
+def _is_broad_root(path: str) -> bool:
+    """根目录/用户主目录下自动建索引会遍历整个文件系统，既慢又无助于定位项目。"""
+    if not path:
+        return False
+    try:
+        real = os.path.realpath(path).rstrip("\\/") or os.sep
+    except OSError:
+        return False
+    if _DRIVE_ROOT_RE.match(path.strip()):
+        return True
+    home = os.path.realpath(os.path.expanduser("~")).rstrip("\\/") or os.sep
+    roots = {os.path.abspath(os.sep).rstrip("\\/") or os.sep, home, "/root", "/home"}
+    return real in roots
 
 
 def platform_name() -> str:

@@ -257,6 +257,10 @@ class Storage:
         db = await aiosqlite.connect(self.db_path)
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA busy_timeout=8000")
+        # WAL + NORMAL 在保证崩溃安全的前提下显著降低每步事件/消息落盘延迟。
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA temp_store=MEMORY")
+        await db.execute("PRAGMA cache_size=-20000")
         try:
             yield db
         finally:

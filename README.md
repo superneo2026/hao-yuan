@@ -145,7 +145,7 @@ haoyuan web
 start.bat
 ```
 
-脚本会自动：停止 8030 上的旧进程 → 创建 `api/env1` → 安装 Python 依赖 → 安装前端依赖 → 每次重新构建前端 → 启动 API，并自动打开产品网页。这样不会因为旧进程或旧静态资源导致流式事件异常。
+脚本会自动：停止 8030 上的旧进程 → 创建 `api/env1` → 安装 Python 依赖 → （仅当缺少 `web/dist` 时）安装前端依赖并构建 → 启动 API，并自动打开产品网页。npm 安装包已内置预构建前端，因此内网/离线环境也能在依赖装好后直接启动。
 
 **端口自动顺延**：后端默认 `8030`、前端默认 `8130`；启动时若端口被占用会自动 +1（8031、8032…）直到绑定成功。实际端口写入 `api/data/runtime.json`，启动脚本会读取后直接打开正确地址。也可用环境变量 `HAOYUAN_PORT` / `HAOYUAN_WEB_PORT`（前端）、`HAOYUAN_API_PORT`（前端代理目标）显式指定基准端口。
 
@@ -173,6 +173,24 @@ stop.bat
 bash start.sh
 bash stop.sh
 ```
+
+内网或自定义镜像环境可显式指定下载源（不指定时自动使用 `~/.npmrc`、`pip.conf` 里已配置的源）：
+
+```bash
+export HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/
+export HAOYUAN_PIP_INDEX_URL=http://your-intranet/pypi/simple
+bash start.sh
+```
+
+Windows 对应：
+
+```bat
+set HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/
+set HAOYUAN_PIP_INDEX_URL=http://your-intranet/pypi/simple
+start.bat
+```
+
+`web/package-lock.json` 不再写死外网镜像地址；`web/.npmrc` 的 `replace-registry-host=always` 会确保安装始终走当前 npm 配置的 registry，因此不会被锁文件劫持到不可达的外网。
 
 ### 手动启动
 
@@ -203,19 +221,45 @@ haoyuan config --open   # 直接在编辑器中打开
 
 路径：`~/.config/haoyuan/config.json`（Windows 即 `C:\Users\<你>\.config\haoyuan\config.json`，可用环境变量 `HAOYUAN_CONFIG` 覆盖）：
 
+首次启动（或 npm 安装时的 postinstall）会自动生成该文件，目录不存在也会自动创建。
+
 ```json
 {
-  "DEEPSEEK_API_KEY": "sk-...",
+  "PROVIDER": "",
+  "MODEL": "",
+  "DEEPSEEK_API_KEY": "",
   "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
   "DEEPSEEK_MODEL": "deepseek-flash",
   "ZHIPU_API_KEY": "",
+  "ZHIPU_BASE_URL": "https://open.bigmodel.cn/api/coding/paas/v4",
+  "ZHIPU_MODEL": "glm-5.3-flash",
   "MIMO_API_KEY": "",
-  "PROVIDER": "",
-  "MODEL": ""
+  "MIMO_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+  "MIMO_MODEL": "mimo-v2.6-flash",
+  "providers": {}
 }
 ```
 
-`PROVIDER` / `MODEL` 可锁定默认模型（如 `"MODEL": "deepseek-v4-pro"`，留空则按已配置 Key 自动选择）。
+- 内置渠道可增加 `DEEPSEEK_MODELS` / `ZHIPU_MODELS` / `MIMO_MODELS`（逗号分隔）来完全自定义模型列表；`*_THINKING_MODELS`、`*_MAX_OUTPUT`、`*_SUPPORTS_THINKING` 可选。
+- 任意 OpenAI 兼容渠道写入 `providers` 对象即可，不限于内置的 3 家：
+
+```json
+{
+  "providers": {
+    "my-intranet": {
+      "base_url": "http://llm.intranet/v1",
+      "api_key": "sk-...",
+      "models": ["qwen-max", "qwen-plus"],
+      "default_model": "qwen-max",
+      "supports_thinking": false,
+      "max_output_tokens": 8192
+    }
+  }
+}
+```
+
+- `PROVIDER` / `MODEL` 可锁定默认模型（如 `"MODEL": "deepseek-v4-pro"` 或 `"MODEL": "my-intranet/qwen-max"`，留空则按已配置 Key 自动选择）。
+- **网页设置页 ↔ 配置文件双向同步**：在「设置 → 模型配置」中新增/编辑渠道、模型与默认模型后，会立即写回该文件；直接编辑文件保存后，服务会在下一次请求时自动重新加载（无需重启）。
 
 **包内配置（可选）**：
 
@@ -231,7 +275,7 @@ copy api\configs\secrets_example.py api\configs\secrets_local.py
 $env:DEEPSEEK_API_KEY="sk-..."
 ```
 
-优先级：环境变量 > 全局配置文件 > `secrets_local.py`。保存后重新运行 `haoyuan` 生效；服务健康检查 `GET /api/health` 的 `key_source` 会显示 Key 来源。
+优先级：环境变量 > 全局配置文件 > `secrets_local.py`。修改全局配置文件后无需重启（服务自动热加载）；服务健康检查 `GET /api/health` 的 `key_source` 会显示 Key 来源。
 
 **未配置任何 Key 时自动使用本地 `mock` 模型**，完整跑通会话、工具调用、审批、事件与前端。
 

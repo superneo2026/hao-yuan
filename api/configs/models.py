@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import os
+import re
+import threading
 from dataclasses import dataclass, field
+from typing import Any
 
-from configs.secrets import (
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_BASE_URL,
-    DEEPSEEK_MODEL,
-    MIMO_API_KEY,
-    MIMO_BASE_URL,
-    MIMO_MODEL,
-    ZHIPU_API_KEY,
-    ZHIPU_BASE_URL,
-    global_config,
-)
+from configs import secrets
+
+BUILTIN_NAMES = ("deepseek", "zhipu", "mimo")
+
+_BASE_URL_DEFAULTS = {
+    "deepseek": "https://api.deepseek.com",
+    "zhipu": "https://open.bigmodel.cn/api/coding/paas/v4",
+    "mimo": "https://token-plan-cn.xiaomimimo.com/v1",
+}
+
+_MODEL_DEFAULTS = {
+    "deepseek": ("deepseek-flash", ["deepseek-flash", "deepseek-v4-pro"], 8192, True),
+    "zhipu": ("glm-5.3-flash", ["glm-5.3-flash", "glm-5.3"], 8192, True),
+    "mimo": ("mimo-v2.6-flash", ["mimo-v2.6-flash", "mimo-v2.6-pro"], 32768, True),
+}
 
 
 @dataclass
@@ -27,48 +34,9 @@ class ProviderConfig:
     tiers: dict[str, str] = field(default_factory=dict)
     max_output_tokens: int = 8192
     supports_thinking: bool = True
+    builtin: bool = False
+    key_source: str = "default"
 
-
-PROVIDERS: dict[str, ProviderConfig] = {
-    "mock": ProviderConfig(
-        name="mock",
-        base_url="",
-        models=["mock-deterministic"],
-        default_model="mock-deterministic",
-        api_key="",
-        tiers={"lite": "mock-deterministic", "standard": "mock-deterministic", "pro": "mock-deterministic"},
-    ),
-    "deepseek": ProviderConfig(
-        name="deepseek",
-        base_url=DEEPSEEK_BASE_URL,
-        models=[DEEPSEEK_MODEL, "deepseek-v4-pro"],
-        default_model=DEEPSEEK_MODEL,
-        api_key=DEEPSEEK_API_KEY,
-        thinking_models={DEEPSEEK_MODEL},
-        tiers={"lite": DEEPSEEK_MODEL, "standard": DEEPSEEK_MODEL, "pro": "deepseek-v4-pro"},
-    ),
-    "zhipu": ProviderConfig(
-        name="zhipu",
-        base_url=ZHIPU_BASE_URL,
-        models=["glm-5.3-flash", "glm-5.3"],
-        default_model="glm-5.3-flash",
-        api_key=ZHIPU_API_KEY,
-        tiers={"lite": "glm-5.3-flash", "standard": "glm-5.3-flash", "pro": "glm-5.3"},
-    ),
-    "mimo": ProviderConfig(
-        name="mimo",
-        base_url=MIMO_BASE_URL,
-        models=[MIMO_MODEL, "mimo-v2.6-pro"],
-        default_model=MIMO_MODEL,
-        api_key=MIMO_API_KEY,
-        thinking_models={MIMO_MODEL},
-        max_output_tokens=32768,
-        supports_thinking=True,
-        tiers={"lite": MIMO_MODEL, "standard": MIMO_MODEL, "pro": "mimo-v2.6-pro"},
-    ),
-}
-
-THINKING_OFF_PROVIDERS = {"zhipu"}
 
 # 单价表：元 / 百万 tokens。键优先按具体模型，未命中时回退到 PROVIDER_FALLBACK_PRICES。
 # "prompt" = 缓存未命中输入单价；"cache_hit" = 缓存命中输入单价；"completion" = 输出单价。
@@ -94,6 +62,180 @@ PROVIDER_FALLBACK_PRICES: dict[str, dict[str, float]] = {
     "mock": {"prompt": 0.0, "completion": 0.0},
 }
 
+THINKING_OFF_PROVIDERS = {"zhipu"}
+
+_LOCK = threading.RLock()
+PROVIDERS: dict[str, ProviderConfig] = {}
+_STAMP: tuple[int, int] | None = secrets.config_stamp()
+
+
+def _as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, dict):
+        return [str(item).strip() for item in value.keys() if str(item).strip()]
+    return [item.strip() for item in re.split(r"[,;\n]", str(value)) if item.strip()]
+
+
+def _unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _truthy(value: Any, default: bool = True) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _builtin(name: str) -> ProviderConfig:
+    env = name.upper()
+    default_model, default_models, default_max, default_thinking = _MODEL_DEFAULTS[name]
+    default_model = secrets.get_secret(f"{env}_MODEL", default_model)
+    configured_models = _as_list(secrets.get_secret(f"{env}_MODELS", ""))
+    base_models = configured_models or default_models
+    models = _unique([default_model] + base_models)
+    thinking = set(_as_list(secrets.get_secret(f"{env}_THINKING_MODELS", "")))
+    if not thinking:
+        thinking = {default_model} if name in ("deepseek", "mimo") else set()
+    try:
+        max_output = int(secrets.get_secret(f"{env}_MAX_OUTPUT", str(default_max)) or default_max)
+    except ValueError:
+        max_output = default_max
+    api_key = secrets.get_secret(f"{env}_API_KEY", "")
+    return ProviderConfig(
+        name=name,
+        base_url=secrets.get_secret(f"{env}_BASE_URL", _BASE_URL_DEFAULTS[name]).rstrip("/"),
+        models=models,
+        default_model=default_model,
+        api_key=api_key,
+        thinking_models=thinking,
+        tiers={tier: default_model for tier in ("lite", "standard", "pro")} | {tier: models[-1] for tier in ("pro",)},
+        max_output_tokens=max_output,
+        supports_thinking=_truthy(secrets.get_secret(f"{env}_SUPPORTS_THINKING", ""), default_thinking),
+        builtin=True,
+        key_source=secrets.secret_source(f"{env}_API_KEY") if api_key else "default",
+    )
+
+
+def _apply_nested(conf: ProviderConfig, raw: dict[str, Any]) -> ProviderConfig:
+    nested_key = str(raw.get("api_key") or raw.get("apiKey") or "").strip()
+    options = raw.get("options") if isinstance(raw.get("options"), dict) else {}
+    base_url = raw.get("base_url") or raw.get("baseURL") or raw.get("baseUrl") or options.get("baseURL")
+    if base_url:
+        conf.base_url = str(base_url).strip().rstrip("/")
+    if nested_key:
+        conf.api_key = nested_key
+        conf.key_source = str(secrets.config_path())
+    models = _as_list(raw.get("models"))
+    if models:
+        conf.models = models
+    default_model = str(raw.get("default_model") or raw.get("defaultModel") or raw.get("model") or "").strip()
+    if default_model:
+        conf.default_model = default_model
+    if conf.default_model and conf.default_model not in conf.models:
+        conf.models = _unique([conf.default_model] + conf.models)
+    if not conf.models:
+        conf.models = [conf.default_model or conf.name]
+        conf.default_model = conf.default_model or conf.models[0]
+    if not conf.default_model:
+        conf.default_model = conf.models[0]
+    thinking = _as_list(raw.get("thinking_models") or raw.get("thinkingModels"))
+    if thinking:
+        conf.thinking_models = set(thinking)
+    if "supports_thinking" in raw or "supportsThinking" in raw:
+        conf.supports_thinking = _truthy(
+            raw.get("supports_thinking", raw.get("supportsThinking")), conf.supports_thinking
+        )
+    max_output = raw.get("max_output_tokens") or raw.get("maxOutputTokens")
+    if max_output:
+        try:
+            conf.max_output_tokens = int(max_output)
+        except (TypeError, ValueError):
+            pass
+    tiers = raw.get("tiers")
+    if isinstance(tiers, dict) and tiers:
+        conf.tiers = {str(key): str(value) for key, value in tiers.items()}
+    return conf
+
+
+def _build() -> dict[str, ProviderConfig]:
+    providers: dict[str, ProviderConfig] = {
+        "mock": ProviderConfig(
+            name="mock",
+            base_url="",
+            models=["mock-deterministic"],
+            default_model="mock-deterministic",
+            api_key="",
+            tiers={"lite": "mock-deterministic", "standard": "mock-deterministic", "pro": "mock-deterministic"},
+            builtin=True,
+            key_source="builtin",
+        )
+    }
+    for name in BUILTIN_NAMES:
+        providers[name] = _builtin(name)
+
+    nested = secrets.global_config_snapshot().get("providers")
+    if isinstance(nested, dict):
+        for raw_name, raw in nested.items():
+            name = str(raw_name).strip()
+            if not name or name == "mock" or not isinstance(raw, dict):
+                continue
+            if name in providers:
+                providers[name] = _apply_nested(providers[name], raw)
+                continue
+            conf = ProviderConfig(
+                name=name,
+                base_url="",
+                models=[],
+                default_model="",
+                api_key="",
+                builtin=False,
+                key_source="default",
+                tiers={},
+            )
+            providers[name] = _apply_nested(conf, raw)
+            if not providers[name].tiers:
+                default = providers[name].default_model
+                providers[name].tiers = {tier: default for tier in ("lite", "standard", "pro")}
+    return providers
+
+
+def reload_providers() -> dict[str, ProviderConfig]:
+    """原地更新 PROVIDERS，保证其它模块已导入的引用同步生效。"""
+    global _STAMP
+    with _LOCK:
+        fresh = _build()
+        PROVIDERS.clear()
+        PROVIDERS.update(fresh)
+        _STAMP = secrets.config_stamp()
+    return PROVIDERS
+
+
+def _ensure_fresh() -> None:
+    global _STAMP
+    stamp = secrets.config_stamp()
+    if stamp != _STAMP:
+        reload_providers()
+
+
+def get_providers() -> dict[str, ProviderConfig]:
+    _ensure_fresh()
+    return PROVIDERS
+
+
+def configured_providers() -> list[str]:
+    return [name for name, conf in get_providers().items() if name != "mock" and conf.api_key]
+
 
 def price_for(provider: str, model: str | None = None) -> dict[str, float]:
     if model and model in PRICES_PER_MTOK:
@@ -101,36 +243,57 @@ def price_for(provider: str, model: str | None = None) -> dict[str, float]:
     return PROVIDER_FALLBACK_PRICES.get(provider, {"prompt": 0.0, "completion": 0.0})
 
 
+def _split_model(model: str) -> tuple[str, str]:
+    text = (model or "").strip()
+    if "/" in text:
+        provider, rest = text.split("/", 1)
+        if provider.strip() in get_providers() and rest.strip():
+            return provider.strip(), rest.strip()
+    return "", text
+
+
 def auto_default() -> tuple[str, str]:
     if os.getenv("HAOYUAN_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes"}:
         return "mock", "mock-deterministic"
-    gp = global_config("PROVIDER")
-    gm = global_config("MODEL")
-    if gp and gp != "auto" and gp in PROVIDERS:
-        conf = PROVIDERS[gp]
+    providers = get_providers()
+    gp = secrets.global_config("PROVIDER").strip()
+    gm = secrets.global_config("MODEL").strip()
+    split_provider, split_model = _split_model(gm)
+    if split_provider:
+        gp, gm = split_provider, split_model
+
+    if gp and gp != "auto" and gp in providers:
+        conf = providers[gp]
         if gm and gm != "auto" and gm in conf.models:
             return gp, gm
         return gp, conf.default_model
     if gm and gm != "auto":
-        for name, conf in PROVIDERS.items():
+        for name, conf in providers.items():
             if gm in conf.models:
                 return name, gm
-    if DEEPSEEK_API_KEY:
-        return "deepseek", DEEPSEEK_MODEL
-    if ZHIPU_API_KEY:
-        return "zhipu", "glm-5.3-flash"
+    for name in ("deepseek", "zhipu", "mimo"):
+        conf = providers.get(name)
+        if conf and conf.api_key:
+            return name, conf.default_model
+    for name, conf in providers.items():
+        if name != "mock" and conf.api_key:
+            return name, conf.default_model
     return "mock", "mock-deterministic"
 
 
 def resolve(provider: str | None, model: str | None) -> tuple[str, str]:
+    providers = get_providers()
     provider = (provider or "").strip()
     model = (model or "").strip()
+    split_provider, split_model = _split_model(model)
+    if split_provider:
+        provider, model = split_provider, split_model
     if model and model != "auto":
-        for name, conf in PROVIDERS.items():
+        for name, conf in providers.items():
             if model in conf.models:
                 return name, model
-    if provider in PROVIDERS:
-        conf = PROVIDERS[provider]
+    if provider in providers:
+        conf = providers[provider]
         if model and model in conf.models:
             return provider, model
         return provider, conf.default_model
@@ -139,7 +302,7 @@ def resolve(provider: str | None, model: str | None) -> tuple[str, str]:
 
 def list_models() -> list[dict]:
     out = []
-    for name, conf in PROVIDERS.items():
+    for name, conf in get_providers().items():
         if name == "mock":
             continue
         out.append(
@@ -148,6 +311,153 @@ def list_models() -> list[dict]:
                 "models": conf.models,
                 "default_model": conf.default_model,
                 "configured": bool(conf.api_key),
+                "base_url": conf.base_url,
+                "builtin": conf.builtin,
+                "key_source": conf.key_source,
+                "supports_thinking": conf.supports_thinking,
             }
         )
     return out
+
+
+def describe_config() -> dict:
+    providers = get_providers()
+    project_default = auto_default()
+    items = []
+    for name, conf in providers.items():
+        if name == "mock":
+            continue
+        items.append(
+            {
+                "name": name,
+                "builtin": conf.builtin,
+                "base_url": conf.base_url,
+                "models": conf.models,
+                "default_model": conf.default_model,
+                "has_key": bool(conf.api_key),
+                "api_key": secrets.mask_secret(conf.api_key),
+                "key_source": conf.key_source,
+                "supports_thinking": conf.supports_thinking,
+                "thinking_models": sorted(conf.thinking_models),
+                "max_output_tokens": conf.max_output_tokens,
+                "tiers": conf.tiers,
+            }
+        )
+    return {
+        "path": str(secrets.config_path()),
+        "default_provider": project_default[0],
+        "default_model": project_default[1],
+        "providers": items,
+    }
+
+
+def _normalize_payload(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(item.get("name") or item.get("id") or "").strip(),
+        "base_url": str(item.get("base_url") or item.get("baseURL") or "").strip().rstrip("/"),
+        "api_key": str(item.get("api_key") or item.get("apiKey") or "").strip(),
+        "clear_key": bool(item.get("clear_key") or item.get("clearKey")),
+        "models": _as_list(item.get("models")),
+        "default_model": str(item.get("default_model") or item.get("defaultModel") or "").strip(),
+        "supports_thinking": _truthy(
+            item.get("supports_thinking", item.get("supportsThinking")), True
+        ),
+        "thinking_models": _as_list(item.get("thinking_models") or item.get("thinkingModels")),
+        "max_output_tokens": item.get("max_output_tokens") or item.get("maxOutputTokens"),
+        "tiers": item.get("tiers") if isinstance(item.get("tiers"), dict) else {},
+    }
+
+
+def update_config(
+    providers_payload: list[dict[str, Any]],
+    removed: list[str] | None = None,
+    default_provider: str | None = None,
+    default_model: str | None = None,
+) -> dict:
+    """把网页设置写回 ~/.config/haoyuan/config.json，并保留未知字段。
+
+    内置渠道使用扁平字段（DEEPSEEK_* / ZHIPU_* / MIMO_*），自定义渠道写入 providers 对象。
+    """
+    data = secrets.global_config_snapshot()
+    nested = data.get("providers")
+    nested = dict(nested) if isinstance(nested, dict) else {}
+    known = set(BUILTIN_NAMES) | set(nested.keys())
+
+    for name in removed or []:
+        clean = str(name).strip()
+        if not clean or clean in BUILTIN_NAMES:
+            continue
+        nested.pop(clean, None)
+        known.discard(clean)
+
+    for raw in providers_payload or []:
+        item = _normalize_payload(raw)
+        name = item["name"]
+        if not name or name == "mock":
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            raise ValueError(f"invalid provider name: {name}")
+        models = _unique(item["models"])
+        default_model_name = item["default_model"] or (models[0] if models else "")
+        if default_model_name and default_model_name not in models:
+            models.insert(0, default_model_name)
+        if not models and name in _MODEL_DEFAULTS:
+            models = list(_MODEL_DEFAULTS[name][1])
+            default_model_name = default_model_name or _MODEL_DEFAULTS[name][0]
+        if not models:
+            raise ValueError(f"provider {name} needs at least one model")
+        default_model_name = default_model_name or models[0]
+        if name not in BUILTIN_NAMES and not item["base_url"]:
+            raise ValueError(f"provider {name} needs a base_url")
+
+        if name in BUILTIN_NAMES:
+            env = name.upper()
+            if item["base_url"]:
+                data[f"{env}_BASE_URL"] = item["base_url"]
+            if item["clear_key"]:
+                data[f"{env}_API_KEY"] = ""
+            elif item["api_key"]:
+                data[f"{env}_API_KEY"] = item["api_key"]
+            data[f"{env}_MODEL"] = default_model_name
+            data[f"{env}_MODELS"] = ",".join(models)
+            data[f"{env}_SUPPORTS_THINKING"] = "1" if item["supports_thinking"] else "0"
+            data[f"{env}_THINKING_MODELS"] = ",".join(item["thinking_models"])
+            if item["max_output_tokens"]:
+                data[f"{env}_MAX_OUTPUT"] = str(item["max_output_tokens"])
+            # 内置渠道以扁平字段为准，移除可能残留的嵌套覆盖，避免两份配置不一致。
+            nested.pop(name, None)
+            continue
+
+        entry = dict(nested.get(name) or {})
+        if item["base_url"]:
+            entry["base_url"] = item["base_url"]
+        if item["clear_key"]:
+            entry["api_key"] = ""
+        elif item["api_key"]:
+            entry["api_key"] = item["api_key"]
+        entry["models"] = models
+        entry["default_model"] = default_model_name
+        entry["supports_thinking"] = item["supports_thinking"]
+        entry["thinking_models"] = item["thinking_models"]
+        if item["max_output_tokens"]:
+            try:
+                entry["max_output_tokens"] = int(item["max_output_tokens"])
+            except (TypeError, ValueError):
+                pass
+        if item["tiers"]:
+            entry["tiers"] = item["tiers"]
+        nested[name] = entry
+        known.add(name)
+
+    data["providers"] = nested
+    if default_provider is not None:
+        data["PROVIDER"] = str(default_provider).strip()
+    if default_model is not None:
+        data["MODEL"] = str(default_model).strip()
+
+    secrets.save_global_config(data)
+    reload_providers()
+    return describe_config()
+
+
+reload_providers()

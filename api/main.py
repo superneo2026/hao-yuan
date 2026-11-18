@@ -17,6 +17,7 @@ from configs.configs import (
     WEB_DIST_DIR,
 )
 from configs.runtime import resolve_free_port, update_runtime
+from configs.secrets import ensure_config_file
 from core.harness import harness_instance, init_harness
 from core.telemetry import telemetry
 from extensions import approvals, fs, marketplace, plugins, sessions, settings, skills, supervisor, system, usage
@@ -25,6 +26,8 @@ from extensions.ws import ws_endpoint
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 首次启动即生成 ~/.config/haoyuan/config.json，方便用户直接编辑模型配置。
+    ensure_config_file()
     harness = await init_harness()
     telemetry.start()
     yield
