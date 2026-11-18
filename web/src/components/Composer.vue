@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { currentSession, isActive, patchSession, resumeSession, sendMessage, state, stopSession, tokenCount, usableModels } from '../stores/app'
+import { currentSession, isActive, patchSession, resumeSession, sendMessage, state, stopSession, tokenCount, usableModels, userPrompts } from '../stores/app'
 import { skillTitle, t } from '../i18n'
 import DirPicker from './DirPicker.vue'
 import Icon from './Icon.vue'
@@ -8,6 +8,8 @@ import Icon from './Icon.vue'
 const text = ref('')
 const textarea = ref(null)
 const showDir = ref(false)
+let historyIndex = -1
+let historyDraft = ''
 
 const draftKey = computed(() => `hy.draft.${state.currentId || 'new'}`)
 const models = computed(() => {
@@ -28,6 +30,8 @@ watch(
   () => state.currentId,
   () => {
     text.value = localStorage.getItem(draftKey.value) || ''
+    historyIndex = -1
+    historyDraft = ''
     resize()
   },
   { immediate: true }
@@ -50,17 +54,71 @@ function onInput() {
   resize()
 }
 
+function moveCaretToEnd() {
+  nextTick(() => {
+    const el = textarea.value
+    if (!el) return
+    const end = el.value.length
+    el.setSelectionRange(end, end)
+  })
+}
+
+function applyHistory(direction) {
+  const prompts = userPrompts.value
+  if (!prompts.length) return
+  if (historyIndex === -1) {
+    if (direction > 0) return
+    historyDraft = text.value
+    historyIndex = prompts.length - 1
+  } else {
+    const next = historyIndex + direction
+    if (next >= prompts.length) {
+      historyIndex = -1
+      text.value = historyDraft
+      historyDraft = ''
+      resize()
+      moveCaretToEnd()
+      return
+    }
+    if (next < 0) return
+    historyIndex = next
+  }
+  text.value = prompts[historyIndex]
+  resize()
+  moveCaretToEnd()
+}
+
 async function send() {
   const content = text.value.trim()
   if (!content) return
   text.value = ''
   localStorage.removeItem(draftKey.value)
+  historyIndex = -1
+  historyDraft = ''
   resize()
   await sendMessage(content)
 }
 
 function onKeydown(event) {
   if (event.isComposing || event.keyCode === 229) return
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    const el = event.target
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? start
+    const atStart = start === 0 && end === 0
+    const atEnd = start === el.value.length && end === el.value.length
+    // While browsing a single-line history entry, Up/Down keep navigating even
+    // when the caret sits at its end; multi-line text keeps native caret moves.
+    const singleLine = !el.value.includes('\n')
+    if (event.key === 'ArrowUp' && (atStart || (historyIndex >= 0 && singleLine)) && userPrompts.value.length) {
+      event.preventDefault()
+      applyHistory(-1)
+    } else if (event.key === 'ArrowDown' && (atEnd || (historyIndex >= 0 && singleLine)) && historyIndex >= 0) {
+      event.preventDefault()
+      applyHistory(1)
+    }
+    return
+  }
   if (event.key !== 'Enter') return
   if (event.shiftKey) return
   event.preventDefault()
@@ -91,6 +149,8 @@ async function chooseDir(path) {
 
 function fill(value) {
   text.value = value
+  historyIndex = -1
+  historyDraft = ''
   resize()
   textarea.value?.focus()
 }

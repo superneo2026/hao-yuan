@@ -140,6 +140,14 @@ export const authSetupMode = computed(() => state.auth.enabled && !state.auth.co
 export const usableModels = computed(() =>
   (state.models || []).filter((provider) => provider && provider.configured === true && (provider.models || []).length)
 )
+
+// User prompts of the current session, in send order. Used by the composer for
+// shell-style Up/Down history navigation.
+export const userPrompts = computed(() =>
+  (state.messages || [])
+    .filter((message) => message && message.role === 'user' && String(message.content || '').trim())
+    .map((message) => String(message.content))
+)
 export const tokenCount = computed(() => {
   const session = currentSession.value || {}
   return Number(session.context_tokens || 0) + Number(session.total_prompt || 0) + Number(session.total_completion || 0)
