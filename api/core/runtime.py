@@ -354,6 +354,36 @@ _OUTPUT_HINT_RE = re.compile(
     re.I,
 )
 
+_BUDGET_RE = re.compile(
+    r"(?:总训练时间|总时间|合计|总共|total)[^\n。；;]{0,24}?"
+    r"(?:不超过|≤|<=|最多|under|within)\s*(\d+(?:\.\d+)?)\s*(?:小时|h|hours?)",
+    re.I,
+)
+
+
+def budget_contract(text: str) -> str:
+    match = _BUDGET_RE.search(text or "")
+    if not match:
+        return ""
+    hours = match.group(1)
+    lines = [
+        "\n\n# Hard task contract (must obey)",
+        f"- The TOTAL training wall time for ALL targets combined must be <= {hours} hours. "
+        "This is a total budget, not a per-model budget. The budget table's 合计 row must be <= the total.",
+        "- If the sum exceeds the total, reduce parameters/data to the smallest viable sizes; never reinterpret the budget as per-model.",
+        "- Start from the smallest viable model (aim for <=150M trainable params and <=2B tokens per target where the gate allows); only scale up when a named gate cannot be met. Cloud is the last resort.",
+        "- Use one effective TFLOPS constant per card and include a self-check table whose 合计 equals the sum and is <= the total.",
+    ]
+    try:
+        if float(hours) <= 60:
+            lines.append(
+                f"- With a {hours}h total across all targets, expect small models (roughly 40-120M trainable params "
+                "and 0.5-1.5B tokens per target). If your plan is larger, it cannot fit the total; shrink it before writing."
+            )
+    except ValueError:
+        pass
+    return "\n".join(lines) + "\n"
+
 
 def extract_output_targets(text: str, workspace: str) -> list[str]:
     targets: list[str] = []
@@ -682,6 +712,9 @@ class AgentRuntime:
             context_pack_text,
             reference_text,
         )
+        contract = budget_contract(user_text)
+        if contract:
+            system += contract
         if host_info:
             system += (
                 "\n\n# Live host information (read-only)\n"
@@ -1522,7 +1555,7 @@ class AgentRuntime:
                     "and rerun the same test. If the same failure fingerprint repeats, change strategy instead of retrying.\n"
                 )
         if matched:
-            parts.append(SkillLibrary.render(matched, skill_how, 6000))
+            parts.append(SkillLibrary.render(matched, skill_how, 8000))
         if reference_text:
             parts.append(
                 "\n\n# Reference source contract\n"
