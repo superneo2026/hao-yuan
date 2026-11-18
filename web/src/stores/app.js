@@ -80,6 +80,7 @@ export const state = reactive({
   newTaskOpen: false,
   theme: localStorage.getItem(THEME) || 'light',
   activeRightTab: 'overview',
+  rightPanelOpen: false,
   selectedFile: null,
   fileContent: null,
   diffText: '',
@@ -777,7 +778,7 @@ export async function loadSessions() {
   return sessions
 }
 
-export async function selectSession(id, navigate = true) {
+export async function selectSession(id, navigate = true, options = {}) {
   if (!id) return
   stopSessionStream()
   state.currentId = id
@@ -804,8 +805,28 @@ export async function selectSession(id, navigate = true) {
   const listed = state.sessions.find((item) => item.id === id)
   state.session = listed ? { ...listed } : null
   state.messages = []
+  state.artifacts = []
+  state.runs = []
   state.hasMoreMessages = false
   state.loadingEarlier = false
+  if (options.skipFetch) {
+    // A freshly created session has no messages/artifacts yet. Paint it and
+    // open its stream now instead of waiting on three extra round-trips.
+    state.plan = safeJson(listed?.plan, { title: '', steps: [] })
+    state.switching = false
+    state.scrollTick++
+    // A freshly created session has no events yet. Do not open an idle SSE
+    // stream here: it holds a connection and can delay the next create request.
+    // The stream is started by sendMessage when the first message is sent.
+    // Tree/changes are loaded lazily when the right panel is opened.
+    if (state.rightPanelOpen && listed?.workspace) {
+      Promise.all([loadTree(), loadChanges()]).catch(() => {})
+    } else {
+      state.tree = []
+      state.changes = []
+    }
+    return
+  }
   state.switching = true
   try {
     // Fetch the session, a bounded window of messages, and artifacts in parallel
@@ -831,13 +852,19 @@ export async function selectSession(id, navigate = true) {
     state.artifacts = artifacts
     state.switching = false
     state.scrollTick++
-    loadActivity(id).catch(() => {})
     startSessionStream(id, detail.session.last_event_id || 0)
-    if (detail.session.workspace) {
-      Promise.all([loadTree(), loadChanges()]).catch(() => {})
+    if (state.rightPanelOpen) {
+      loadActivity(id).catch(() => {})
+      if (detail.session.workspace) {
+        Promise.all([loadTree(), loadChanges()]).catch(() => {})
+      } else {
+        state.tree = []
+        state.changes = []
+      }
     } else {
       state.tree = []
       state.changes = []
+      state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
     }
   } catch (error) {
     if (token !== requestToken) return
@@ -993,7 +1020,7 @@ export async function createSession(payload = {}) {
   }
   const session = await api.createSession(body)
   state.sessions.unshift(session)
-  await selectSession(session.id)
+  await selectSession(session.id, true, { skipFetch: true })
   return session
 }
 
