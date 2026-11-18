@@ -26,7 +26,7 @@ def test_tech_eval_skill_matches_evaluation_request():
 def test_render_budget_keeps_matched_skills():
     lib = _library()
     matched, how = lib.match("dev", PROMPT)
-    text = SkillLibrary.render(matched, how, 7000)
+    text = SkillLibrary.render(matched, how, 9000)
     assert "omitted" not in text
     for skill in matched:
         assert skill.name in text

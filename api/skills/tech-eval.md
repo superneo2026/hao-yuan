@@ -10,6 +10,11 @@ version: 1.1.0
 ## Deliver a decision, not a brochure
 Open with the question, the constraint budget, and the recommended plan. If two readings exist (for example "<=50h total" vs "<=50h per model"), solve both and label which one the plan adopts. Separate estimates from measured values.
 
+## Hard contract first (non-negotiable)
+- If the user states a total budget ("总训练时间不超过50小时", "total <= N h"), the TOTAL is binding: the plan's 合计 wall time must be <= N. Do not switch to a per-model reading unless the user explicitly says each model has its own budget. If all targets cannot fit, shrink parameters/data to the smallest viable sizes first; never change the budget semantics.
+- Minimal first: for each target start from the smallest viable configuration (<=200M trainable params where possible, reuse/freeze open components). Increase size only when a hard gate cannot be met. Cloud is the last resort: first reduce params/resolution/tokens to fit 16G, then prove with arithmetic why L20/H800 is unavoidable.
+- Before writing, print a contract check: total_wall <= budget, all target cards present, one effective TFLOPS per card, standard benchmarks present. Fix the plan before writing if any check fails.
+
 ## Required sections (build the skeleton first)
 For a feasibility or evaluation report, create the page skeleton with ALL of these sections and their nav anchors before filling any detail:
 1. 结论与推荐 (KPI cards)
@@ -30,6 +35,7 @@ Never ship a nav link without a matching `id`. If budget runs low, finish every 
 2. Compute all throughput/time/memory/price numbers with a script (run_shell + python), never mentally; keep the script in a temp dir, not the deliverable dir.
 3. Enforce invariants: tokens / tokens_per_second = hours; params * 6 * tokens / (effective_FLOPS * 3600) = pure_h; wall = pure * overhead; total = sum of parts + margin. If two rows disagree, fix them; never round over a contradiction.
 4. Put the assumption next to each estimate and never present a planning number as measured.
+5. Use exactly ONE effective TFLOPS constant per card in every table. Add a self-check table (N, D, effective FLOPS, pure_h, overhead, wall_h, 合计) and make the 合计 equal the sum of parts and <= the user's total budget.
 
 ## Answer the real model, not just the category
 Name which components are frozen vs trained, the data volume, memory peak, pure and wall time, card choice, expected benchmark range and the hard limit. State why training the reused components from scratch is infeasible in budget.
@@ -38,7 +44,7 @@ Name which components are frozen vs trained, the data volume, memory peak, pure 
 Use small standard benchmarks where they exist; list at least one named metric per category even for tiny models: ARC-e/PIQA/HellaSwag for LLM, VQA-v2/POPE/CIDEr for VLM, LIBERO/CALVIN for VLA, PSNR/SSIM/FVD for world models, ASR WER/MOS for S2S. Add a task-specific dialogue set, explicit pass lines and a 10% pilot gate with a primary and an anti-regression metric.
 
 ## Finish and verify
-Include infeasibility alternatives, key risks with mitigations and a delivery checklist. Run web_audit; fix every must-fix item, especially broken in-page anchors and stray helper files. When the user supplied a reference page, call reference_compare after writing, report the score, and reuse its component vocabulary (.qa / .code / .sb / .kpi / .callout). Include a diagram (SVG pipeline or budget bar) when the reference uses one, and follow the reference design exactly.
+Include infeasibility alternatives, key risks with mitigations and a delivery checklist. Run web_audit; fix every must-fix item, especially broken in-page anchors and stray helper files. When the user supplied a reference page, call reference_compare after writing and report the score; reuse its component vocabulary (.qa / .code / .sb / .kpi / .callout). Include at least one SVG diagram (pipeline or budget bar) when the reference has one, and follow the reference design exactly.
 
 ## Work within a tool budget
 - Batch independent tool calls: put all reads/searches in one assistant message and all writes/patches in the next. Target at least two tool calls per step.

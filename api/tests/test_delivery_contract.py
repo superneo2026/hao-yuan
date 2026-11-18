@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from core.runtime import extract_output_targets, output_target_ready
+from core.runtime import budget_contract, extract_output_targets, output_target_ready
 
 
 def test_extract_output_targets_reads_output_hint():
@@ -31,3 +31,15 @@ def test_output_target_ready_accepts_file_target(tmp_path):
     target.write_text("<html></html>", encoding="utf-8")
     assert output_target_ready(str(target), 1.0) is True
     assert output_target_ready(str(tmp_path / "missing.html"), 1.0) is False
+
+
+def test_budget_contract_detects_total_budget():
+    text = "不论什么模型，总训练时间不超过50小时。请输出最小算力方案。"
+    contract = budget_contract(text)
+    assert "TOTAL" in contract
+    assert "50" in contract
+    assert "40-120M" in contract
+
+
+def test_budget_contract_ignores_plain_task():
+    assert budget_contract("write a hello world page") == ""
