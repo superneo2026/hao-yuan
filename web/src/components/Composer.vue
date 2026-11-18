@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { currentSession, isActive, patchSession, resumeSession, sendMessage, state, stopSession, tokenCount } from '../stores/app'
+import { currentSession, isActive, patchSession, resumeSession, sendMessage, state, stopSession, tokenCount, usableModels } from '../stores/app'
 import { skillTitle, t } from '../i18n'
 import DirPicker from './DirPicker.vue'
 import Icon from './Icon.vue'
@@ -12,7 +12,7 @@ const showDir = ref(false)
 const draftKey = computed(() => `hy.draft.${state.currentId || 'new'}`)
 const models = computed(() => {
   const out = []
-  for (const provider of state.models) {
+  for (const provider of usableModels.value) {
     for (const model of provider.models || []) out.push({ provider: provider.provider, model, label: model })
   }
   return out

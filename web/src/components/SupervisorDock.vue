@@ -53,6 +53,7 @@ async function loadModels() {
     const data = await api.models()
     const flat = []
     for (const provider of data?.providers || []) {
+      if (!provider.configured) continue
       const options = provider.models?.length ? provider.models : [provider.default_model]
       for (const name of options || []) {
         if (!name) continue

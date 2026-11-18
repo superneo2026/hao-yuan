@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { advanceOrchestration, createOrchestration, loadOrchestrations, mergeOrchestration, selectSession, state, toast } from '../stores/app'
+import { advanceOrchestration, createOrchestration, loadOrchestrations, mergeOrchestration, selectSession, state, toast, usableModels } from '../stores/app'
 import { t } from '../i18n'
 import DirPicker from '../components/DirPicker.vue'
 import Icon from '../components/Icon.vue'
@@ -144,7 +144,7 @@ onBeforeUnmount(() => clearInterval(timer))
           <div class="row" style="margin-top: 7px; gap: 6px">
             <select v-model="provider" class="select" style="font-size: 11.5px">
               <option value="">{{ t('orch.autoProvider') }}</option>
-              <option v-for="item in state.models" :key="item.provider" :value="item.provider">{{ item.provider }}</option>
+              <option v-for="item in usableModels" :key="item.provider" :value="item.provider">{{ item.provider }}</option>
             </select>
             <button class="btn primary" :disabled="creating" @click="create">
               <span v-if="creating" class="spinner" style="width: 12px; height: 12px" />

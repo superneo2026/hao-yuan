@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { createSession, recentSessionSettings, state, toast } from '../stores/app'
+import { createSession, recentSessionSettings, state, toast, usableModels } from '../stores/app'
 import { sessionTitle, skillTitle, t } from '../i18n'
 import DirPicker from './DirPicker.vue'
 import Icon from './Icon.vue'
@@ -58,7 +58,7 @@ const hasInheritedSettings = computed(
 
 const modelOptions = computed(() => {
   const out = []
-  for (const provider of state.models) {
+  for (const provider of usableModels.value) {
     for (const model of provider.models || []) {
       out.push({ provider: provider.provider, model, label: `${provider.provider} / ${model}` })
     }

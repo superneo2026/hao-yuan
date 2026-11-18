@@ -134,6 +134,12 @@ export const authBlocked = computed(
   () => state.auth.checked && state.auth.enabled && state.auth.configured && !state.auth.authenticated
 )
 export const authSetupMode = computed(() => state.auth.enabled && !state.auth.configured)
+
+// Only providers with a working key are offerable in chat/new-task/console dialogs.
+// Unconfigured providers stay visible in Settings so they can be configured.
+export const usableModels = computed(() =>
+  (state.models || []).filter((provider) => provider && provider.configured === true && (provider.models || []).length)
+)
 export const tokenCount = computed(() => {
   const session = currentSession.value || {}
   return Number(session.context_tokens || 0) + Number(session.total_prompt || 0) + Number(session.total_completion || 0)
