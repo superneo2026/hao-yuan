@@ -20,6 +20,9 @@ if [ ! -x "api/env1/bin/python" ]; then
   python3 -m venv api/env1
   api/env1/bin/python -m pip install --upgrade pip "${PIP_ARGS[@]}"
   api/env1/bin/python -m pip install "${PIP_ARGS[@]}" -r api/requirements.txt
+elif ! api/env1/bin/python -c "import fastapi, uvicorn, aiosqlite" >/dev/null 2>&1; then
+  echo "[HaoYuan] Python dependencies are incomplete; repairing them..."
+  api/env1/bin/python -m pip install "${PIP_ARGS[@]}" -r api/requirements.txt
 fi
 
 # 首次安装即生成可编辑的模型配置文件（已存在则保留）。
@@ -32,24 +35,56 @@ if [ -f "web/dist/index.html" ] && [ ! -d "web/node_modules" ]; then
   NEED_WEB=0
 fi
 
+frontend_deps_ready() {
+  [ -f "web/node_modules/vite/package.json" ] &&
+    [ -f "web/node_modules/vue/package.json" ] &&
+    [ -f "web/node_modules/@vitejs/plugin-vue/package.json" ]
+}
+
+clean_frontend_deps() {
+  echo "[HaoYuan] 检测到不完整的前端依赖（上次安装可能被网络中断），自动清理后重装..."
+  rm -rf "web/node_modules"
+}
+
+install_frontend_deps() {
+  NPM_ARGS=(install --no-audit --no-fund --prefer-offline --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=10000 --fetch-timeout=30000)
+  if [ -n "${HAOYUAN_NPM_REGISTRY:-}" ]; then
+    NPM_ARGS+=(--registry "$HAOYUAN_NPM_REGISTRY")
+  fi
+  (cd web && npm "${NPM_ARGS[@]}")
+}
+
 if [ "$NEED_WEB" = "1" ]; then
-  if [ ! -d "web/node_modules" ]; then
+  SKIP_BUILD=0
+  if ! frontend_deps_ready; then
+    if [ -d "web/node_modules" ]; then
+      clean_frontend_deps
+    fi
     REGISTRY="${HAOYUAN_NPM_REGISTRY:-$(npm config get registry 2>/dev/null || echo default)}"
     echo "[HaoYuan] Installing frontend dependencies (registry: $REGISTRY)..."
-    NPM_ARGS=(install --no-audit --no-fund)
-    if [ -n "${HAOYUAN_NPM_REGISTRY:-}" ]; then
-      NPM_ARGS+=(--registry "$HAOYUAN_NPM_REGISTRY")
-    fi
-    if ! (cd web && npm "${NPM_ARGS[@]}"); then
+    if ! install_frontend_deps; then
       if [ -f "web/dist/index.html" ]; then
         echo "[HaoYuan] npm install failed; continuing with the prebuilt frontend in web/dist."
+        SKIP_BUILD=1
       else
         echo "[HaoYuan] npm install failed. Configure an accessible registry (e.g. export HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/) and retry." >&2
         exit 1
       fi
+    elif ! frontend_deps_ready; then
+      # 依赖目录残缺（例如磁盘/网络中断）：清理后再做一次完整安装。
+      clean_frontend_deps
+      if ! install_frontend_deps; then
+        if [ -f "web/dist/index.html" ]; then
+          echo "[HaoYuan] npm install failed; continuing with the existing web/dist build."
+          SKIP_BUILD=1
+        else
+          exit 1
+        fi
+      fi
     fi
   fi
-  if [ -d "web/node_modules" ]; then
+
+  if [ "$SKIP_BUILD" = "0" ] && frontend_deps_ready; then
     echo "[HaoYuan] Building frontend..."
     (cd web && npm run build) || {
       if [ -f "web/dist/index.html" ]; then
@@ -58,6 +93,10 @@ if [ "$NEED_WEB" = "1" ]; then
         exit 1
       fi
     }
+  elif [ -f "web/dist/index.html" ]; then
+    echo "[HaoYuan] Using the existing prebuilt frontend (web/dist)."
+  else
+    exit 1
   fi
 else
   echo "[HaoYuan] Using prebuilt frontend (web/dist)."

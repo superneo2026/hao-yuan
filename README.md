@@ -145,7 +145,7 @@ haoyuan web
 start.bat
 ```
 
-脚本会自动：停止 8030 上的旧进程 → 创建 `api/env1` → 安装 Python 依赖 → （仅当缺少 `web/dist` 时）安装前端依赖并构建 → 启动 API，并自动打开产品网页。npm 安装包已内置预构建前端，因此内网/离线环境也能在依赖装好后直接启动。
+脚本会自动：停止 8030 上的旧进程 → 创建 `api/env1` → 安装 Python 依赖 → （仅当缺少 `web/dist` 时）安装前端依赖并构建 → 启动 API，并自动打开产品网页。npm 安装包已内置预构建前端，因此内网/离线环境也能在依赖装好后直接启动。若上次 `npm install` 因网络中断留下了不完整的 `web/node_modules`，脚本会自动识别并清理重装，无需手动删除目录。
 
 **端口自动顺延**：后端默认 `8030`、前端默认 `8130`；启动时若端口被占用会自动 +1（8031、8032…）直到绑定成功。实际端口写入 `api/data/runtime.json`，启动脚本会读取后直接打开正确地址。也可用环境变量 `HAOYUAN_PORT` / `HAOYUAN_WEB_PORT`（前端）、`HAOYUAN_API_PORT`（前端代理目标）显式指定基准端口。
 
@@ -189,6 +189,8 @@ set HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/
 set HAOYUAN_PIP_INDEX_URL=http://your-intranet/pypi/simple
 start.bat
 ```
+
+前端或 Python 依赖残缺（例如上次安装被 `ECONNRESET` 中断）时，`start.sh` / `start.bat` / `haoyuan setup` 会自动检测、清理 `web/node_modules` 并重装，缺少后端包时自动补装；构建失败时也会回退到已有的 `web/dist`。
 
 `web/package-lock.json` 不再写死外网镜像地址；`web/.npmrc` 的 `replace-registry-host=always` 会确保安装始终走当前 npm 配置的 registry，因此不会被锁文件劫持到不可达的外网。
 

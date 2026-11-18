@@ -146,7 +146,16 @@ function installBackend() {
 }
 
 function npmArgs() {
-  const args = ["install", "--no-audit", "--no-fund"];
+  const args = [
+    "install",
+    "--no-audit",
+    "--no-fund",
+    "--prefer-offline",
+    "--fetch-retries=2",
+    "--fetch-retry-mintimeout=2000",
+    "--fetch-retry-maxtimeout=10000",
+    "--fetch-timeout=30000",
+  ];
   const registry = (process.env.HAOYUAN_NPM_REGISTRY || "").trim();
   if (registry) {
     log(`使用自定义 npm 源: ${registry}`);
@@ -157,17 +166,51 @@ function npmArgs() {
   return args;
 }
 
-function installFrontend() {
-  if (!fs.existsSync(path.join(WEB, "node_modules"))) {
-    log("安装前端依赖 ...");
-    const ok = run(NPM, npmArgs(), { cwd: WEB, lenient: true });
-    if (!ok && fs.existsSync(DIST_INDEX)) {
-      warn("前端依赖安装失败，改用已包含的预构建前端（web/dist）继续。");
-      return true;
-    }
-    return ok;
+const FRONTEND_DEPS = ["vite", "vue", "@vitejs/plugin-vue"];
+const NODE_MODULES = path.join(WEB, "node_modules");
+
+function frontendDepsReady() {
+  return FRONTEND_DEPS.every((name) =>
+    fs.existsSync(path.join(NODE_MODULES, ...name.split("/"), "package.json"))
+  );
+}
+
+function cleanFrontendDeps() {
+  log("检测到不完整的前端依赖（上次安装可能被网络中断），自动清理后重装...");
+  try {
+    fs.rmSync(NODE_MODULES, { recursive: true, force: true });
+  } catch (err) {
+    warn(`清理 node_modules 失败: ${err.message}`);
   }
-  return true;
+}
+
+function backendReady() {
+  const r = spawnSync(PYTHON, ["-c", "import fastapi, uvicorn, aiosqlite"], { stdio: "ignore" });
+  return !r.error && r.status === 0;
+}
+
+function ensureBackend() {
+  if (!fs.existsSync(PYTHON) || !backendReady()) {
+    log("安装/修复后端依赖 ...");
+    setup({ build: !fs.existsSync(DIST_INDEX) });
+  }
+}
+
+function installFrontend() {
+  if (frontendDepsReady()) return true;
+  if (fs.existsSync(NODE_MODULES)) cleanFrontendDeps();
+  log("安装前端依赖 ...");
+  let ok = run(NPM, npmArgs(), { cwd: WEB, lenient: true });
+  if (ok && !frontendDepsReady()) {
+    cleanFrontendDeps();
+    ok = run(NPM, npmArgs(), { cwd: WEB, lenient: true });
+  }
+  if (frontendDepsReady()) return true;
+  if (fs.existsSync(DIST_INDEX)) {
+    warn("前端依赖安装失败，改用已包含的预构建前端（web/dist）继续。");
+    return true;
+  }
+  return ok;
 }
 
 function buildFrontend() {
@@ -258,10 +301,7 @@ async function web(options = {}) {
     return;
   }
 
-  if (!fs.existsSync(PYTHON)) {
-    log("首次运行，安装后端依赖 ...");
-    setup({ build: !fs.existsSync(DIST_INDEX) });
-  }
+  ensureBackend();
   if (!fs.existsSync(DIST_INDEX)) buildFrontend();
 
   log("启动 API（端口 8030，被占用时自动顺延）...");
@@ -296,10 +336,7 @@ async function ensureServer() {
   const running = await healthyPort(readApiPort());
   if (running) return { port: running, child: null };
 
-  if (!fs.existsSync(PYTHON)) {
-    log("首次运行，安装后端依赖 ...");
-    setup({ build: !fs.existsSync(DIST_INDEX) });
-  }
+  ensureBackend();
   if (!fs.existsSync(DIST_INDEX)) buildFrontend();
 
   log("启动 API（端口 8030，被占用时自动顺延）...");

@@ -12,31 +12,61 @@ if not exist "api\env1\Scripts\python.exe" (
   python -m venv api\env1
   api\env1\Scripts\python.exe -m pip install --upgrade pip %PIP_ARGS%
   api\env1\Scripts\python.exe -m pip install %PIP_ARGS% -r api\requirements.txt
+) else (
+  api\env1\Scripts\python.exe -c "import fastapi, uvicorn, aiosqlite" >nul 2>&1
+  if errorlevel 1 (
+    echo [HaoYuan] Python dependencies are incomplete; repairing them...
+    api\env1\Scripts\python.exe -m pip install %PIP_ARGS% -r api\requirements.txt
+  )
 )
 
 set "PYTHONPATH=%CD%\api"
 api\env1\Scripts\python.exe -c "from configs.secrets import ensure_config_file; print('[HaoYuan] Global config:', ensure_config_file()[0])"
 set "PYTHONPATH="
 
-if not exist "web\dist\index.html" goto build_web
-if exist "web\node_modules" goto build_web
+if exist "web\dist\index.html" if not exist "web\node_modules" goto use_prebuilt
+goto ensure_web_deps
+
+:use_prebuilt
 echo [HaoYuan] Using prebuilt frontend ^(web\dist^).
 goto start_api
 
-:build_web
-echo [HaoYuan] Preparing frontend ^(install if needed, then build^)...
-set "NPM_ARGS=--no-audit --no-fund"
+:ensure_web_deps
+set "NPM_ARGS=--no-audit --no-fund --prefer-offline --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=10000 --fetch-timeout=30000"
 if not "%HAOYUAN_NPM_REGISTRY%"=="" set "NPM_ARGS=%NPM_ARGS% --registry=%HAOYUAN_NPM_REGISTRY%"
-if exist "web\node_modules" goto build_frontend
+if not exist "web\node_modules\vite\package.json" goto repair_web_deps
+if not exist "web\node_modules\vue\package.json" goto repair_web_deps
+if not exist "web\node_modules\@vitejs\plugin-vue\package.json" goto repair_web_deps
+goto build_frontend
+
+:repair_web_deps
+if exist "web\node_modules" (
+  echo [HaoYuan] Detected incomplete frontend dependencies, cleaning them automatically...
+  rmdir /s /q "web\node_modules"
+)
+set "NPM_RETRY=0"
+
+:install_web_deps
+echo [HaoYuan] Installing frontend dependencies...
 pushd web
 call npm install %NPM_ARGS%
 if errorlevel 1 (
   popd
   echo [HaoYuan] npm install failed. Configure an accessible registry, e.g.:
   echo     set HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/
+  if exist "web\dist\index.html" goto use_existing_dist
   exit /b 1
 )
 popd
+if exist "web\node_modules\vite\package.json" goto build_frontend
+if "%NPM_RETRY%"=="1" goto deps_still_broken
+set "NPM_RETRY=1"
+if exist "web\node_modules" rmdir /s /q "web\node_modules"
+goto install_web_deps
+
+:deps_still_broken
+if exist "web\dist\index.html" goto use_existing_dist
+exit /b 1
 
 :build_frontend
 echo [HaoYuan] Building frontend...
@@ -44,9 +74,15 @@ pushd web
 call npm run build
 if errorlevel 1 (
   popd
+  if exist "web\dist\index.html" goto use_existing_dist
   exit /b 1
 )
 popd
+goto start_api
+
+:use_existing_dist
+echo [HaoYuan] Using the existing web\dist build.
+goto start_api
 
 :start_api
 echo [HaoYuan] Starting API on port 8030 (auto +1 if busy)...
