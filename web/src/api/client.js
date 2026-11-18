@@ -155,7 +155,7 @@ export const api = {
 
   sessions: (includeHidden = true) => request(`/api/sessions${qs({ include_hidden: includeHidden })}`),
   session: (id) => request(`/api/sessions/${id}`),
-  createSession: (body) => request('/api/sessions', { method: 'POST', body: JSON.stringify(body) }),
+  createSession: (body) => request('/api/sessions', { method: 'POST', body: JSON.stringify(body), priority: 'high' }),
   patchSession: (id, body) => request(`/api/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   hideSession: (id) => request(`/api/sessions/${id}`, { method: 'DELETE' }),
   unhideSession: (id) => request(`/api/sessions/${id}/unhide`, { method: 'POST' }),

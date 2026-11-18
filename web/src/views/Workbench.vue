@@ -1,7 +1,7 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { closeSessionTab, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
+import { closeSessionTab, loadActivity, loadChanges, loadTree, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
@@ -96,10 +96,25 @@ function onTabsWheel(event) {
   event.preventDefault()
 }
 
+function loadRightPanelData() {
+  if (!state.currentId) return
+  loadActivity(state.currentId).catch(() => {})
+  if (state.session?.workspace) {
+    Promise.all([loadTree(), loadChanges()]).catch(() => {})
+  }
+}
+
 function toggleRight() {
   rightOpen.value = !rightOpen.value
+  state.rightPanelOpen = rightOpen.value
   localStorage.setItem(RIGHT_PANEL_KEY, rightOpen.value ? '1' : '0')
+  if (rightOpen.value) loadRightPanelData()
 }
+
+onMounted(() => {
+  state.rightPanelOpen = rightOpen.value
+  if (rightOpen.value) loadRightPanelData()
+})
 
 function startResize(event) {
   const startX = event.clientX
@@ -229,6 +244,15 @@ function closeDiff() {
           <Icon name="close" :size="11" />
         </button>
       </div>
+      <button
+        type="button"
+        class="new-tab-btn"
+        :title="`${t('nav.newTask')} (${shortcutLabel})`"
+        :aria-label="`${t('nav.newTask')} (${shortcutLabel})`"
+        @click="openNew"
+      >
+        <Icon name="plus" :size="12" />
+      </button>
     </div>
 
     <div v-if="!session || state.homeRequested" class="no-session">
@@ -332,6 +356,17 @@ function closeDiff() {
 }
 .session-tabs::-webkit-scrollbar { height: 4px; }
 .session-tabs::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
+.new-tab-btn {
+  position: sticky; right: 0; z-index: 2;
+  display: inline-grid; place-items: center; flex: 0 0 auto;
+  width: 28px; height: 28px; padding: 0; border-radius: 8px;
+  border: 1px dashed var(--line-strong); background: var(--surface);
+  color: var(--muted); cursor: pointer;
+  box-shadow: -10px 0 12px color-mix(in srgb, var(--surface) 88%, transparent);
+  transition: color .14s var(--ease), border-color .14s var(--ease), background .14s var(--ease);
+}
+.new-tab-btn:hover { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
+.new-tab-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .session-tab {
   display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
   max-width: 220px; height: 28px; padding: 0 8px 0 10px;
