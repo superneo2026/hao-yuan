@@ -385,14 +385,25 @@ def budget_contract(text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _absolute_output_target(raw: str) -> str | None:
+    # Windows 盘符路径在 POSIX 上不会被 os.path.isabs 识别，需显式判断，
+    # 否则会把 D:/x 拼到工作区后面。
+    if _DRIVE_PATH_RE.match(raw):
+        return raw.replace("/", "\\")
+    return raw if os.path.isabs(raw) else None
+
+
 def extract_output_targets(text: str, workspace: str) -> list[str]:
     targets: list[str] = []
     for match in _OUTPUT_HINT_RE.finditer(text or ""):
         raw = match.group(1).strip().rstrip(".,;:!?)]}\"'")
         if not raw:
             continue
-        full = raw if os.path.isabs(raw) else os.path.join(workspace, raw)
-        full = os.path.normpath(full)
+        absolute = _absolute_output_target(raw)
+        full = os.path.normpath(absolute if absolute is not None else os.path.join(workspace, raw))
         if full not in targets:
             targets.append(full)
     return targets
