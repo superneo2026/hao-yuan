@@ -47,6 +47,10 @@ TITLE_LANGUAGES = {
     "de": "German",
     "ko": "Korean",
     "fr": "French",
+    "es": "Spanish",
+    "pt-BR": "Brazilian Portuguese",
+    "it": "Italian",
+    "pl": "Polish",
 }
 _title_tasks: set[asyncio.Task] = set()
 
