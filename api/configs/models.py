@@ -32,7 +32,7 @@ class ProviderConfig:
     api_key: str = ""
     thinking_models: set[str] = field(default_factory=set)
     tiers: dict[str, str] = field(default_factory=dict)
-    max_output_tokens: int = 8192
+    max_output_tokens: int = 0  # 0 = 不指定，交给模型使用默认上限
     supports_thinking: bool = True
     builtin: bool = False
     key_source: str = "default"
@@ -156,12 +156,13 @@ def _apply_nested(conf: ProviderConfig, raw: dict[str, Any]) -> ProviderConfig:
         conf.supports_thinking = _truthy(
             raw.get("supports_thinking", raw.get("supportsThinking")), conf.supports_thinking
         )
-    max_output = raw.get("max_output_tokens") or raw.get("maxOutputTokens")
-    if max_output:
-        try:
-            conf.max_output_tokens = int(max_output)
-        except (TypeError, ValueError):
-            pass
+    if "max_output_tokens" in raw or "maxOutputTokens" in raw:
+        max_output = raw.get("max_output_tokens", raw.get("maxOutputTokens"))
+        if max_output not in (None, ""):
+            try:
+                conf.max_output_tokens = max(0, int(max_output))
+            except (TypeError, ValueError):
+                pass
     tiers = raw.get("tiers")
     if isinstance(tiers, dict) and tiers:
         conf.tiers = {str(key): str(value) for key, value in tiers.items()}
@@ -360,7 +361,7 @@ def _normalize_payload(item: dict[str, Any]) -> dict[str, Any]:
             item.get("supports_thinking", item.get("supportsThinking")), True
         ),
         "thinking_models": _as_list(item.get("thinking_models") or item.get("thinkingModels")),
-        "max_output_tokens": item.get("max_output_tokens") or item.get("maxOutputTokens"),
+        "max_output_tokens": item.get("max_output_tokens", item.get("maxOutputTokens")),
         "tiers": item.get("tiers") if isinstance(item.get("tiers"), dict) else {},
     }
 
@@ -419,8 +420,11 @@ def update_config(
             data[f"{env}_MODELS"] = ",".join(models)
             data[f"{env}_SUPPORTS_THINKING"] = "1" if item["supports_thinking"] else "0"
             data[f"{env}_THINKING_MODELS"] = ",".join(item["thinking_models"])
-            if item["max_output_tokens"]:
-                data[f"{env}_MAX_OUTPUT"] = str(item["max_output_tokens"])
+            if item["max_output_tokens"] is not None:
+                try:
+                    data[f"{env}_MAX_OUTPUT"] = str(max(0, int(item["max_output_tokens"])))
+                except (TypeError, ValueError):
+                    pass
             # 内置渠道以扁平字段为准，移除可能残留的嵌套覆盖，避免两份配置不一致。
             nested.pop(name, None)
             continue
@@ -436,9 +440,9 @@ def update_config(
         entry["default_model"] = default_model_name
         entry["supports_thinking"] = item["supports_thinking"]
         entry["thinking_models"] = item["thinking_models"]
-        if item["max_output_tokens"]:
+        if item["max_output_tokens"] is not None:
             try:
-                entry["max_output_tokens"] = int(item["max_output_tokens"])
+                entry["max_output_tokens"] = max(0, int(item["max_output_tokens"]))
             except (TypeError, ValueError):
                 pass
         if item["tiers"]:

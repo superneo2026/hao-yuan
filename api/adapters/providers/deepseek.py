@@ -56,10 +56,12 @@ class DeepSeekProvider:
             "model": model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": profile.max_output_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if profile.max_output_tokens > 0:
+            # 0 表示不指定，交给模型使用自身默认的最大输出。
+            payload["max_tokens"] = profile.max_output_tokens
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

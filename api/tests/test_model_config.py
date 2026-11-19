@@ -74,6 +74,23 @@ def test_custom_provider_roundtrip_and_hot_reload(isolated_config):
     assert "qwen-turbo" in models_mod.get_providers()["intranet"].models
 
 
+def test_custom_provider_without_max_output_uses_model_default(isolated_config):
+    models_mod.update_config(
+        [{"name": "relay", "base_url": "http://llm.relay/v1", "api_key": "sk-relay", "models": ["m1"]}]
+    )
+    assert models_mod.get_providers()["relay"].max_output_tokens == 0
+
+    models_mod.update_config(
+        [{"name": "relay", "base_url": "http://llm.relay/v1", "models": ["m1"], "max_output_tokens": 4096}]
+    )
+    assert models_mod.get_providers()["relay"].max_output_tokens == 4096
+
+    models_mod.update_config(
+        [{"name": "relay", "base_url": "http://llm.relay/v1", "models": ["m1"], "max_output_tokens": 0}]
+    )
+    assert models_mod.get_providers()["relay"].max_output_tokens == 0
+
+
 def test_builtin_provider_uses_flat_keys(isolated_config):
     cfg = isolated_config
     models_mod.update_config(

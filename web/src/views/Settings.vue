@@ -65,7 +65,7 @@ function startAddProvider(template = null) {
     default_model: template?.default_model || '',
     supports_thinking: template ? template.supports_thinking !== false : true,
     thinkingText: (template?.thinking_models || []).join(','),
-    max_output_tokens: template?.max_output_tokens || 8192
+    max_output_tokens: template?.max_output_tokens || ''
   }
 }
 
@@ -81,7 +81,7 @@ function startEditProvider(provider) {
     default_model: provider.default_model || '',
     supports_thinking: provider.supports_thinking !== false,
     thinkingText: (provider.thinking_models || []).join(','),
-    max_output_tokens: provider.max_output_tokens || 8192
+    max_output_tokens: provider.max_output_tokens || ''
   }
 }
 
@@ -355,7 +355,7 @@ onMounted(async () => {
             <div class="model-chip-row">
               <span v-for="model in provider.models" :key="model" class="model-chip" :class="{ active: model === provider.default_model }">{{ model }}</span>
             </div>
-            <div class="tiny faint">{{ t('settings.source', { source: provider.key_source }) }} · {{ provider.max_output_tokens }} tokens</div>
+            <div class="tiny faint">{{ t('settings.source', { source: provider.key_source }) }} · {{ provider.max_output_tokens ? `${provider.max_output_tokens} tokens` : t('settings.maxOutputAuto') }}</div>
             <div class="row" style="margin-top: 8px">
               <button class="btn sm" @click="startEditProvider(provider)">{{ t('common.edit') }}</button>
               <button v-if="!provider.builtin" class="btn sm danger" @click="removeProvider(provider)">{{ t('common.delete') }}</button>
@@ -394,7 +394,7 @@ onMounted(async () => {
             </label>
             <label>
               <span>{{ t('settings.maxOutput') }}</span>
-              <input v-model="modelDraft.max_output_tokens" class="field mono" type="number" min="256" step="256" />
+              <input v-model="modelDraft.max_output_tokens" class="field mono" type="number" min="0" step="256" :placeholder="t('settings.maxOutputAuto')" />
             </label>
             <label class="wide">
               <span>{{ t('settings.modelsList') }}</span>
