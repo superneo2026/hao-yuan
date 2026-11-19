@@ -235,3 +235,27 @@ def test_builtin_enabled_models_uses_flat_key(isolated_config):
     provider = models_mod.get_providers()["deepseek"]
     assert models_mod.effective_models(provider) == ["deepseek-v4-pro"]
     assert models_mod.effective_default_model(provider) == "deepseek-v4-pro"
+
+
+def test_resolve_prefers_explicit_provider_for_same_model_name(isolated_config):
+    models_mod.update_config(
+        [
+            {
+                "name": "p1",
+                "base_url": "http://p1/v1",
+                "api_key": "sk-p1",
+                "models": ["shared-model", "p1-only"],
+                "default_model": "p1-only",
+            },
+            {
+                "name": "p2",
+                "base_url": "http://p2/v1",
+                "api_key": "sk-p2",
+                "models": ["shared-model", "p2-only"],
+                "default_model": "p2-only",
+            },
+        ]
+    )
+    assert models_mod.resolve("p2", "shared-model") == ("p2", "shared-model")
+    assert models_mod.resolve("p1", "shared-model") == ("p1", "shared-model")
+    assert models_mod.resolve(None, "shared-model")[1] == "shared-model"

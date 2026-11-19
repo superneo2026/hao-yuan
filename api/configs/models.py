@@ -370,15 +370,16 @@ def resolve(provider: str | None, model: str | None) -> tuple[str, str]:
     split_provider, split_model = _split_model(model)
     if split_provider:
         provider, model = split_provider, split_model
-    if model and model != "auto":
-        for name, conf in providers.items():
-            if model in effective_models(conf):
-                return name, model
+    # 显式渠道优先：同一模型名可能同时存在于多个平台（如多个渠道都部署了同一开源模型）。
     if provider in providers:
         conf = providers[provider]
         if model and model in effective_models(conf):
             return provider, model
         return provider, effective_default_model(conf)
+    if model and model != "auto":
+        for name, conf in providers.items():
+            if model in effective_models(conf):
+                return name, model
     return auto_default()
 
 

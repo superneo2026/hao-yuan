@@ -49,16 +49,41 @@ class DeepSeekProvider:
         model: str,
         thinking: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
+        try:
+            async for event in self._stream_once(
+                messages, tools, profile, model, thinking, use_temperature=True
+            ):
+                yield event
+        except ProviderHTTPError as exc:
+            # 部分模型（如 Kimi K3、OpenAI o 系列）只接受 temperature=1，去掉该参数重试。
+            if exc.status == 400 and "temperature" in (exc.body or "").lower():
+                async for event in self._stream_once(
+                    messages, tools, profile, model, thinking, use_temperature=False
+                ):
+                    yield event
+            else:
+                raise
+
+    async def _stream_once(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        profile: ProviderConfig,
+        model: str,
+        thinking: str = "",
+        use_temperature: bool = True,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         if not profile.api_key:
             raise RuntimeError(f"{profile.name} API key is not configured")
 
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": 0.2,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if use_temperature:
+            payload["temperature"] = 0.2
         if profile.max_output_tokens > 0:
             # 0 表示不指定，交给模型使用自身默认的最大输出。
             payload["max_tokens"] = profile.max_output_tokens
