@@ -179,3 +179,59 @@ def test_extract_model_ids_sorts_newest_and_filters_openai():
     assert _is_anthropic("claude", "https://api.anthropic.com/v1")
     assert _is_anthropic("any", "https://api.anthropic.com/v1")
     assert not _is_anthropic("openai", "https://api.openai.com/v1")
+
+
+def test_enabled_models_subset_filters_choices(isolated_config):
+    cfg = isolated_config
+    models_mod.update_config(
+        [
+            {
+                "name": "relay",
+                "base_url": "http://llm.relay/v1",
+                "api_key": "sk-relay",
+                "models": ["a", "b", "c"],
+                "default_model": "a",
+                "enabled_models": ["b"],
+            }
+        ]
+    )
+    provider = models_mod.get_providers()["relay"]
+    assert models_mod.effective_models(provider) == ["b"]
+    assert models_mod.effective_default_model(provider) == "b"
+    listed = next(item for item in models_mod.list_models() if item["provider"] == "relay")
+    assert listed["models"] == ["b"]
+    # 已禁用的 a 会回退到当前启用的默认模型 b
+    assert models_mod.resolve("relay", "a") == ("relay", "b")
+
+    # 传空列表表示“全部启用”
+    models_mod.update_config(
+        [
+            {
+                "name": "relay",
+                "base_url": "http://llm.relay/v1",
+                "models": ["a", "b", "c"],
+                "default_model": "b",
+                "enabled_models": [],
+            }
+        ]
+    )
+    assert models_mod.effective_models(models_mod.get_providers()["relay"]) == ["a", "b", "c"]
+
+
+def test_builtin_enabled_models_uses_flat_key(isolated_config):
+    cfg = isolated_config
+    models_mod.update_config(
+        [
+            {
+                "name": "deepseek",
+                "models": ["deepseek-flash", "deepseek-v4-pro"],
+                "default_model": "deepseek-flash",
+                "enabled_models": ["deepseek-v4-pro"],
+            }
+        ]
+    )
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["DEEPSEEK_ENABLED_MODELS"] == "deepseek-v4-pro"
+    provider = models_mod.get_providers()["deepseek"]
+    assert models_mod.effective_models(provider) == ["deepseek-v4-pro"]
+    assert models_mod.effective_default_model(provider) == "deepseek-v4-pro"

@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator
 from adapters.providers.deepseek import DeepSeekProvider, ProviderHTTPError
 from adapters.providers.mock import MockProvider
 from configs import models as models_mod
-from configs.models import PROVIDERS, ProviderConfig
+from configs.models import PROVIDERS, ProviderConfig, effective_default_model, effective_models
 
 
 def strict_provider() -> bool:
@@ -51,7 +51,7 @@ class ModelGateway:
         out: list[tuple[str, str]] = []
         conf = PROVIDERS.get(provider)
         if conf and (provider == "mock" or conf.api_key):
-            for candidate in [model or conf.default_model] + conf.models:
+            for candidate in [model or effective_default_model(conf)] + effective_models(conf):
                 item = (provider, candidate)
                 if item not in out:
                     out.append(item)
@@ -61,7 +61,7 @@ class ModelGateway:
             for name, other in PROVIDERS.items():
                 if name in (provider, "mock") or not other.api_key:
                     continue
-                for candidate in other.models:
+                for candidate in effective_models(other):
                     item = (name, candidate)
                     if item not in out:
                         out.append(item)

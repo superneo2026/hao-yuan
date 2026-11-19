@@ -91,6 +91,7 @@ class ProviderConfig:
     models: list[str]
     default_model: str
     api_key: str = ""
+    enabled_models: list[str] = field(default_factory=list)  # 空 = 全部可用
     thinking_models: set[str] = field(default_factory=set)
     tiers: dict[str, str] = field(default_factory=dict)
     max_output_tokens: int = 0  # 0 = 不指定，交给模型使用默认上限
@@ -150,6 +151,22 @@ def _unique(items: list[str]) -> list[str]:
     return out
 
 
+def effective_models(conf: ProviderConfig) -> list[str]:
+    """用于聊天/新建任务/回退的模型子集；enabled_models 为空表示全部。"""
+    if not conf.enabled_models:
+        return list(conf.models)
+    allowed = {model for model in conf.enabled_models if model in conf.models}
+    selected = [model for model in conf.models if model in allowed]
+    return selected or list(conf.models)
+
+
+def effective_default_model(conf: ProviderConfig) -> str:
+    models = effective_models(conf)
+    if conf.default_model in models:
+        return conf.default_model
+    return models[0] if models else conf.default_model
+
+
 def _truthy(value: Any, default: bool = True) -> bool:
     if value is None or value == "":
         return default
@@ -165,6 +182,7 @@ def _builtin(name: str) -> ProviderConfig:
     configured_models = _as_list(secrets.get_secret(f"{env}_MODELS", ""))
     base_models = configured_models or default_models
     models = _unique([default_model] + base_models)
+    enabled = [model for model in _as_list(secrets.get_secret(f"{env}_ENABLED_MODELS", "")) if model in models]
     thinking = set(_as_list(secrets.get_secret(f"{env}_THINKING_MODELS", "")))
     if not thinking:
         thinking = {default_model} if name in ("deepseek", "mimo") else set()
@@ -179,6 +197,7 @@ def _builtin(name: str) -> ProviderConfig:
         models=models,
         default_model=default_model,
         api_key=api_key,
+        enabled_models=enabled,
         thinking_models=thinking,
         tiers={tier: default_model for tier in ("lite", "standard", "pro")} | {tier: models[-1] for tier in ("pro",)},
         max_output_tokens=max_output,
@@ -210,6 +229,9 @@ def _apply_nested(conf: ProviderConfig, raw: dict[str, Any]) -> ProviderConfig:
         conf.default_model = conf.default_model or conf.models[0]
     if not conf.default_model:
         conf.default_model = conf.models[0]
+    if "enabled_models" in raw or "enabledModels" in raw:
+        enabled = _as_list(raw.get("enabled_models", raw.get("enabledModels")))
+        conf.enabled_models = [model for model in enabled if model in conf.models]
     thinking = _as_list(raw.get("thinking_models") or raw.get("thinkingModels"))
     if thinking:
         conf.thinking_models = set(thinking)
@@ -326,17 +348,18 @@ def auto_default() -> tuple[str, str]:
 
     if gp and gp != "auto" and gp in providers:
         conf = providers[gp]
-        if gm and gm != "auto" and gm in conf.models:
+        models = effective_models(conf)
+        if gm and gm != "auto" and gm in models:
             return gp, gm
-        return gp, conf.default_model
+        return gp, effective_default_model(conf)
     if gm and gm != "auto":
         for name, conf in providers.items():
-            if gm in conf.models:
+            if gm in effective_models(conf):
                 return name, gm
     # 自动选择只依据用户真正配置过密钥的渠道，不再硬编码内置模型厂商。
     for name, conf in providers.items():
         if name != "mock" and conf.api_key:
-            return name, conf.default_model
+            return name, effective_default_model(conf)
     return "mock", "mock-deterministic"
 
 
@@ -349,13 +372,13 @@ def resolve(provider: str | None, model: str | None) -> tuple[str, str]:
         provider, model = split_provider, split_model
     if model and model != "auto":
         for name, conf in providers.items():
-            if model in conf.models:
+            if model in effective_models(conf):
                 return name, model
     if provider in providers:
         conf = providers[provider]
-        if model and model in conf.models:
+        if model and model in effective_models(conf):
             return provider, model
-        return provider, conf.default_model
+        return provider, effective_default_model(conf)
     return auto_default()
 
 
@@ -367,8 +390,8 @@ def list_models() -> list[dict]:
         out.append(
             {
                 "provider": name,
-                "models": conf.models,
-                "default_model": conf.default_model,
+                "models": effective_models(conf),
+                "default_model": effective_default_model(conf),
                 "configured": bool(conf.api_key),
                 "base_url": conf.base_url,
                 "builtin": conf.builtin,
@@ -450,6 +473,7 @@ def describe_config() -> dict:
                 "builtin": conf.builtin,
                 "base_url": conf.base_url,
                 "models": conf.models,
+                "enabled_models": effective_models(conf),
                 "default_model": conf.default_model,
                 "has_key": bool(conf.api_key),
                 "api_key": secrets.mask_secret(conf.api_key),
@@ -476,6 +500,11 @@ def _normalize_payload(item: dict[str, Any]) -> dict[str, Any]:
         "api_key": str(item.get("api_key") or item.get("apiKey") or "").strip(),
         "clear_key": bool(item.get("clear_key") or item.get("clearKey")),
         "models": _as_list(item.get("models")),
+        "enabled_models": (
+            _as_list(item.get("enabled_models", item.get("enabledModels")))
+            if item.get("enabled_models") is not None or item.get("enabledModels") is not None
+            else None
+        ),
         "default_model": str(item.get("default_model") or item.get("defaultModel") or "").strip(),
         "supports_thinking": _truthy(
             item.get("supports_thinking", item.get("supportsThinking")), True
@@ -525,6 +554,14 @@ def update_config(
         if not models:
             raise ValueError(f"provider {name} needs at least one model")
         default_model_name = default_model_name or models[0]
+        enabled_models = None
+        if item["enabled_models"] is not None:
+            raw_enabled = _unique(item["enabled_models"])
+            enabled_models = [model for model in raw_enabled if model in models]
+            if raw_enabled and not enabled_models:
+                enabled_models = [default_model_name]
+            if enabled_models and default_model_name not in enabled_models:
+                default_model_name = enabled_models[0]
         if name not in BUILTIN_NAMES and not item["base_url"]:
             raise ValueError(f"provider {name} needs a base_url")
 
@@ -538,6 +575,8 @@ def update_config(
                 data[f"{env}_API_KEY"] = item["api_key"]
             data[f"{env}_MODEL"] = default_model_name
             data[f"{env}_MODELS"] = ",".join(models)
+            if enabled_models is not None:
+                data[f"{env}_ENABLED_MODELS"] = ",".join(enabled_models)
             data[f"{env}_SUPPORTS_THINKING"] = "1" if item["supports_thinking"] else "0"
             data[f"{env}_THINKING_MODELS"] = ",".join(item["thinking_models"])
             if item["max_output_tokens"] is not None:
@@ -557,6 +596,8 @@ def update_config(
         elif item["api_key"]:
             entry["api_key"] = item["api_key"]
         entry["models"] = models
+        if enabled_models is not None:
+            entry["enabled_models"] = enabled_models
         entry["default_model"] = default_model_name
         entry["supports_thinking"] = item["supports_thinking"]
         entry["thinking_models"] = item["thinking_models"]

@@ -20,9 +20,10 @@ def _is_anthropic(provider: str, base_url: str) -> bool:
     return provider.strip().lower() in {"claude", "anthropic"} or "anthropic.com" in base_url.lower()
 
 
-_OPENAI_NON_CHAT = (
+_NON_CHAT_TOKENS = (
     "embedding",
     "embed-",
+    "rerank",
     "whisper",
     "tts",
     "dall-e",
@@ -31,8 +32,20 @@ _OPENAI_NON_CHAT = (
     "transcribe",
     "speech",
     "sora",
-    "rerank",
     "image",
+    "ocr",
+    "asr",
+    "video",
+    "wanx",
+    "cosyvoice",
+    "paraformer",
+    "sensevoice",
+    "sambert",
+    "flux",
+    "stable-diffusion",
+    "livetranslate",
+    "realtime",
+    "s2s",
 )
 
 
@@ -62,7 +75,6 @@ def _extract_model_ids(payload: Any, provider: str = "", base_url: str = "") -> 
         items = list(items.values())
     entries: list[tuple[str, float]] = []
     seen: set[str] = set()
-    filter_non_chat = provider.strip().lower() == "openai" or "openai.com" in base_url.lower()
     for item in items if isinstance(items, list) else []:
         created = 0.0
         if isinstance(item, str):
@@ -75,7 +87,7 @@ def _extract_model_ids(payload: Any, provider: str = "", base_url: str = "") -> 
         model_id = str(model_id or "").strip()
         if not model_id or model_id in seen:
             continue
-        if filter_non_chat and any(token in model_id.lower() for token in _OPENAI_NON_CHAT):
+        if any(token in model_id.lower() for token in _NON_CHAT_TOKENS):
             continue
         seen.add(model_id)
         entries.append((model_id, created))
@@ -111,8 +123,8 @@ async def health():
             "providers": [
                 {
                     "name": name,
-                    "models": conf.models,
-                    "default_model": conf.default_model,
+                    "models": models_mod.effective_models(conf) if name != "mock" else conf.models,
+                    "default_model": models_mod.effective_default_model(conf) if name != "mock" else conf.default_model,
                     "configured": bool(conf.api_key) if name != "mock" else True,
                     "key_source": conf.key_source if name != "mock" else "builtin",
                     "builtin": conf.builtin,

@@ -15,7 +15,12 @@ const draftKey = computed(() => `hy.draft.${state.currentId || 'new'}`)
 const models = computed(() => {
   const out = []
   for (const provider of usableModels.value) {
-    for (const model of provider.models || []) out.push({ provider: provider.provider, model, label: model })
+    for (const model of provider.models || []) out.push({ provider: provider.provider, model, label: `${provider.provider} / ${model}` })
+  }
+  // 当前会话的模型若已被停用/移除，仍保留一项，避免选择框变成空白。
+  const session = currentSession.value || {}
+  if (session.provider && session.model && !out.some((option) => option.provider === session.provider && option.model === session.model)) {
+    out.unshift({ provider: session.provider, model: session.model, label: `${session.provider} / ${session.model}` })
   }
   return out
 })
@@ -126,12 +131,8 @@ function onKeydown(event) {
 }
 
 function onModelChange(event) {
-  const value = event.target.value
-  if (!value) {
-    patchSession({ provider: '', model: '' })
-    return
-  }
-  const [provider, model] = value.split('|')
+  const [provider, model] = String(event.target.value || '').split('|')
+  if (!provider || !model) return
   patchSession({ provider, model })
 }
 
@@ -199,7 +200,6 @@ defineExpose({ fill })
               <Icon name="chevron-down" :size="11" />
             </button>
             <select class="mini-select" :value="modelValue" :title="t('session.model')" @change="onModelChange">
-              <option value="">{{ t('chat.autoModel') }}</option>
               <option v-for="option in models" :key="`${option.provider}|${option.model}`" :value="`${option.provider}|${option.model}`">
                 {{ option.label }}
               </option>

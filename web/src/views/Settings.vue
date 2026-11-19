@@ -25,6 +25,7 @@ const modelDraft = ref(null)
 const savingModel = ref(false)
 const discoveringModels = ref(false)
 const refreshingAllModels = ref(false)
+const modelFilter = ref('')
 const configRaw = ref({ path: '', text: '', masked: true })
 const showConfigText = ref(true)
 
@@ -32,10 +33,15 @@ const presets = computed(() => modelConfig.value.presets || [])
 
 const configuredProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => provider.has_key))
 const pendingProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => !provider.has_key))
+function enabledModelsOf(provider) {
+  const enabled = provider?.enabled_models || []
+  return enabled.length ? enabled : provider?.models || []
+}
+
 const routeOptions = computed(() => {
   const out = []
   for (const provider of configuredProviders.value) {
-    for (const model of provider.models || []) out.push({ provider: provider.name, model, label: `${provider.name} / ${model}` })
+    for (const model of enabledModelsOf(provider)) out.push({ provider: provider.name, model, label: `${provider.name} / ${model}` })
   }
   return out
 })
@@ -46,6 +52,23 @@ const routeValue = computed(() => {
   return usable ? `${provider}|${model}` : ''
 })
 const draftModels = computed(() => splitList(modelDraft.value?.modelsText))
+const draftEnabledModels = computed(() => {
+  const models = draftModels.value
+  const enabled = modelDraft.value?.enabledModels || []
+  const picked = models.filter((model) => enabled.includes(model))
+  return picked.length ? picked : models
+})
+const filteredDraftModels = computed(() => {
+  const query = modelFilter.value.trim().toLowerCase()
+  if (!query) return draftModels.value
+  return draftModels.value.filter((model) => model.toLowerCase().includes(query))
+})
+const draftAllEnabled = computed(() => {
+  const models = filteredDraftModels.value
+  if (!models.length) return false
+  const enabled = new Set(modelDraft.value?.enabledModels || [])
+  return models.every((model) => enabled.has(model))
+})
 
 function splitList(text) {
   return String(text || '')
@@ -107,9 +130,12 @@ async function discoverLatestModels({ silent = false } = {}) {
       if (!silent) toast(t('settings.noModelsFound'), 'bad')
       return
     }
+    const previousEnabled = (draft.enabledModels || []).filter((model) => models.includes(model))
     draft.modelsText = models.join('\n')
+    // 不默认启用全部模型，避免一次拉取几百个模型后聊天里选择困难。
+    draft.enabledModels = previousEnabled.length ? previousEnabled : [models[0]]
     draft.autoModels = false
-    if (!draft.default_model || !models.includes(draft.default_model)) draft.default_model = models[0]
+    if (!draft.enabledModels.includes(draft.default_model)) draft.default_model = draft.enabledModels[0]
     if (!silent) toast(t('settings.modelsFetched', { count: models.length }), 'good')
   } catch (error) {
     if (!silent) toast(error.message, 'bad')
@@ -144,11 +170,16 @@ async function refreshAllModels() {
       if (result.status !== 'fulfilled') continue
       const { provider, models } = result.value
       if (!models.length) continue
+      const previous = enabledModelsOf(provider)
+      const enabled = models.filter((model) => previous.includes(model))
+      if (!enabled.length) enabled.push(models[0])
+      const defaultModel = enabled.includes(provider.default_model) ? provider.default_model : enabled[0]
       payload.push({
         name: provider.name,
         base_url: provider.base_url,
         models,
-        default_model: models.includes(provider.default_model) ? provider.default_model : models[0],
+        enabled_models: enabled,
+        default_model: defaultModel,
         supports_thinking: provider.supports_thinking,
         thinking_models: provider.thinking_models || [],
         max_output_tokens: provider.max_output_tokens || 0
@@ -168,6 +199,7 @@ async function refreshAllModels() {
 }
 
 function startAddProvider(template = null) {
+  modelFilter.value = ''
   modelDraft.value = {
     name: template?.name || '',
     builtin: !!template?.builtin,
@@ -176,6 +208,7 @@ function startAddProvider(template = null) {
     clear_key: false,
     has_key: !!template?.has_key,
     autoModels: !!template,
+    enabledModels: template?.enabled_models?.length ? [...template.enabled_models] : [...(template?.models || [])],
     modelsText: (template?.models || []).join('\n'),
     default_model: template?.default_model || '',
     supports_thinking: template ? template.supports_thinking !== false : true,
@@ -184,7 +217,29 @@ function startAddProvider(template = null) {
   }
 }
 
+function toggleDraftModel(model) {
+  const draft = modelDraft.value
+  if (!draft) return
+  const set = new Set(draft.enabledModels || [])
+  if (set.has(model)) set.delete(model)
+  else set.add(model)
+  draft.enabledModels = [...set]
+  if (set.size && !set.has(draft.default_model)) draft.default_model = [...set][0]
+}
+
+function toggleAllDraftModels() {
+  if (!modelDraft.value) return
+  const visible = filteredDraftModels.value
+  const set = new Set(modelDraft.value.enabledModels || [])
+  if (draftAllEnabled.value) visible.forEach((model) => set.delete(model))
+  else visible.forEach((model) => set.add(model))
+  modelDraft.value.enabledModels = [...set]
+  if (!set.size) modelDraft.value.default_model = draftModels.value[0] || ''
+  else if (!set.has(modelDraft.value.default_model)) modelDraft.value.default_model = [...set][0]
+}
+
 function startEditProvider(provider) {
+  modelFilter.value = ''
   modelDraft.value = {
     name: provider.name,
     builtin: provider.builtin,
@@ -193,6 +248,7 @@ function startEditProvider(provider) {
     clear_key: false,
     has_key: provider.has_key,
     autoModels: false,
+    enabledModels: provider.enabled_models?.length ? [...provider.enabled_models] : [...(provider.models || [])],
     modelsText: (provider.models || []).join('\n'),
     default_model: provider.default_model || '',
     supports_thinking: provider.supports_thinking !== false,
@@ -229,6 +285,13 @@ async function saveProvider() {
     toast(t('settings.needModels'), 'bad')
     return
   }
+  const models = splitList(draft.modelsText)
+  const enabled = models.filter((model) => (draft.enabledModels || []).includes(model))
+  if (!enabled.length) {
+    toast(t('settings.needEnabledModel'), 'bad')
+    return
+  }
+  const defaultModel = enabled.includes(draft.default_model.trim()) ? draft.default_model.trim() : enabled[0]
   savingModel.value = true
   try {
     const view = await api.saveConfig({
@@ -238,8 +301,9 @@ async function saveProvider() {
           base_url: draft.base_url.trim(),
           api_key: draft.api_key.trim(),
           clear_key: draft.clear_key,
-          models: splitList(draft.modelsText),
-          default_model: draft.default_model.trim(),
+          models,
+          enabled_models: enabled.length === models.length ? [] : enabled,
+          default_model: defaultModel,
           supports_thinking: draft.supports_thinking,
           thinking_models: splitList(draft.thinkingText),
           max_output_tokens: Number(draft.max_output_tokens) || 0
@@ -492,8 +556,9 @@ onMounted(async () => {
             </div>
             <div class="tiny faint mono">{{ provider.base_url || '—' }}</div>
             <div class="model-chip-row">
-              <span v-for="model in provider.models" :key="model" class="model-chip" :class="{ active: model === provider.default_model }">{{ model }}</span>
+              <span v-for="model in enabledModelsOf(provider)" :key="model" class="model-chip" :class="{ active: model === provider.default_model }">{{ model }}</span>
             </div>
+            <div class="tiny faint">{{ t('settings.enabledCount', { enabled: enabledModelsOf(provider).length, total: provider.models.length }) }}</div>
             <div class="tiny faint">{{ t('settings.source', { source: provider.key_source }) }} · {{ provider.max_output_tokens ? `${provider.max_output_tokens} tokens` : t('settings.maxOutputAuto') }}</div>
             <div class="row" style="margin-top: 8px">
               <button class="btn sm" @click="startEditProvider(provider)">{{ t('common.edit') }}</button>
@@ -560,11 +625,31 @@ onMounted(async () => {
               </button>
               <span class="tiny faint">{{ t('settings.fetchModelsHint') }}</span>
             </div>
+            <div class="editor-models">
+              <div class="row" style="justify-content: space-between">
+                <span class="label">{{ t('settings.enabledModels') }}</span>
+                <button class="btn sm" type="button" @click="toggleAllDraftModels">
+                  {{ draftAllEnabled ? t('settings.disableAll') : t('settings.enableAll') }}
+                </button>
+              </div>
+              <input v-model="modelFilter" class="field mono" :placeholder="t('settings.filterModels')" />
+              <div class="model-chip-row">
+                <button
+                  v-for="model in filteredDraftModels"
+                  :key="model"
+                  type="button"
+                  class="model-chip"
+                  :class="{ active: (modelDraft.enabledModels || []).includes(model) }"
+                  @click="toggleDraftModel(model)"
+                >{{ model }}</button>
+              </div>
+              <small class="tiny faint">{{ t('settings.enabledModelsHint') }}</small>
+            </div>
             <label>
               <span>{{ t('settings.defaultModelField') }}</span>
               <select v-model="modelDraft.default_model" class="select">
                 <option value="">{{ t('settings.defaultModelField') }}</option>
-                <option v-for="model in draftModels" :key="model" :value="model">{{ model }}</option>
+                <option v-for="model in draftEnabledModels" :key="model" :value="model">{{ model }}</option>
               </select>
             </label>
             <label>
@@ -703,6 +788,9 @@ onMounted(async () => {
 .editor-grid label.wide { grid-column: 1 / -1; }
 .editor-grid textarea { resize: vertical; min-height: 84px; }
 .editor-fetch { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.editor-models { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
+.editor-models .label { font-size: 11px; color: var(--muted); }
+button.model-chip { cursor: pointer; font-family: inherit; }
 .editor-flags { display: flex; flex-wrap: wrap; gap: 14px; margin: 9px 0; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
 .btn.danger { color: var(--bad, #d33); }
