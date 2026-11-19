@@ -30,6 +30,7 @@ CONFIG_TEMPLATE: dict = {
     "MIMO_API_KEY": "",
     "MIMO_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
     "MIMO_MODEL": "mimo-v2.6-flash",
+    "REMOVED_PROVIDERS": [],
     "providers": {},
 }
 

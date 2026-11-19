@@ -259,3 +259,26 @@ def test_resolve_prefers_explicit_provider_for_same_model_name(isolated_config):
     assert models_mod.resolve("p2", "shared-model") == ("p2", "shared-model")
     assert models_mod.resolve("p1", "shared-model") == ("p1", "shared-model")
     assert models_mod.resolve(None, "shared-model")[1] == "shared-model"
+
+
+def test_builtin_provider_removal_and_restore(isolated_config):
+    cfg = isolated_config
+    view = models_mod.update_config([], removed=["zhipu"])
+    names = {item["name"] for item in view["providers"]}
+    assert "zhipu" not in names
+    assert "mimo" in names
+    assert "zhipu" in {item["name"] for item in view["presets"]}
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert "zhipu" in saved["REMOVED_PROVIDERS"]
+    assert not any(key.startswith("ZHIPU_") for key in saved)
+
+    view = models_mod.update_config(
+        [{"name": "zhipu", "models": ["glm-5.3-flash", "glm-5.3"], "default_model": "glm-5.3-flash"}]
+    )
+    assert "zhipu" in {item["name"] for item in view["providers"]}
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert "zhipu" not in saved["REMOVED_PROVIDERS"]
+
+    # deepseek 始终保留
+    view = models_mod.update_config([], removed=["deepseek"])
+    assert "deepseek" in {item["name"] for item in view["providers"]}

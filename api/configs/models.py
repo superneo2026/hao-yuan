@@ -265,10 +265,15 @@ def _build() -> dict[str, ProviderConfig]:
             key_source="builtin",
         )
     }
+    config = secrets.global_config_snapshot()
+    removed = set(_as_list(config.get("REMOVED_PROVIDERS")))
     for name in BUILTIN_NAMES:
+        # deepseek 作为兜底内置渠道始终保留；zhipu/mimo 可由用户删除。
+        if name != "deepseek" and name in removed:
+            continue
         providers[name] = _builtin(name)
 
-    nested = secrets.global_config_snapshot().get("providers")
+    nested = config.get("providers")
     if isinstance(nested, dict):
         for raw_name, raw in nested.items():
             name = str(raw_name).strip()
@@ -530,10 +535,22 @@ def update_config(
     nested = data.get("providers")
     nested = dict(nested) if isinstance(nested, dict) else {}
     known = set(BUILTIN_NAMES) | set(nested.keys())
+    removed_builtins = set(_as_list(data.get("REMOVED_PROVIDERS")))
 
     for name in removed or []:
         clean = str(name).strip()
-        if not clean or clean in BUILTIN_NAMES:
+        # deepseek 是兜底渠道，不允许删除；zhipu/mimo 与自定义渠道可删除。
+        if not clean or clean == "deepseek":
+            continue
+        if str(data.get("PROVIDER") or "").strip() == clean:
+            data["PROVIDER"] = ""
+            data["MODEL"] = ""
+        if clean in BUILTIN_NAMES:
+            env = clean.upper()
+            for key in [key for key in data if key.startswith(f"{env}_")]:
+                data.pop(key, None)
+            removed_builtins.add(clean)
+            known.discard(clean)
             continue
         nested.pop(clean, None)
         known.discard(clean)
@@ -543,6 +560,7 @@ def update_config(
         name = item["name"]
         if not name or name == "mock":
             continue
+        removed_builtins.discard(name)
         if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
             raise ValueError(f"invalid provider name: {name}")
         models = _unique(item["models"])
@@ -613,6 +631,7 @@ def update_config(
         known.add(name)
 
     data["providers"] = nested
+    data["REMOVED_PROVIDERS"] = sorted(removed_builtins)
     if default_provider is not None:
         data["PROVIDER"] = str(default_provider).strip()
     if default_model is not None:

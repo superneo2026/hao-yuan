@@ -321,7 +321,7 @@ async function saveProvider() {
 }
 
 async function removeProvider(provider) {
-  if (!provider || provider.builtin) return
+  if (!provider || provider.name === 'deepseek') return
   if (!window.confirm(`${t('common.delete')} ${provider.name}?`)) return
   try {
     applyModelConfig(await api.saveConfig({ removed: [provider.name] }))
@@ -562,7 +562,7 @@ onMounted(async () => {
             <div class="tiny faint">{{ t('settings.source', { source: provider.key_source }) }} · {{ provider.max_output_tokens ? `${provider.max_output_tokens} tokens` : t('settings.maxOutputAuto') }}</div>
             <div class="row" style="margin-top: 8px">
               <button class="btn sm" @click="startEditProvider(provider)">{{ t('common.edit') }}</button>
-              <button v-if="!provider.builtin" class="btn sm danger" @click="removeProvider(provider)">{{ t('common.delete') }}</button>
+              <button v-if="provider.name !== 'deepseek'" class="btn sm danger" @click="removeProvider(provider)">{{ t('common.delete') }}</button>
             </div>
           </div>
         </div>
