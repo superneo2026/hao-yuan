@@ -1,5 +1,7 @@
 ﻿# 豪源 · HaoYuan
 
+**简体中文** · [繁體中文](docs/readme/README.zh-TW.md) · [English](docs/readme/README.en.md)
+
 > 个人指挥 AI 实现多个 AI 员工异步并行工作的 AI 工作室。  
 > 一个内核，一组可安装插件，一套可验证的长程任务闭环。
 
