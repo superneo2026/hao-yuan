@@ -79,15 +79,15 @@ Plugins can contribute: tools, agents, HTTP routes, skill directories, event sub
 
 ![Plugins](../screenshots/plugins.png)
 
-### 1.7 Three languages, light default, and a collapsible sidebar
+### 1.7 Seven languages, light default, and a collapsible sidebar
 
 - Default **light (white) theme**; switch to dark from the settings page or the bottom of the sidebar.
-- Default **Simplified Chinese**; switch between **简体中文 / 繁體中文 / English**.
+- Default **Simplified Chinese**; switch between **简体中文 / 繁體中文 / English / 日本語 / Deutsch / 한국어 / Français**.
 - Language entry points are in three prominent places: the workbench top bar, the sidebar bottom (available on all pages), and Settings → Appearance.
 - The choice is persisted to `localStorage` and survives refresh and restart; `document.lang` and the page title are updated as well.
 - The sidebar can collapse to a 76px icon rail; after collapsing, an explicit "Expand sidebar" button remains at the top, the session list is hidden, and everything is restored when expanded.
 - The right-hand insights panel is collapsed by default to leave more room for the conversation; click the top-right button to open it, and the choice persists.
-- Built-in skill titles/descriptions, plugin titles/descriptions, and UI copy for status, buttons, tips, approvals, plans, usage, and orchestration are fully covered in all three languages.
+- Built-in skill titles/descriptions, plugin titles/descriptions, and UI copy for status, buttons, tips, approvals, plans, usage, and orchestration are fully covered in all seven languages.
 
 ---
 
@@ -505,8 +505,8 @@ In addition, a real-browser inspection of the production build was done with Pla
 
 - Workbench / console / skills / plugins / settings / usage / orchestration pages all load
 - Top session tabs and independent routing: open, switch, close, address-bar deep links, and refresh restore
-- Default-title summarization, top-right language menu (English / Simplified Chinese switching), and an empty state without preset questions
-- Simplified Chinese, Traditional Chinese, and English switching works, and the language persists after refresh
+- Default-title summarization, top-right language menu (seven-language switching), and an empty state without preset questions
+- Simplified Chinese, Traditional Chinese, English, Japanese, German, Korean, and French switching works, and the language persists after refresh
 - Language entry points cover the workbench top bar, sidebar bottom, and settings page
 - Sidebar collapse/expand between 286px and 76px works; after collapsing, the session list is hidden and the expand button is visible
 - The right insights panel is collapsed by default, and its expanded/collapsed state persists
