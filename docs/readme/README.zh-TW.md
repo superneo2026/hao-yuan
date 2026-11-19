@@ -1,6 +1,7 @@
 # 豪源 · HaoYuan
 
-[簡體中文](../../README.md) · **繁體中文** · [English](README.en.md)
+[简体中文](../../README.md) · **繁體中文** · [English](README.en.md) · [日本語](README.ja.md) · [Deutsch](README.de.md) · [한국어](README.ko.md)  
+[Français](README.fr.md) · [Español](README.es.md) · [Português (Brasil)](README.pt-BR.md) · [Italiano](README.it.md) · [Polski](README.pl.md) · [所有語言](README.md)
 
 > 個人指揮 AI 實現多個 AI 員工非同步並行工作的 AI 工作室。  
 > 一個核心，一組可安裝外掛，一套可驗證的長程任務閉環。
@@ -37,7 +38,7 @@
 - 一個會話 = 一個後臺 `asyncio.Task`，切窗、關頁、斷線都不會停止任務。
 - 全域性併發閘 + FIFO 排隊；等待人工審批時自動讓出併發槽。
 - 會話狀態機：`idle → queued → running ⇄ waiting_input → done / error`。
-- 工作臺頂部會話標籤欄：新建或開啟會話自動生成標籤，點選即可橫向切換，`×` 僅關閉檢視不刪除會話，重新整理後保留。
+- 工作臺頂部會話標籤欄：新建或開啟會話自動生成標籤，點選即可橫向切換，`×` 僅關閉檢視不刪除會話，重新整理後保留；右擊標籤可關閉目前 / 左側 / 右側 / 全部對話方塊。
 - 新會話的首條訊息會由模型按當前介面語言生成短標題；舊會話若仍是預設標題，則按首條訊息自動顯示摘要。
 - 每個會話擁有獨立地址 `/#/s/<session-id>`，可直接複製、重新整理、分享或直接在位址列切換。
 - 重新整理頁面後從 SQLite 恢復訊息、事件、計劃、審批與產物。
@@ -264,6 +265,7 @@ haoyuan config --open   # 直接在編輯器中開啟
 
 - `PROVIDER` / `MODEL` 可鎖定預設模型（如 `"MODEL": "deepseek-v4-pro"` 或 `"MODEL": "my-intranet/qwen-max"`，留空則按已配置 Key 自動選擇）。
 - **網頁設定頁 ↔ 配置檔案雙向同步**：在「設定 → 模型配置」中新增/編輯渠道、模型與預設模型後，會立即寫回該檔案；直接編輯檔案儲存後，服務會在下一次請求時自動重新載入（無需重啟）。
+- 設定頁「重新整理全部渠道模型」會按各渠道 Base URL 與 Key 讀取 `/models`，自動過濾非對話模型；部分渠道失敗時會提示具體渠道與原因，成功的渠道仍會儲存。
 
 **包內配置（可選）**：
 
@@ -308,7 +310,7 @@ $env:DEEPSEEK_API_KEY="sk-..."
 
 主要互動：
 
-- 頂部會話標籤：點選切換對話方塊，`×` 關閉標籤（不影響會話資料）
+- 頂部會話標籤：點選切換對話方塊，`×` 關閉標籤（不影響會話資料）；右擊可關閉目前 / 左側 / 右側 / 全部對話方塊
 - 新建任務不再提供預設問題，直接在輸入框描述即可；會話標題會自動摘要
 - 位址列路由：`/#/s/<session-id>` 對應具體會話，可直接複製、重新整理或在新視窗開啟
 - `Ctrl / Cmd + K`：命令面板（導航、會話、動作）
@@ -348,7 +350,7 @@ hao-yuan/
 │   ├── plugins/                   coding / plans / supervisor / orchestrator / embodied
 │   ├── extensions/                系統 / 會話 / 技能 / 設定 / 檔案 / 用量 / 外掛 / 審批 / 實時事件（SSE / WebSocket）
 │   ├── skills/                    核心技能
-│   ├── tests/                     28 個後端測試
+│   ├── tests/                     90 個後端測試
 │   └── data/                      執行時資料（gitignore）
 ├── web/                           Vue 3 + Vite
 ├── docs/screenshots/              介面截圖
@@ -476,11 +478,11 @@ async def shutdown(ctx):
 ```bash
 cd api
 python -m pytest -q
-# 28 passed, 1 warning
+# 90 passed, 2 skipped, 2 warnings
 
 cd ../web
 npm run build
-# ✓ built, 83 modules transformed
+# ✓ built, 97 modules transformed
 ```
 
 測試覆蓋：
@@ -500,11 +502,13 @@ npm run build
 - 意圖分流：寒暄、閒聊與通用問答（如「你好嗎」「今天天氣不錯」「什麼是依賴注入」）直接回復，不掃描工作區、不觸發工具或寫入（含真實 deepseek-flash 驗證）
 - 首條訊息自動生成會話標題（跟隨介面語言；mock 覆蓋回退與真實模型驗證）
 - 會話獨立路由：`/#/s/<session-id>` 深鏈、標籤切換、位址列編輯、重新整理恢復與關閉回退
+- 會話標籤右擊：關閉目前 / 左側 / 右側 / 全部，批次關閉後自動切換相鄰標籤
+- 渠道模型重新整理：失敗渠道提示與非對話模型過濾
 
 另外用 Playwright + 本機 Chrome 對生產構建做了真實瀏覽器巡檢：
 
 - 工作臺 / 控制檯 / 技能 / 外掛 / 設定 / 用量 / 編排頁全部載入
-- 頂部會話標籤與獨立路由：開啟、切換、關閉、位址列深鏈、重新整理恢復
+- 頂部會話標籤與獨立路由：開啟、切換、關閉、右擊批次關閉、位址列深鏈、重新整理恢復
 - 預設標題自動摘要、右上角語言選單（11 種語言切換）與無預設問題的空狀態
 - 簡體中文、繁體中文、English、日本語、Deutsch、한국어、Français、Español、Português (Brasil)、Italiano、Polski 11 種語言切換正常，重新整理後語言保持
 - 語言入口覆蓋工作臺頂欄、側欄底部、設定頁三處
@@ -522,8 +526,8 @@ npm run build
 
 ## 7. Harness 公平評測結果
 
-> 最新報告：[test/testing/index-2026-10-27.html](../../test/testing/index-2026-10-27.html)（2026-10-27，mimo-v2.6-flash）  
-> 歷史報告：[test/testing/index-2026-10-25.html](../../test/testing/index-2026-10-25.html)（2026-10-25，deepseek-flash）
+> 最新報告：`test/testing/index-2026-10-27.html`（2026-10-27，mimo-v2.6-flash）  
+> 歷史報告：`test/testing/index-2026-10-25.html`（2026-10-25，deepseek-flash）
 
 ### 7.1 MiMo 公平評測（最新）
 
@@ -672,4 +676,4 @@ npm run dev        # 開發模式，/api 與 /ws 自動代理到後端實際埠
 
 ## License
 
-本專案基於 [MIT License](../../LICENSE) 開源釋出，可自由使用、修改與分發。
+本專案基於 MIT License 開源釋出，可自由使用、修改與分發。

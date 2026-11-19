@@ -1,6 +1,7 @@
 # HaoYuan · 豪源
 
-[简体中文](../../README.md) · [繁體中文](README.zh-TW.md) · **English**
+[简体中文](../../README.md) · [繁體中文](README.zh-TW.md) · **English** · [日本語](README.ja.md) · [Deutsch](README.de.md) · [한국어](README.ko.md)  
+[Français](README.fr.md) · [Español](README.es.md) · [Português (Brasil)](README.pt-BR.md) · [Italiano](README.it.md) · [Polski](README.pl.md) · [All languages](README.md)
 
 > A personal AI studio where you direct multiple AI employees to work asynchronously in parallel.  
 > One kernel, a set of installable plugins, and a verifiable closed loop for long-horizon tasks.
@@ -37,7 +38,7 @@ Session intent layering: greetings, small talk, and general Q&A are answered dir
 - One session = one background `asyncio.Task`; switching windows, closing tabs, or disconnecting does not stop the task.
 - Global concurrency gate + FIFO queue; when waiting for human approval, the concurrency slot is yielded automatically.
 - Session state machine: `idle → queued → running ⇄ waiting_input → done / error`.
-- Session tab bar at the top of the workbench: creating or opening a session automatically adds a tab; click to switch horizontally; `×` only closes the view without deleting the session, and tabs persist after refresh.
+- Session tab bar at the top of the workbench: creating or opening a session automatically adds a tab; click to switch horizontally; `×` only closes the view without deleting the session, and tabs persist after refresh; right-click a tab to close the current / left / right / all conversations.
 - The first message of a new session is given a short title by the model in the current UI language; if an old session still has the default title, a summary is shown automatically based on the first message.
 - Each session has its own URL `/#/s/<session-id>`, which can be copied, refreshed, shared, or switched to directly from the address bar.
 - After refreshing the page, messages, events, plans, approvals, and artifacts are restored from SQLite.
@@ -264,6 +265,7 @@ The file is created automatically on first startup (or by the npm postinstall), 
 
 - `PROVIDER` / `MODEL` can pin the default model (e.g. `"MODEL": "deepseek-v4-pro"` or `"MODEL": "my-intranet/qwen-max"`; leave empty to auto-select based on configured keys).
 - **Two-way sync between the web settings page and the config file**: adding/editing providers, models, and the default model in "Settings → Model Configuration" writes back to the file immediately; if you edit the file directly and save, the service reloads it on the next request (no restart needed).
+- "Refresh all models" reads each provider's `/models` endpoint with its base URL and key, automatically filtering out non-chat models; if some providers fail, the exact providers and reasons are shown while successful providers are still saved.
 
 **In-package config (optional)**:
 
@@ -308,7 +310,7 @@ Mobile right-hand insights panel:
 
 Key interactions:
 
-- Top session tabs: click to switch conversations; `×` closes a tab (session data is not affected)
+- Top session tabs: click to switch conversations; `×` closes a tab (session data is not affected); right-click to close the current / left / right / all conversations
 - New tasks no longer offer preset questions; just describe the task in the input box and the session title is summarized automatically
 - Address-bar routing: `/#/s/<session-id>` maps to a specific session and can be copied, refreshed, or opened in a new window
 - `Ctrl / Cmd + K`: command palette (navigation, sessions, actions)
@@ -348,7 +350,7 @@ hao-yuan/
 │   ├── plugins/                   coding / plans / supervisor / orchestrator / embodied
 │   ├── extensions/                System / sessions / skills / settings / files / usage / plugins / approvals / real-time events (SSE / WebSocket)
 │   ├── skills/                    Core skills
-│   ├── tests/                     28 backend tests
+│   ├── tests/                     90 backend tests
 │   └── data/                      Runtime data (gitignored)
 ├── web/                           Vue 3 + Vite
 ├── docs/screenshots/              UI screenshots
@@ -476,11 +478,11 @@ The following was executed in the delivery environment:
 ```bash
 cd api
 python -m pytest -q
-# 28 passed, 1 warning
+# 90 passed, 2 skipped, 2 warnings
 
 cd ../web
 npm run build
-# ✓ built, 83 modules transformed
+# ✓ built, 97 modules transformed
 ```
 
 Test coverage:
@@ -500,11 +502,13 @@ Test coverage:
 - Intent routing: greetings, small talk, and general Q&A (such as "how are you", "nice weather today", "what is dependency injection") are answered directly without scanning the workspace, triggering tools, or writing (including real deepseek-flash verification)
 - Automatic session title from the first message (follows the UI language; mock covers fallback and real-model verification)
 - Independent session routing: `/#/s/<session-id>` deep links, tab switching, address-bar editing, refresh restore, and fallback on close
+- Session tab right-click: close current / left / right / all, with automatic switch to the nearest tab after bulk close
+- Provider model refresh: failure details and non-chat model filtering
 
 In addition, a real-browser inspection of the production build was done with Playwright + local Chrome:
 
 - Workbench / console / skills / plugins / settings / usage / orchestration pages all load
-- Top session tabs and independent routing: open, switch, close, address-bar deep links, and refresh restore
+- Top session tabs and independent routing: open, switch, close, right-click bulk close, address-bar deep links, and refresh restore
 - Default-title summarization, top-right language menu (eleven-language switching), and an empty state without preset questions
 - Simplified Chinese, Traditional Chinese, English, Japanese, German, Korean, French, Spanish, Brazilian Portuguese, Italian, and Polish switching works, and the language persists after refresh
 - Language entry points cover the workbench top bar, sidebar bottom, and settings page
@@ -522,8 +526,8 @@ In addition, a real-browser inspection of the production build was done with Pla
 
 ## 7. Harness Fair Benchmark Results
 
-> Latest report: [test/testing/index-2026-10-27.html](../../test/testing/index-2026-10-27.html) (2026-10-27, mimo-v2.6-flash)  
-> Historical report: [test/testing/index-2026-10-25.html](../../test/testing/index-2026-10-25.html) (2026-10-25, deepseek-flash)
+> Latest report: `test/testing/index-2026-10-27.html` (2026-10-27, mimo-v2.6-flash)  
+> Historical report: `test/testing/index-2026-10-25.html` (2026-10-25, deepseek-flash)
 
 ### 7.1 MiMo fair benchmark (latest)
 
@@ -672,4 +676,4 @@ We recommend recording your team's lint / test / build commands in `AGENTS.md`; 
 
 ## License
 
-This project is released under the [MIT License](../../LICENSE) and is free to use, modify, and distribute.
+This project is released under the MIT License and is free to use, modify, and distribute.

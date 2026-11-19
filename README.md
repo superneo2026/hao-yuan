@@ -1,6 +1,7 @@
-﻿# 豪源 · HaoYuan
+# 豪源 · HaoYuan
 
-**简体中文** · [繁體中文](docs/readme/README.zh-TW.md) · [English](docs/readme/README.en.md)
+**简体中文** · [繁體中文](docs/readme/README.zh-TW.md) · [English](docs/readme/README.en.md) · [日本語](docs/readme/README.ja.md) · [Deutsch](docs/readme/README.de.md) · [한국어](docs/readme/README.ko.md)  
+[Français](docs/readme/README.fr.md) · [Español](docs/readme/README.es.md) · [Português (Brasil)](docs/readme/README.pt-BR.md) · [Italiano](docs/readme/README.it.md) · [Polski](docs/readme/README.pl.md) · [全部语言](docs/readme/README.md)
 
 > 个人指挥 AI 实现多个 AI 员工异步并行工作的 AI 工作室。  
 > 一个内核，一组可安装插件，一套可验证的长程任务闭环。
@@ -37,7 +38,7 @@
 - 一个会话 = 一个后台 `asyncio.Task`，切窗、关页、断线都不会停止任务。
 - 全局并发闸 + FIFO 排队；等待人工审批时自动让出并发槽。
 - 会话状态机：`idle → queued → running ⇄ waiting_input → done / error`。
-- 工作台顶部会话标签栏：新建或打开会话自动生成标签，点击即可横向切换，`×` 仅关闭视图不删除会话，刷新后保留。
+- 工作台顶部会话标签栏：新建或打开会话自动生成标签，点击即可横向切换，`×` 仅关闭视图不删除会话，刷新后保留；右击标签可关闭当前 / 左侧 / 右侧 / 全部对话框。
 - 新会话的首条消息会由模型按当前界面语言生成短标题；旧会话若仍是默认标题，则按首条消息自动显示摘要。
 - 每个会话拥有独立地址 `/#/s/<session-id>`，可直接复制、刷新、分享或直接在地址栏切换。
 - 刷新页面后从 SQLite 恢复消息、事件、计划、审批与产物。
@@ -264,6 +265,7 @@ haoyuan config --open   # 直接在编辑器中打开
 
 - `PROVIDER` / `MODEL` 可锁定默认模型（如 `"MODEL": "deepseek-v4-pro"` 或 `"MODEL": "my-intranet/qwen-max"`，留空则按已配置 Key 自动选择）。
 - **网页设置页 ↔ 配置文件双向同步**：在「设置 → 模型配置」中新增/编辑渠道、模型与默认模型后，会立即写回该文件；直接编辑文件保存后，服务会在下一次请求时自动重新加载（无需重启）。
+- 设置页「刷新全部渠道模型」会按各渠道 Base URL 与 Key 读取 `/models`，自动过滤非对话模型；部分渠道失败时会提示具体渠道与原因，成功的渠道仍会保存。
 
 **包内配置（可选）**：
 
@@ -308,7 +310,7 @@ $env:DEEPSEEK_API_KEY="sk-..."
 
 主要交互：
 
-- 顶部会话标签：点击切换对话框，`×` 关闭标签（不影响会话数据）
+- 顶部会话标签：点击切换对话框，`×` 关闭标签（不影响会话数据）；右击可关闭当前 / 左侧 / 右侧 / 全部对话框
 - 新建任务不再提供预设问题，直接在输入框描述即可；会话标题会自动摘要
 - 地址栏路由：`/#/s/<session-id>` 对应具体会话，可直接复制、刷新或在新窗口打开
 - `Ctrl / Cmd + K`：命令面板（导航、会话、动作）
@@ -348,7 +350,7 @@ hao-yuan/
 │   ├── plugins/                   coding / plans / supervisor / orchestrator / embodied
 │   ├── extensions/                系统 / 会话 / 技能 / 设置 / 文件 / 用量 / 插件 / 审批 / 实时事件（SSE / WebSocket）
 │   ├── skills/                    核心技能
-│   ├── tests/                     28 个后端测试
+│   ├── tests/                     90 个后端测试
 │   └── data/                      运行时数据（gitignore）
 ├── web/                           Vue 3 + Vite
 ├── docs/screenshots/              界面截图
@@ -476,11 +478,11 @@ async def shutdown(ctx):
 ```bash
 cd api
 python -m pytest -q
-# 28 passed, 1 warning
+# 90 passed, 2 skipped, 2 warnings
 
 cd ../web
 npm run build
-# ✓ built, 83 modules transformed
+# ✓ built, 97 modules transformed
 ```
 
 测试覆盖：
@@ -500,11 +502,13 @@ npm run build
 - 意图分流：寒暄、闲聊与通用问答（如「你好吗」「今天天气不错」「什么是依赖注入」）直接回复，不扫描工作区、不触发工具或写入（含真实 deepseek-flash 验证）
 - 首条消息自动生成会话标题（跟随界面语言；mock 覆盖回退与真实模型验证）
 - 会话独立路由：`/#/s/<session-id>` 深链、标签切换、地址栏编辑、刷新恢复与关闭回退
+- 会话标签右击：关闭当前 / 左侧 / 右侧 / 全部，批量关闭后自动切换相邻标签
+- 渠道模型刷新：失败渠道提示与非对话模型过滤
 
 另外用 Playwright + 本机 Chrome 对生产构建做了真实浏览器巡检：
 
 - 工作台 / 控制台 / 技能 / 插件 / 设置 / 用量 / 编排页全部加载
-- 顶部会话标签与独立路由：打开、切换、关闭、地址栏深链、刷新恢复
+- 顶部会话标签与独立路由：打开、切换、关闭、右击批量关闭、地址栏深链、刷新恢复
 - 默认标题自动摘要、右上角语言菜单（11 种语言切换）与无预设问题的空状态
 - 简体中文、繁體中文、English、日本語、Deutsch、한국어、Français、Español、Português (Brasil)、Italiano、Polski 11 种语言切换正常，刷新后语言保持
 - 语言入口覆盖工作台顶栏、侧栏底部、设置页三处
@@ -522,8 +526,8 @@ npm run build
 
 ## 7. Harness 公平评测结果
 
-> 最新报告：[test/testing/index-2026-10-27.html](test/testing/index-2026-10-27.html)（2026-10-27，mimo-v2.6-flash）  
-> 历史报告：[test/testing/index-2026-10-25.html](test/testing/index-2026-10-25.html)（2026-10-25，deepseek-flash）
+> 最新报告：`test/testing/index-2026-10-27.html`（2026-10-27，mimo-v2.6-flash）  
+> 历史报告：`test/testing/index-2026-10-25.html`（2026-10-25，deepseek-flash）
 
 ### 7.1 MiMo 公平评测（最新）
 
@@ -672,4 +676,4 @@ npm run dev        # 开发模式，/api 与 /ws 自动代理到后端实际端�
 
 ## License
 
-本项目基于 [MIT License](LICENSE) 开源发布，可自由使用、修改与分发。
+本项目基于 MIT License 开源发布，可自由使用、修改与分发。
