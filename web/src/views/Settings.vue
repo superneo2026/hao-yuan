@@ -16,22 +16,28 @@ const checkpoints = ref(state.settings.checkpoints !== '0')
 
 const confirmTools = computed(() => (info.value?.tools || []).filter((tool) => tool.confirm))
 
-const providers = computed(() => state.health?.providers || [])
+const providers = computed(() =>
+  (state.health?.providers || []).filter((provider) => provider.name !== 'mock' && provider.configured)
+)
 
 const modelConfig = ref({ path: '', providers: [], default_provider: '', default_model: '' })
 const modelDraft = ref(null)
 const savingModel = ref(false)
 
+const configuredProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => provider.has_key))
+const pendingProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => !provider.has_key))
 const routeOptions = computed(() => {
   const out = []
-  for (const provider of modelConfig.value.providers || []) {
+  for (const provider of configuredProviders.value) {
     for (const model of provider.models || []) out.push({ provider: provider.name, model, label: `${provider.name} / ${model}` })
   }
   return out
 })
 const routeValue = computed(() => {
   const { default_provider: provider, default_model: model } = modelConfig.value
-  return provider && model ? `${provider}|${model}` : ''
+  if (!provider || !model) return ''
+  const usable = routeOptions.value.some((option) => option.provider === provider && option.model === model)
+  return usable ? `${provider}|${model}` : ''
 })
 const draftModels = computed(() => splitList(modelDraft.value?.modelsText))
 
@@ -47,19 +53,19 @@ function applyModelConfig(view) {
   refreshModels().catch(() => {})
 }
 
-function startAddProvider() {
+function startAddProvider(template = null) {
   modelDraft.value = {
-    name: '',
-    builtin: false,
-    base_url: '',
+    name: template?.name || '',
+    builtin: !!template?.builtin,
+    base_url: template?.base_url || '',
     api_key: '',
     clear_key: false,
     has_key: false,
-    modelsText: '',
-    default_model: '',
-    supports_thinking: true,
-    thinkingText: '',
-    max_output_tokens: 8192
+    modelsText: (template?.models || []).join('\n'),
+    default_model: template?.default_model || '',
+    supports_thinking: template ? template.supports_thinking !== false : true,
+    thinkingText: (template?.thinking_models || []).join(','),
+    max_output_tokens: template?.max_output_tokens || 8192
   }
 }
 
@@ -326,7 +332,7 @@ onMounted(async () => {
           <div><b>{{ t('settings.models') }}</b><span>{{ t('settings.modelsDesc') }}</span></div>
         </div>
         <div class="config-path mono">{{ modelConfig.path }}</div>
-        <div class="model-defaults">
+        <div v-if="routeOptions.length" class="model-defaults">
           <label class="label">{{ t('settings.defaultRoute') }}</label>
           <select class="select" :value="routeValue" @change="saveDefaultRoute">
             <option value="">{{ t('settings.defaultRoute') }}</option>
@@ -335,11 +341,15 @@ onMounted(async () => {
             </option>
           </select>
         </div>
-        <div class="provider-grid">
-          <div v-for="provider in modelConfig.providers" :key="provider.name" class="provider-card">
+        <div v-else class="provider-empty">
+          <b>{{ t('settings.noProviders') }}</b>
+          <span>{{ t('settings.noProvidersDesc') }}</span>
+        </div>
+        <div v-if="configuredProviders.length" class="provider-grid">
+          <div v-for="provider in configuredProviders" :key="provider.name" class="provider-card">
             <div class="row" style="justify-content: space-between">
               <b>{{ provider.name }}</b>
-              <span class="badge" :class="provider.has_key ? 'good' : 'warn'">{{ provider.has_key ? t('settings.ready') : t('settings.noKey') }}</span>
+              <span class="badge good">{{ t('settings.ready') }}</span>
             </div>
             <div class="tiny faint mono">{{ provider.base_url || '—' }}</div>
             <div class="model-chip-row">
@@ -352,8 +362,14 @@ onMounted(async () => {
             </div>
           </div>
         </div>
+        <div v-if="pendingProviders.length" class="preset-row">
+          <span class="tiny faint">{{ t('settings.pending') }}</span>
+          <button v-for="provider in pendingProviders" :key="provider.name" class="btn sm" @click="startAddProvider(provider)">
+            <Icon name="plus" :size="12" /> {{ provider.name }}
+          </button>
+        </div>
         <div class="row" style="margin-top: 12px">
-          <button class="btn primary sm" @click="startAddProvider">{{ t('settings.addProvider') }}</button>
+          <button class="btn primary sm" @click="startAddProvider()">{{ t('settings.addProvider') }}</button>
           <button class="btn sm" @click="reloadModelConfig">{{ t('settings.refreshConfig') }}</button>
           <span class="tiny faint">{{ t('settings.modelsHint') }}</span>
         </div>
@@ -414,15 +430,19 @@ onMounted(async () => {
           <span class="settings-icon"><Icon name="brain" :size="17" /></span>
           <div><b>{{ t('settings.providers') }}</b><span>{{ t('settings.providersDesc') }}</span></div>
         </div>
-        <div class="provider-grid">
+        <div v-if="providers.length" class="provider-grid">
           <div v-for="provider in providers" :key="provider.name" class="provider-card">
             <div class="row" style="justify-content: space-between">
               <b>{{ provider.name }}</b>
-              <span class="badge" :class="provider.configured ? 'good' : 'warn'">{{ provider.configured ? t('settings.ready') : t('settings.noKey') }}</span>
+              <span class="badge good">{{ t('settings.ready') }}</span>
             </div>
             <div class="tiny faint mono">{{ provider.models.join(' · ') }}</div>
             <div class="tiny faint">{{ t('settings.source', { source: provider.key_source }) }}</div>
           </div>
+        </div>
+        <div v-else class="provider-empty">
+          <b>{{ t('settings.noProviders') }}</b>
+          <span>{{ t('settings.noProvidersDesc') }}</span>
         </div>
       </section>
 
@@ -494,6 +514,10 @@ onMounted(async () => {
 .switch.on span { transform: translateX(16px); background: var(--brand); }
 .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 9px; }
 .provider-card { padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); display: flex; flex-direction: column; gap: 4px; }
+.provider-empty { padding: 14px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface-2); display: flex; flex-direction: column; gap: 5px; }
+.provider-empty b { font-size: 12px; }
+.provider-empty span { font-size: 10.5px; color: var(--faint); }
+.preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .about-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .about-grid div { padding: 9px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; }
 .about-grid span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }

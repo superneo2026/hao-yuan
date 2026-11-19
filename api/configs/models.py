@@ -271,10 +271,7 @@ def auto_default() -> tuple[str, str]:
         for name, conf in providers.items():
             if gm in conf.models:
                 return name, gm
-    for name in ("deepseek", "zhipu", "mimo"):
-        conf = providers.get(name)
-        if conf and conf.api_key:
-            return name, conf.default_model
+    # 自动选择只依据用户真正配置过密钥的渠道，不再硬编码内置模型厂商。
     for name, conf in providers.items():
         if name != "mock" and conf.api_key:
             return name, conf.default_model
