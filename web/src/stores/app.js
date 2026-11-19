@@ -911,6 +911,23 @@ export async function closeSessionTab(id) {
   else clearCurrentSession()
 }
 
+export async function closeSessionTabs(ids) {
+  const targets = new Set((ids || []).filter(Boolean))
+  if (!targets.size) return
+  const remaining = state.openSessionIds.filter((id) => !targets.has(id))
+  if (remaining.length === state.openSessionIds.length) return
+  const closingCurrent = targets.has(state.currentId)
+  const currentPos = state.openSessionIds.indexOf(state.currentId)
+  const right = state.openSessionIds.slice(currentPos + 1).find((id) => !targets.has(id))
+  const left = [...state.openSessionIds.slice(0, currentPos)].reverse().find((id) => !targets.has(id))
+  state.openSessionIds = remaining
+  persistOpenTabs()
+  if (!closingCurrent) return
+  const nextId = right || left || ''
+  if (nextId) await selectSession(nextId)
+  else clearCurrentSession()
+}
+
 export function reorderSessionTabs(fromId, toId, edge = 'before') {
   if (!fromId || !toId || fromId === toId) return
   const from = state.openSessionIds.indexOf(fromId)

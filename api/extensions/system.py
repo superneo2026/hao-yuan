@@ -51,6 +51,23 @@ _NON_CHAT_TOKENS = (
     "livetranslate",
     "realtime",
     "s2s",
+    "pixverse",
+    "kling",
+    "veo",
+    "runway",
+    "luma",
+    "pika",
+    "heygen",
+    "suno",
+    "udio",
+    "midjourney",
+    "nano-banana",
+    "hailuo",
+    "cogvideo",
+    "mochi",
+    "ltx",
+    "gpt-live",
+    "wan-",
 )
 
 
@@ -85,6 +102,17 @@ def _extract_model_ids(payload: Any, provider: str = "", base_url: str = "") -> 
         if isinstance(item, str):
             model_id = item
         elif isinstance(item, dict):
+            endpoints = item.get("supported_endpoints")
+            if isinstance(endpoints, list) and endpoints:
+                names = [str(value).lower() for value in endpoints]
+                if not any("/chat/completions" in value for value in names):
+                    continue
+            architecture = item.get("architecture")
+            if isinstance(architecture, dict):
+                outputs = architecture.get("output_modalities")
+                if isinstance(outputs, list) and outputs:
+                    if "text" not in [str(value).lower() for value in outputs]:
+                        continue
             model_id = item.get("id") or item.get("name") or item.get("model")
             created = _model_timestamp(item)
         else:

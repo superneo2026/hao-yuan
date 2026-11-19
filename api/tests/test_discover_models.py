@@ -36,6 +36,32 @@ class _ModelsHandler(BaseHTTPRequestHandler):
                     {"id": "text-embedding-3-large", "created": 200},
                 ]
             }
+        elif self.path.startswith("/relay/models"):
+            payload = {
+                "data": [
+                    {
+                        "id": "chat-model",
+                        "supported_endpoints": ["/v1/chat/completions"],
+                        "architecture": {"output_modalities": ["text"]},
+                    },
+                    {
+                        "id": "image-only",
+                        "supported_endpoints": ["/v1/images/generations"],
+                        "architecture": {"output_modalities": ["image"]},
+                    },
+                    {
+                        "id": "responses-only",
+                        "supported_endpoints": ["/v1/responses"],
+                        "architecture": {"output_modalities": ["text"]},
+                    },
+                    {
+                        "id": "pixverse-v6-max",
+                        "supported_endpoints": ["/v1/chat/completions"],
+                    },
+                    {"id": "nano-banana-2"},
+                    {"id": "text-embedding-3-small"},
+                ]
+            }
         else:
             self.send_response(404)
             self.end_headers()
@@ -75,5 +101,20 @@ def test_discover_models_closed_loop():
         assert openai["data"]["models"] == ["gpt-5", "gpt-4.1"]
         _, openai_headers = _ModelsHandler.calls[-1]
         assert openai_headers.get("authorization") == "Bearer sk-openai"
+    finally:
+        server.shutdown()
+
+
+def test_discover_models_filters_non_chat_models():
+    _ModelsHandler.calls = []
+    server = HTTPServer(("127.0.0.1", 0), _ModelsHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        relay = asyncio.run(
+            discover_models({"base_url": f"{base}/relay", "api_key": "sk-relay", "provider": "relay"})
+        )
+        assert relay["code"] == 200
+        assert relay["data"]["models"] == ["chat-model"]
     finally:
         server.shutdown()

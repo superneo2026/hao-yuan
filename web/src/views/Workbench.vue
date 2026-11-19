@@ -1,7 +1,7 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { closeSessionTab, loadActivity, loadChanges, loadTree, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
+import { closeSessionTab, closeSessionTabs, loadActivity, loadChanges, loadTree, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
@@ -58,6 +58,66 @@ function closeTab(id) {
   closeSessionTab(id)
 }
 
+const tabMenu = reactive({ open: false, x: 0, y: 0, tabId: '' })
+const tabMenuIndex = computed(() => tabs.value.findIndex((tab) => tab.id === tabMenu.tabId))
+const tabMenuHasLeft = computed(() => tabMenuIndex.value > 0)
+const tabMenuHasRight = computed(
+  () => tabMenuIndex.value >= 0 && tabMenuIndex.value < tabs.value.length - 1
+)
+
+function openTabMenu(event, tab) {
+  const menuWidth = 196
+  const menuHeight = 168
+  tabMenu.tabId = tab.id
+  tabMenu.x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
+  tabMenu.y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
+  tabMenu.open = true
+}
+
+function closeTabMenu() {
+  tabMenu.open = false
+}
+
+function menuCloseCurrent() {
+  const id = tabMenu.tabId
+  closeTabMenu()
+  if (id) closeTab(id)
+}
+
+function menuCloseLeft() {
+  const index = tabMenuIndex.value
+  const ids = index > 0 ? tabs.value.slice(0, index).map((tab) => tab.id) : []
+  closeTabMenu()
+  if (ids.length) closeSessionTabs(ids)
+}
+
+function menuCloseRight() {
+  const index = tabMenuIndex.value
+  const ids = index >= 0 ? tabs.value.slice(index + 1).map((tab) => tab.id) : []
+  closeTabMenu()
+  if (ids.length) closeSessionTabs(ids)
+}
+
+function menuCloseAll() {
+  const ids = [...state.openSessionIds]
+  closeTabMenu()
+  if (ids.length) closeSessionTabs(ids)
+}
+
+function onTabMenuGlobalMouseDown(event) {
+  if (!tabMenu.open) return
+  if (event.target instanceof Element && event.target.closest('.tab-context-menu')) return
+  closeTabMenu()
+}
+
+function onTabMenuEscape(event) {
+  if (event.key === 'Escape' && tabMenu.open) closeTabMenu()
+}
+
+function onTabMenuDismiss() {
+  if (tabMenu.open) closeTabMenu()
+}
+
 const tabDrag = reactive({ id: '', overId: '', edge: '' })
 
 function clearTabDrag() {
@@ -67,6 +127,7 @@ function clearTabDrag() {
 }
 
 function onTabDragStart(event, tab) {
+  closeTabMenu()
   tabDrag.id = tab.id
   event.dataTransfer.effectAllowed = 'move'
   event.dataTransfer.setData('text/plain', tab.id)
@@ -89,6 +150,7 @@ function onTabDrop(event, tab) {
 }
 
 function onTabsWheel(event) {
+  closeTabMenu()
   const el = event.currentTarget
   if (!el || el.scrollWidth <= el.clientWidth) return
   if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
@@ -114,6 +176,17 @@ function toggleRight() {
 onMounted(() => {
   state.rightPanelOpen = rightOpen.value
   if (rightOpen.value) loadRightPanelData()
+  window.addEventListener('mousedown', onTabMenuGlobalMouseDown)
+  window.addEventListener('keydown', onTabMenuEscape)
+  window.addEventListener('scroll', onTabMenuDismiss, true)
+  window.addEventListener('resize', onTabMenuDismiss)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('mousedown', onTabMenuGlobalMouseDown)
+  window.removeEventListener('keydown', onTabMenuEscape)
+  window.removeEventListener('scroll', onTabMenuDismiss, true)
+  window.removeEventListener('resize', onTabMenuDismiss)
 })
 
 function startResize(event) {
@@ -229,6 +302,7 @@ function closeDiff() {
         @dragover="onTabDragOver($event, tab)"
         @drop="onTabDrop($event, tab)"
         @dragend="clearTabDrag"
+        @contextmenu.prevent="openTabMenu($event, tab)"
       >
         <span class="status-dot" :class="tab.status === 'waiting_input' ? 'waiting' : tab.status" />
         <span class="tab-title truncate">{{ sessionTitle(tab) }}</span>
@@ -317,6 +391,28 @@ function closeDiff() {
           </div>
         </div>
       </div>
+      <div
+        v-if="tabMenu.open"
+        class="tab-context-menu"
+        role="menu"
+        :style="{ left: `${tabMenu.x}px`, top: `${tabMenu.y}px` }"
+        @mousedown.stop
+        @contextmenu.prevent
+      >
+        <button type="button" role="menuitem" @click="menuCloseCurrent">
+          {{ t('session.closeCurrentTab') }}
+        </button>
+        <button type="button" role="menuitem" :disabled="!tabMenuHasLeft" @click="menuCloseLeft">
+          {{ t('session.closeTabsLeft') }}
+        </button>
+        <button type="button" role="menuitem" :disabled="!tabMenuHasRight" @click="menuCloseRight">
+          {{ t('session.closeTabsRight') }}
+        </button>
+        <div class="menu-sep" />
+        <button type="button" role="menuitem" class="menu-danger" @click="menuCloseAll">
+          {{ t('session.closeAllTabs') }}
+        </button>
+      </div>
     </Teleport>
   </div>
 </template>
@@ -388,6 +484,22 @@ function closeDiff() {
 .session-tab.drop-after { box-shadow: 2px 0 0 0 var(--brand); }
 .session-tab * { pointer-events: none; }
 .session-tab .tab-close { pointer-events: auto; }
+.tab-context-menu {
+  position: fixed; z-index: 200; min-width: 180px; padding: 5px;
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 10px; box-shadow: var(--shadow-soft);
+}
+.tab-context-menu button {
+  display: flex; align-items: center; width: 100%; height: 30px;
+  padding: 0 9px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--ink-2);
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.tab-context-menu button:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
+.tab-context-menu button:disabled { opacity: .38; cursor: default; }
+.tab-context-menu .menu-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+.tab-context-menu .menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .workbench-body { flex: 1; min-height: 0; display: grid; }
 .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .resizer { width: 5px; cursor: col-resize; background: transparent; position: relative; z-index: 4; }

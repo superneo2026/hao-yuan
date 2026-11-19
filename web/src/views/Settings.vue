@@ -160,16 +160,26 @@ async function refreshAllModels() {
   refreshingAllModels.value = true
   try {
     const results = await Promise.allSettled(
-      targets.map(async (provider) => {
-        const data = await api.discoverModels({ provider: provider.name, base_url: provider.base_url, api_key: '' })
-        return { provider, models: data?.models || [] }
-      })
+      targets.map((provider) =>
+        api.discoverModels({ provider: provider.name, base_url: provider.base_url, api_key: '' })
+      )
     )
     const payload = []
-    for (const result of results) {
-      if (result.status !== 'fulfilled') continue
-      const { provider, models } = result.value
-      if (!models.length) continue
+    const failures = []
+    results.forEach((result, index) => {
+      const provider = targets[index]
+      if (result.status === 'rejected') {
+        failures.push({
+          name: provider.name,
+          message: result.reason?.message || String(result.reason)
+        })
+        return
+      }
+      const models = result.value?.models || []
+      if (!models.length) {
+        failures.push({ name: provider.name, message: t('settings.noModelsFound') })
+        return
+      }
       const previous = enabledModelsOf(provider)
       const enabled = models.filter((model) => previous.includes(model))
       if (!enabled.length) enabled.push(models[0])
@@ -184,13 +194,20 @@ async function refreshAllModels() {
         thinking_models: provider.thinking_models || [],
         max_output_tokens: provider.max_output_tokens || 0
       })
+    })
+    if (payload.length) {
+      applyModelConfig(await api.saveConfig({ providers: payload }))
+      toast(t('settings.modelsRefreshed', { count: payload.length }), 'good')
     }
-    if (!payload.length) {
+    if (failures.length) {
+      const detail = failures
+        .map(({ name, message }) => `${name}: ${String(message).replace(/\s+/g, ' ').slice(0, 120)}`)
+        .join('；')
+      toast(t('settings.modelsRefreshFailed', { count: failures.length, detail }), 'bad')
+    }
+    if (!payload.length && !failures.length) {
       toast(t('settings.noModelsFound'), 'bad')
-      return
     }
-    applyModelConfig(await api.saveConfig({ providers: payload }))
-    toast(t('settings.modelsRefreshed', { count: payload.length }), 'good')
   } catch (error) {
     toast(error.message, 'bad')
   } finally {
