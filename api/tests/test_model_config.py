@@ -113,3 +113,69 @@ def test_builtin_provider_uses_flat_keys(isolated_config):
     assert provider.api_key == "sk-flat"
     assert provider.default_model == "deepseek-chat"
     assert provider.base_url == "https://example.invalid/v1"
+
+
+def test_provider_presets_include_major_vendors(isolated_config):
+    presets = {item["name"]: item for item in models_mod.describe_config()["presets"]}
+    assert {"deepseek", "zhipu", "mimo", "aliyun", "kimi", "bytedance", "openai", "claude", "poe"} <= set(presets)
+    for name in ("aliyun", "kimi", "bytedance", "openai", "claude", "poe"):
+        preset = presets[name]
+        assert preset["builtin"] is False
+        assert preset["base_url"].startswith("https://")
+        # 预设不内置可能过期的模型名，模型列表以 /models 实时读取为准。
+        assert preset["models"] == []
+    assert presets["aliyun"]["label"] == "Alibaba Qwen"
+
+
+def test_raw_config_masks_secrets(isolated_config):
+    cfg = isolated_config
+    cfg.write_text(
+        json.dumps(
+            {
+                "DEEPSEEK_API_KEY": "sk-abcdef123456",
+                "providers": {
+                    "relay": {
+                        "base_url": "http://llm.relay/v1",
+                        "api_key": "sk-xyz987654321",
+                        "models": ["m1"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    view = models_mod.raw_config_view()
+    assert "sk-abcdef123456" not in view["text"]
+    assert "sk-xyz987654321" not in view["text"]
+    assert "DEEPSEEK_API_KEY" in view["text"]
+    assert view["masked"] is True
+
+
+def test_extract_model_ids_variants():
+    from extensions.system import _extract_model_ids
+
+    assert _extract_model_ids({"data": [{"id": "b"}, {"id": "a"}]}) == ["a", "b"]
+    assert _extract_model_ids({"models": [{"name": "x"}]}) == ["x"]
+    assert _extract_model_ids(["x", "x", "y"]) == ["x", "y"]
+
+
+def test_extract_model_ids_sorts_newest_and_filters_openai():
+    from extensions.system import _extract_model_ids, _is_anthropic
+
+    payload = {
+        "data": [
+            {"id": "gpt-4.1", "created": 100},
+            {"id": "gpt-5", "created": 300},
+            {"id": "text-embedding-3-large", "created": 200},
+            {"id": "gpt-5-mini", "created": 250},
+        ]
+    }
+    assert _extract_model_ids(payload, provider="openai") == ["gpt-5", "gpt-5-mini", "gpt-4.1"]
+    assert _extract_model_ids(
+        {"data": [{"id": "old", "created_at": "2025-01-01T00:00:00Z"},
+                  {"id": "new", "created_at": "2026-01-01T00:00:00Z"}]},
+        provider="claude",
+    ) == ["new", "old"]
+    assert _is_anthropic("claude", "https://api.anthropic.com/v1")
+    assert _is_anthropic("any", "https://api.anthropic.com/v1")
+    assert not _is_anthropic("openai", "https://api.openai.com/v1")

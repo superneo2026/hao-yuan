@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -17,9 +18,69 @@ _BASE_URL_DEFAULTS = {
 }
 
 _MODEL_DEFAULTS = {
-    "deepseek": ("deepseek-flash", ["deepseek-flash", "deepseek-v4-pro"], 8192, True),
-    "zhipu": ("glm-5.3-flash", ["glm-5.3-flash", "glm-5.3"], 8192, True),
-    "mimo": ("mimo-v2.6-flash", ["mimo-v2.6-flash", "mimo-v2.6-pro"], 32768, True),
+    # 第三项为默认最大输出 tokens；0 表示不指定，交给模型使用自身支持的上限。
+    "deepseek": ("deepseek-flash", ["deepseek-flash", "deepseek-v4-pro"], 0, True),
+    "zhipu": ("glm-5.3-flash", ["glm-5.3-flash", "glm-5.3"], 0, True),
+    "mimo": ("mimo-v2.6-flash", ["mimo-v2.6-flash", "mimo-v2.6-pro"], 0, True),
+}
+
+_PRESET_LABELS = {
+    "deepseek": "DeepSeek",
+    "zhipu": "Zhipu GLM",
+    "mimo": "Xiaomi MiMo",
+    "aliyun": "Alibaba Qwen",
+    "kimi": "Kimi (Moonshot)",
+    "bytedance": "ByteDance Doubao",
+    "openai": "OpenAI",
+    "claude": "Anthropic Claude",
+    "poe": "Poe",
+}
+
+_PRESET_DOCS = {
+    "deepseek": "https://platform.deepseek.com/api_keys",
+    "zhipu": "https://open.bigmodel.cn/usercenter/apikeys",
+    "mimo": "https://platform.xiaomimimo.com/",
+    "aliyun": "https://bailian.console.aliyun.com/",
+    "kimi": "https://platform.moonshot.cn/console/api-keys",
+    "bytedance": "https://console.volcengine.com/ark",
+    "openai": "https://platform.openai.com/api-keys",
+    "claude": "https://console.anthropic.com/settings/keys",
+    "poe": "https://poe.com/api_key",
+}
+
+# 预设只提供接入地址与能力标记，不内置模型名，避免列表随时间过期。
+# 模型列表以服务商 /models 实时读取为准（需要对应 API Key）。
+_EXTRA_PRESETS = {
+    "aliyun": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": [],
+        "supports_thinking": True,
+    },
+    "kimi": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "models": [],
+        "supports_thinking": True,
+    },
+    "bytedance": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "models": [],
+        "supports_thinking": True,
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "models": [],
+        "supports_thinking": True,
+    },
+    "claude": {
+        "base_url": "https://api.anthropic.com/v1",
+        "models": [],
+        "supports_thinking": True,
+    },
+    "poe": {
+        "base_url": "https://api.poe.com/v1",
+        "models": [],
+        "supports_thinking": False,
+    },
 }
 
 
@@ -318,6 +379,64 @@ def list_models() -> list[dict]:
     return out
 
 
+def provider_presets() -> list[dict]:
+    """返回新增渠道时可选的起始模板目录。"""
+    out: list[dict] = []
+    for name in BUILTIN_NAMES:
+        default_model, models, _, supports_thinking = _MODEL_DEFAULTS[name]
+        out.append(
+            {
+                "name": name,
+                "label": _PRESET_LABELS.get(name, name),
+                "base_url": _BASE_URL_DEFAULTS[name],
+                "models": list(models),
+                "default_model": default_model,
+                "supports_thinking": supports_thinking,
+                "builtin": True,
+                "docs": _PRESET_DOCS.get(name, ""),
+            }
+        )
+    for name, spec in _EXTRA_PRESETS.items():
+        models = list(spec["models"])
+        out.append(
+            {
+                "name": name,
+                "label": _PRESET_LABELS.get(name, name),
+                "base_url": spec["base_url"],
+                "models": models,
+                "default_model": models[0] if models else "",
+                "supports_thinking": bool(spec.get("supports_thinking", True)),
+                "builtin": False,
+                "docs": _PRESET_DOCS.get(name, ""),
+            }
+        )
+    return out
+
+
+_RAW_SECRET_RE = re.compile(r"(API_?KEY|SECRET|TOKEN)$", re.IGNORECASE)
+
+
+def _mask_nested_secrets(value: Any, key: str = "") -> Any:
+    if isinstance(value, dict):
+        return {item_key: _mask_nested_secrets(item_value, str(item_key)) for item_key, item_value in value.items()}
+    if isinstance(value, list):
+        return [_mask_nested_secrets(item, key) for item in value]
+    if isinstance(value, str) and value and _RAW_SECRET_RE.search(key):
+        return secrets.mask_secret(value)
+    return value
+
+
+def raw_config_view() -> dict:
+    """展示配置原文（密钥脱敏），方便用户直接在网页查看或编辑文件。"""
+    data = secrets.global_config_snapshot()
+    masked = _mask_nested_secrets(data)
+    return {
+        "path": str(secrets.config_path()),
+        "text": json.dumps(masked, ensure_ascii=False, indent=2) + "\n",
+        "masked": True,
+    }
+
+
 def describe_config() -> dict:
     providers = get_providers()
     project_default = auto_default()
@@ -346,6 +465,7 @@ def describe_config() -> dict:
         "default_provider": project_default[0],
         "default_model": project_default[1],
         "providers": items,
+        "presets": provider_presets(),
     }
 
 

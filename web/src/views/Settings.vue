@@ -20,9 +20,15 @@ const providers = computed(() =>
   (state.health?.providers || []).filter((provider) => provider.name !== 'mock' && provider.configured)
 )
 
-const modelConfig = ref({ path: '', providers: [], default_provider: '', default_model: '' })
+const modelConfig = ref({ path: '', providers: [], presets: [], default_provider: '', default_model: '' })
 const modelDraft = ref(null)
 const savingModel = ref(false)
+const discoveringModels = ref(false)
+const refreshingAllModels = ref(false)
+const configRaw = ref({ path: '', text: '', masked: true })
+const showConfigText = ref(true)
+
+const presets = computed(() => modelConfig.value.presets || [])
 
 const configuredProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => provider.has_key))
 const pendingProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => !provider.has_key))
@@ -51,6 +57,114 @@ function splitList(text) {
 function applyModelConfig(view) {
   modelConfig.value = view
   refreshModels().catch(() => {})
+  loadRawConfig().catch(() => {})
+}
+
+async function loadRawConfig() {
+  try {
+    configRaw.value = await api.configRaw()
+  } catch {
+    /* optional */
+  }
+}
+
+function startPreset(preset) {
+  if (!preset) return
+  const existing = (modelConfig.value.providers || []).find((provider) => provider.name === preset.name)
+  startAddProvider({
+    ...preset,
+    has_key: !!existing?.has_key,
+    models: existing?.models?.length ? existing.models : preset.models,
+    default_model: existing?.default_model || preset.default_model,
+    thinking_models: existing?.thinking_models?.length ? existing.thinking_models : preset.thinking_models || [],
+    max_output_tokens: existing?.max_output_tokens ?? (preset.max_output_tokens || '')
+  })
+  if (existing?.has_key) discoverLatestModels({ silent: true })
+}
+
+function onPresetChange(event) {
+  const name = event.target.value
+  event.target.value = ''
+  startPreset(presets.value.find((preset) => preset.name === name))
+}
+
+async function discoverLatestModels({ silent = false } = {}) {
+  const draft = modelDraft.value
+  if (!draft) return
+  if (!draft.base_url) {
+    if (!silent) toast(t('settings.needBaseUrl'), 'bad')
+    return
+  }
+  discoveringModels.value = true
+  try {
+    const data = await api.discoverModels({
+      base_url: draft.base_url.trim(),
+      api_key: draft.api_key.trim(),
+      provider: draft.name.trim()
+    })
+    const models = data?.models || []
+    if (!models.length) {
+      if (!silent) toast(t('settings.noModelsFound'), 'bad')
+      return
+    }
+    draft.modelsText = models.join('\n')
+    draft.autoModels = false
+    if (!draft.default_model || !models.includes(draft.default_model)) draft.default_model = models[0]
+    if (!silent) toast(t('settings.modelsFetched', { count: models.length }), 'good')
+  } catch (error) {
+    if (!silent) toast(error.message, 'bad')
+  } finally {
+    discoveringModels.value = false
+  }
+}
+
+function autoDiscoverNewProvider() {
+  const draft = modelDraft.value
+  if (!draft || draft.has_key || !draft.autoModels) return
+  if (!draft.base_url || !draft.api_key.trim()) return
+  discoverLatestModels({ silent: true })
+}
+
+async function refreshAllModels() {
+  const targets = configuredProviders.value
+  if (!targets.length) {
+    toast(t('settings.noProviders'), 'bad')
+    return
+  }
+  refreshingAllModels.value = true
+  try {
+    const results = await Promise.allSettled(
+      targets.map(async (provider) => {
+        const data = await api.discoverModels({ provider: provider.name, base_url: provider.base_url, api_key: '' })
+        return { provider, models: data?.models || [] }
+      })
+    )
+    const payload = []
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue
+      const { provider, models } = result.value
+      if (!models.length) continue
+      payload.push({
+        name: provider.name,
+        base_url: provider.base_url,
+        models,
+        default_model: models.includes(provider.default_model) ? provider.default_model : models[0],
+        supports_thinking: provider.supports_thinking,
+        thinking_models: provider.thinking_models || [],
+        max_output_tokens: provider.max_output_tokens || 0
+      })
+    }
+    if (!payload.length) {
+      toast(t('settings.noModelsFound'), 'bad')
+      return
+    }
+    applyModelConfig(await api.saveConfig({ providers: payload }))
+    toast(t('settings.modelsRefreshed', { count: payload.length }), 'good')
+  } catch (error) {
+    toast(error.message, 'bad')
+  } finally {
+    refreshingAllModels.value = false
+  }
 }
 
 function startAddProvider(template = null) {
@@ -60,7 +174,8 @@ function startAddProvider(template = null) {
     base_url: template?.base_url || '',
     api_key: '',
     clear_key: false,
-    has_key: false,
+    has_key: !!template?.has_key,
+    autoModels: !!template,
     modelsText: (template?.models || []).join('\n'),
     default_model: template?.default_model || '',
     supports_thinking: template ? template.supports_thinking !== false : true,
@@ -77,12 +192,14 @@ function startEditProvider(provider) {
     api_key: '',
     clear_key: false,
     has_key: provider.has_key,
+    autoModels: false,
     modelsText: (provider.models || []).join('\n'),
     default_model: provider.default_model || '',
     supports_thinking: provider.supports_thinking !== false,
     thinkingText: (provider.thinking_models || []).join(','),
     max_output_tokens: provider.max_output_tokens || ''
   }
+  if (provider.has_key) discoverLatestModels({ silent: true })
 }
 
 function cancelModelDraft() {
@@ -102,6 +219,14 @@ async function saveProvider() {
   if (!draft) return
   if (!/^[A-Za-z0-9._-]+$/.test(draft.name.trim())) {
     toast(t('settings.providerName'), 'bad')
+    return
+  }
+  if (!splitList(draft.modelsText).length && (draft.api_key.trim() || draft.has_key) && draft.base_url.trim()) {
+    // 保存前没有模型时，先按服务商 /models 读取一次真实列表。
+    await discoverLatestModels({ silent: true })
+  }
+  if (!splitList(draft.modelsText).length) {
+    toast(t('settings.needModels'), 'bad')
     return
   }
   savingModel.value = true
@@ -223,6 +348,7 @@ onMounted(async () => {
   } catch {
     /* optional */
   }
+  await loadRawConfig()
 })
 </script>
 
@@ -331,7 +457,20 @@ onMounted(async () => {
           <span class="settings-icon"><Icon name="zap" :size="17" /></span>
           <div><b>{{ t('settings.models') }}</b><span>{{ t('settings.modelsDesc') }}</span></div>
         </div>
-        <div class="config-path mono">{{ modelConfig.path }}</div>
+        <div class="config-path-bar">
+          <span class="config-path mono">{{ modelConfig.path }}</span>
+          <button class="btn sm" @click="showConfigText = !showConfigText">
+            {{ showConfigText ? t('settings.hideConfig') : t('settings.showConfig') }}
+          </button>
+        </div>
+        <div v-if="showConfigText" class="config-content-block">
+          <div class="row" style="justify-content: space-between">
+            <span class="tiny faint">{{ t('settings.configContent') }}</span>
+            <span class="tiny faint">{{ t('settings.configMasked') }}</span>
+          </div>
+          <pre class="config-content mono">{{ configRaw.text || '{}' }}</pre>
+          <div class="tiny faint">{{ t('settings.configEditHint', { path: modelConfig.path }) }}</div>
+        </div>
         <div v-if="routeOptions.length" class="model-defaults">
           <label class="label">{{ t('settings.defaultRoute') }}</label>
           <select class="select" :value="routeValue" @change="saveDefaultRoute">
@@ -368,8 +507,20 @@ onMounted(async () => {
             <Icon name="plus" :size="12" /> {{ provider.name }}
           </button>
         </div>
+        <div v-if="presets.length" class="preset-add">
+          <label class="label">{{ t('settings.addFromPreset') }}</label>
+          <select class="select" :value="''" @change="onPresetChange">
+            <option value="">{{ t('settings.presetPlaceholder') }}</option>
+            <option v-for="preset in presets" :key="preset.name" :value="preset.name">{{ preset.label }} · {{ preset.name }}</option>
+          </select>
+        </div>
         <div class="row" style="margin-top: 12px">
           <button class="btn primary sm" @click="startAddProvider()">{{ t('settings.addProvider') }}</button>
+          <button class="btn sm" :disabled="refreshingAllModels" @click="refreshAllModels">
+            <span v-if="refreshingAllModels" class="spinner" style="width: 12px; height: 12px" />
+            <Icon v-else name="refresh" :size="12" />
+            {{ t('settings.refreshAllModels') }}
+          </button>
           <button class="btn sm" @click="reloadModelConfig">{{ t('settings.refreshConfig') }}</button>
           <span class="tiny faint">{{ t('settings.modelsHint') }}</span>
         </div>
@@ -390,16 +541,25 @@ onMounted(async () => {
             </label>
             <label>
               <span>{{ t('settings.apiKey') }}</span>
-              <input v-model="modelDraft.api_key" class="field mono" type="password" :placeholder="modelDraft.has_key ? t('settings.keyKeep') : 'sk-...'" autocomplete="off" />
+              <input v-model="modelDraft.api_key" class="field mono" type="password" :placeholder="modelDraft.has_key ? t('settings.keyKeep') : 'sk-...'" autocomplete="off" @blur="autoDiscoverNewProvider" />
             </label>
             <label>
               <span>{{ t('settings.maxOutput') }}</span>
               <input v-model="modelDraft.max_output_tokens" class="field mono" type="number" min="0" step="256" :placeholder="t('settings.maxOutputAuto')" />
+              <small class="tiny faint">{{ t('settings.maxOutputHint') }}</small>
             </label>
             <label class="wide">
               <span>{{ t('settings.modelsList') }}</span>
-              <textarea v-model="modelDraft.modelsText" class="field mono" rows="4" placeholder="model-a&#10;model-b" />
+              <textarea v-model="modelDraft.modelsText" class="field mono" rows="4" :placeholder="t('settings.modelsPlaceholder')" @input="modelDraft.autoModels = false" />
             </label>
+            <div class="editor-fetch">
+              <button class="btn sm" :disabled="discoveringModels || !modelDraft.base_url" @click="discoverLatestModels">
+                <span v-if="discoveringModels" class="spinner" style="width: 12px; height: 12px" />
+                <Icon v-else name="refresh" :size="12" />
+                {{ t('settings.fetchModels') }}
+              </button>
+              <span class="tiny faint">{{ t('settings.fetchModelsHint') }}</span>
+            </div>
             <label>
               <span>{{ t('settings.defaultModelField') }}</span>
               <select v-model="modelDraft.default_model" class="select">
@@ -518,13 +678,19 @@ onMounted(async () => {
 .provider-empty b { font-size: 12px; }
 .provider-empty span { font-size: 10.5px; color: var(--faint); }
 .preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.preset-add { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+.preset-add .label { font-size: 11px; color: var(--muted); }
 .about-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .about-grid div { padding: 9px 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; }
 .about-grid span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
 .about-grid b { font-size: 12px; font-weight: 560; }
 @media (max-width: 860px) { .settings-grid { grid-template-columns: 1fr; } .about-grid { grid-template-columns: 1fr 1fr; } }
 
-.config-path { font-size: 11px; color: var(--faint); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; margin-bottom: 10px; word-break: break-all; }
+.config-path { font-size: 11px; color: var(--faint); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; word-break: break-all; }
+.config-path-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.config-path-bar .config-path { flex: 1; }
+.config-content-block { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.config-content { margin: 0; max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.5; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; white-space: pre; }
 .model-defaults { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
 .model-defaults .label { font-size: 11px; color: var(--muted); }
 .model-chip-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 7px 0 5px; }
@@ -536,6 +702,7 @@ onMounted(async () => {
 .editor-grid label > span { font-size: 10.5px; color: var(--faint); }
 .editor-grid label.wide { grid-column: 1 / -1; }
 .editor-grid textarea { resize: vertical; min-height: 84px; }
+.editor-fetch { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .editor-flags { display: flex; flex-wrap: wrap; gap: 14px; margin: 9px 0; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
 .btn.danger { color: var(--bad, #d33); }
