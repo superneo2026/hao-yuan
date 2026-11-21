@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
 
@@ -9,13 +9,6 @@ const props = defineProps({
 })
 
 const open = ref(false)
-watch(
-  () => props.item.status,
-  (status) => {
-    if (status === 'running' || status === 'error') open.value = true
-  },
-  { immediate: true }
-)
 
 const toolIcon = {
   read_file: 'file',

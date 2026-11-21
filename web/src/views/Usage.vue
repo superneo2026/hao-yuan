@@ -5,11 +5,10 @@ import { t } from '../i18n'
 import Icon from '../components/Icon.vue'
 
 const daily = computed(() => state.usageDaily || [])
-const today = computed(() => state.usageToday || { prompt_tokens: 0, completion_tokens: 0, cost_est: 0, models: [] })
+const today = computed(() => state.usageToday || { prompt_tokens: 0, completion_tokens: 0, models: [] })
 const maxTokens = computed(() => Math.max(1, ...daily.value.map((row) => Number(row.prompt_tokens || 0) + Number(row.completion_tokens || 0))))
 const totalPrompt = computed(() => daily.value.reduce((sum, row) => sum + Number(row.prompt_tokens || 0), 0))
 const totalCompletion = computed(() => daily.value.reduce((sum, row) => sum + Number(row.completion_tokens || 0), 0))
-const totalCost = computed(() => daily.value.reduce((sum, row) => sum + Number(row.cost_est || 0), 0))
 
 function barHeight(row) {
   const value = Number(row.prompt_tokens || 0) + Number(row.completion_tokens || 0)
@@ -46,7 +45,6 @@ onMounted(async () => {
       <div class="stat-card"><span class="stat-icon"><Icon name="zap" :size="18" /></span><div><b>{{ fmt(Number(today.prompt_tokens || 0) + Number(today.completion_tokens || 0)) }}</b><span>{{ t('usage.tokensToday') }}</span></div></div>
       <div class="stat-card"><span class="stat-icon" style="color: var(--brand-2)"><Icon name="arrow-right" :size="18" /></span><div><b>{{ fmt(today.prompt_tokens) }}</b><span>{{ t('usage.promptToday') }}</span></div></div>
       <div class="stat-card"><span class="stat-icon" style="color: var(--good)"><Icon name="sparkles" :size="18" /></span><div><b>{{ fmt(today.completion_tokens) }}</b><span>{{ t('usage.completionToday') }}</span></div></div>
-      <div class="stat-card"><span class="stat-icon" style="color: var(--warn)"><Icon name="chart" :size="18" /></span><div><b>¥{{ Number(today.cost_est || 0).toFixed(4) }}</b><span>{{ t('usage.estimatedToday') }}</span></div></div>
     </div>
 
     <div class="usage-grid">
@@ -77,7 +75,6 @@ onMounted(async () => {
           </div>
           <div class="comp-row"><span class="dot prompt" /> {{ t('usage.prompt') }} <b>{{ fmt(totalPrompt) }}</b></div>
           <div class="comp-row"><span class="dot completion" /> {{ t('usage.completion') }} <b>{{ fmt(totalCompletion) }}</b></div>
-          <div class="comp-row"><span class="dot cost" /> {{ t('usage.estimatedCost') }} <b>¥{{ totalCost.toFixed(4) }}</b></div>
         </div>
       </section>
 
@@ -87,16 +84,15 @@ onMounted(async () => {
         </div>
         <div class="table-wrap">
           <table class="tw">
-            <thead><tr><th>{{ t('usage.provider') }}</th><th>{{ t('usage.model') }}</th><th>{{ t('usage.prompt') }}</th><th>{{ t('usage.completion') }}</th><th>{{ t('usage.cost') }}</th></tr></thead>
+            <thead><tr><th>{{ t('usage.provider') }}</th><th>{{ t('usage.model') }}</th><th>{{ t('usage.prompt') }}</th><th>{{ t('usage.completion') }}</th></tr></thead>
             <tbody>
               <tr v-for="row in state.usageByModel" :key="`${row.provider}-${row.model}`">
                 <td>{{ row.provider }}</td>
                 <td class="mono" style="font-size: 11px">{{ row.model }}</td>
                 <td>{{ fmt(row.prompt_tokens) }}</td>
                 <td>{{ fmt(row.completion_tokens) }}</td>
-                <td>¥{{ Number(row.cost_est || 0).toFixed(4) }}</td>
               </tr>
-              <tr v-if="!state.usageByModel.length"><td colspan="5" class="muted" style="text-align: center; padding: 24px">{{ t('usage.noModel') }}</td></tr>
+              <tr v-if="!state.usageByModel.length"><td colspan="4" class="muted" style="text-align: center; padding: 24px">{{ t('usage.noModel') }}</td></tr>
             </tbody>
           </table>
         </div>
@@ -106,7 +102,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
 .stat-card { display: flex; gap: 11px; align-items: center; padding: 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-card); }
 .stat-icon { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; color: var(--brand); flex: 0 0 36px; }
 .stat-card b { display: block; font-size: 21px; letter-spacing: -.03em; line-height: 1.15; }
@@ -134,7 +130,6 @@ onMounted(async () => {
 .dot { width: 7px; height: 7px; border-radius: 50%; }
 .dot.prompt { background: var(--brand); }
 .dot.completion { background: var(--brand-2); }
-.dot.cost { background: var(--warn); }
 .table-wrap { overflow-x: auto; }
 @media (max-width: 900px) { .stat-grid { grid-template-columns: 1fr 1fr; } .usage-grid { grid-template-columns: 1fr; } }
 </style>

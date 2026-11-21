@@ -1,30 +1,26 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { closeSessionTab, closeSessionTabs, loadActivity, loadChanges, loadTree, openDiff, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
+import { useRouter } from 'vue-router'
+import { closeSessionTab, closeSessionTabs, loadActivity, reorderSessionTabs, renameSession, selectSession, startNewTask, state, toggleNotes } from '../stores/app'
 import { kindLabel, sessionTitle, t } from '../i18n'
 import AccountMenu from '../components/AccountMenu.vue'
 import ApprovalCard from '../components/ApprovalCard.vue'
 import ChatTimeline from '../components/ChatTimeline.vue'
 import Composer from '../components/Composer.vue'
-import DiffView from '../components/DiffView.vue'
-import FileViewer from '../components/FileViewer.vue'
 import Icon from '../components/Icon.vue'
 import LanguageSelect from '../components/LanguageSelect.vue'
 import RightPanel from '../components/RightPanel.vue'
 import StatusPill from '../components/StatusPill.vue'
 
 const router = useRouter()
-const route = useRoute()
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
 const shortcutLabel = isMac ? '⌘ N' : 'Ctrl N'
 const RIGHT_PANEL_KEY = 'hy.rightOpen.v2'
 const rightOpen = ref(window.innerWidth > 960 && localStorage.getItem(RIGHT_PANEL_KEY) === '1')
 const rightWidth = ref(Number(localStorage.getItem('hy.rightWidth') || 370))
-const fileOpen = ref(false)
-const diffOpen = ref(false)
 
 const session = computed(() => state.session)
+const planSteps = computed(() => state.plan?.steps || [])
 const currentTitle = computed(() => (session.value ? sessionTitle(session.value) : t('session.workbenchTitle')))
 const tabsRef = ref(null)
 const tabs = computed(() =>
@@ -161,21 +157,41 @@ function onTabsWheel(event) {
 function loadRightPanelData() {
   if (!state.currentId) return
   loadActivity(state.currentId).catch(() => {})
-  if (state.session?.workspace) {
-    Promise.all([loadTree(), loadChanges()]).catch(() => {})
-  }
+}
+
+function setRightOpen(open) {
+  rightOpen.value = open
+  state.rightPanelOpen = open
+  localStorage.setItem(RIGHT_PANEL_KEY, open ? '1' : '0')
+  if (open) loadRightPanelData()
 }
 
 function toggleRight() {
-  rightOpen.value = !rightOpen.value
-  state.rightPanelOpen = rightOpen.value
-  localStorage.setItem(RIGHT_PANEL_KEY, rightOpen.value ? '1' : '0')
-  if (rightOpen.value) loadRightPanelData()
+  setRightOpen(!rightOpen.value)
 }
 
+watch(
+  () => [state.currentId, planSteps.value.length],
+  ([id, count], previous) => {
+    if (!id || !count) return
+    const [previousId, previousCount] = previous || []
+    const switched = id !== previousId
+    if (!switched && previousCount) return
+    const busy = ['running', 'queued', 'waiting_input'].includes(session.value?.status)
+    const active = planSteps.value.some((step) => step.s === 'doing' || step.s === 'pending')
+    if (active && (previousCount === 0 || (switched && busy))) {
+      if (!rightOpen.value) setRightOpen(true)
+    }
+  }
+)
+
 onMounted(() => {
-  state.rightPanelOpen = rightOpen.value
-  if (rightOpen.value) loadRightPanelData()
+  if (!rightOpen.value && planSteps.value.some((step) => step.s === 'doing' || step.s === 'pending')) {
+    setRightOpen(true)
+  } else {
+    state.rightPanelOpen = rightOpen.value
+    if (rightOpen.value) loadRightPanelData()
+  }
   window.addEventListener('mousedown', onTabMenuGlobalMouseDown)
   window.addEventListener('keydown', onTabMenuEscape)
   window.addEventListener('scroll', onTabMenuDismiss, true)
@@ -219,23 +235,6 @@ async function openNew() {
 function goConsole() {
   router.push('/console')
 }
-
-function onOpenFile() {
-  fileOpen.value = true
-}
-
-function onOpenDiff(path) {
-  if (typeof path === 'string' && path !== undefined) openDiff(path)
-  diffOpen.value = true
-}
-
-function closeFile() {
-  fileOpen.value = false
-}
-
-function closeDiff() {
-  diffOpen.value = false
-}
 </script>
 
 <template>
@@ -270,8 +269,8 @@ function closeDiff() {
         <LanguageSelect />
         <button class="btn sm" :title="t('nav.newTask')" @click="openNew"><Icon name="plus" :size="14" /><span class="hide-sm">{{ t('nav.newTask') }}</span></button>
         <button class="icon-btn" :class="{ active: state.notesOpen }" :title="`${t('notes.button')} (Ctrl/⌘ + Alt + N)`" @click="toggleNotes"><Icon name="document" :size="17" /></button>
-        <button class="icon-btn" :class="{ active: rightOpen }" :title="t('session.togglePanel')" @click="toggleRight">
-          <Icon name="panel" :size="17" />
+        <button class="icon-btn" :class="{ active: rightOpen }" :title="t('session.planTitle')" @click="toggleRight">
+          <Icon name="layers" :size="17" />
         </button>
         <AccountMenu v-if="state.auth.authenticated" />
       </div>
@@ -353,44 +352,12 @@ function closeDiff() {
       </section>
       <template v-if="rightOpen">
         <div class="resizer" @mousedown.prevent="startResize" />
-        <RightPanel @open-file="onOpenFile" @open-diff="onOpenDiff" />
+        <RightPanel @close="toggleRight" />
       </template>
     </div>
     <div v-if="rightOpen" class="right-backdrop" @click="toggleRight" />
 
     <Teleport to="body">
-      <div v-if="fileOpen && session" class="overlay file-overlay" @mousedown.self="closeFile">
-        <div class="file-modal">
-          <div class="file-modal-head">
-            <div class="row" style="gap: 8px">
-              <Icon name="code" :size="16" style="color: var(--brand)" />
-              <b>{{ t('session.filePreview') }}</b>
-              <span class="tiny faint">{{ t('common.readOnly') }}</span>
-            </div>
-            <div class="spacer" />
-            <button class="icon-btn" @click="closeFile"><Icon name="close" :size="16" /></button>
-          </div>
-          <div class="file-modal-body">
-            <FileViewer :file="state.fileContent" :loading="state.busy.loadingFile" @diff="onOpenDiff" />
-          </div>
-        </div>
-      </div>
-      <div v-if="diffOpen && session" class="overlay file-overlay" @mousedown.self="closeDiff">
-        <div class="file-modal">
-          <div class="file-modal-head">
-            <div class="row" style="gap: 8px">
-              <Icon name="git" :size="16" style="color: var(--brand)" />
-              <b>{{ t('session.diff') }}</b>
-              <span class="tiny faint">{{ session.workspace }}</span>
-            </div>
-            <div class="spacer" />
-            <button class="icon-btn" @click="closeDiff"><Icon name="close" :size="16" /></button>
-          </div>
-          <div class="file-modal-body">
-            <DiffView :diff="state.diffText" :path="state.diffPath" />
-          </div>
-        </div>
-      </div>
       <div
         v-if="tabMenu.open"
         class="tab-context-menu"

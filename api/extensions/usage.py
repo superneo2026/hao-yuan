@@ -25,8 +25,8 @@ async def usage_today():
 async def usage_daily(days: int = 14):
     harness = await get_harness()
     rows = await harness.storage._fetch(
-        "SELECT day, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens,"
-        " SUM(cost_est) AS cost_est FROM usage_daily GROUP BY day ORDER BY day DESC LIMIT ?",
+        "SELECT day, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens"
+        " FROM usage_daily GROUP BY day ORDER BY day DESC LIMIT ?",
         (max(1, min(days, 120)),),
     )
     return ok(list(reversed(rows)))
@@ -36,8 +36,8 @@ async def usage_daily(days: int = 14):
 async def usage_by_model():
     harness = await get_harness()
     rows = await harness.storage._fetch(
-        "SELECT provider, model, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens,"
-        " SUM(cost_est) AS cost_est FROM usage_daily GROUP BY provider, model ORDER BY prompt_tokens DESC"
+        "SELECT provider, model, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens"
+        " FROM usage_daily GROUP BY provider, model ORDER BY prompt_tokens DESC"
     )
     return ok(rows)
 
@@ -48,7 +48,7 @@ async def export_csv():
     rows = await harness.storage._fetch("SELECT * FROM usage_daily ORDER BY day DESC, provider, model")
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["day", "provider", "model", "prompt_tokens", "completion_tokens", "cached_tokens", "reasoning_tokens", "cost_est"])
+    writer.writerow(["day", "provider", "model", "prompt_tokens", "completion_tokens", "cached_tokens", "reasoning_tokens"])
     for row in rows:
         writer.writerow(
             [
@@ -59,7 +59,6 @@ async def export_csv():
                 row.get("completion_tokens", 0),
                 row.get("cached_tokens", 0),
                 row.get("reasoning_tokens", 0),
-                row.get("cost_est", 0),
             ]
         )
     data = buffer.getvalue().encode("utf-8-sig")

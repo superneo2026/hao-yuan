@@ -25,7 +25,6 @@ from configs.configs import (
     LITE_MULTIPHASE_HINTS,
     LITE_SINGLE_FILE_MAX_PATHS,
     LITE_TOOL_SET,
-    MAX_SESSION_COST,
     REPAIR_LOOP_ENABLED,
     REPO_MAP_ENABLED,
     SUBAGENT_ENABLED,
@@ -41,7 +40,7 @@ from configs.configs import (
     VERIFY_GATE,
     VERIFY_MAX_NUDGE,
 )
-from configs.models import THINKING_OFF_PROVIDERS, price_for, resolve
+from configs.models import THINKING_OFF_PROVIDERS, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
 from harness import durability, reference, repair, repoindex, sysinfo
 from harness.skills import SkillLibrary
@@ -822,18 +821,6 @@ class AgentRuntime:
                 await self.emit(session_id, "instruction.merged", {"count": injected}, run_id)
 
             session = await self.storage.get_session(session_id) or session
-            if MAX_SESSION_COST > 0 and float(session.get("cost_est") or 0) >= MAX_SESSION_COST:
-                await self.emit(
-                    session_id,
-                    "error",
-                    {"message": f"cost budget reached ({MAX_SESSION_COST})"},
-                    run_id,
-                )
-                await self.storage.update_session(session_id, status="error", error="cost budget reached")
-                await self.storage.finish_run(
-                    run_id, "error", error="cost budget reached", step_count=state["total_steps"]
-                )
-                return
             compaction = await self.context.midturn_compact(session, messages, state["total_steps"])
             if compaction.get("compacted"):
                 await self.emit(session_id, "context.compact", compaction, run_id)
@@ -898,8 +885,7 @@ class AgentRuntime:
                 message_id=msg_id,
             )
             if usage:
-                cost = self._cost(actual_provider, usage, actual_model)
-                bill = await self.storage.record_usage(session_id, assistant_row["id"], actual_provider, actual_model, usage, cost)
+                bill = await self.storage.record_usage(session_id, assistant_row["id"], actual_provider, actual_model, usage)
                 await self.emit(session_id, "usage", {**bill, "provider": actual_provider, "model": actual_model}, run_id)
             if fallbacks:
                 await self.emit(session_id, "model.fallback", {"fallbacks": fallbacks}, run_id)
@@ -1320,7 +1306,6 @@ class AgentRuntime:
                                 provider,
                                 model,
                                 usage,
-                                self._cost(provider, usage, model),
                             )
                         except Exception:
                             pass
@@ -1380,7 +1365,7 @@ class AgentRuntime:
                 if usage:
                     try:
                         await self.storage.record_usage(
-                            session["id"], f"sub-{uuid.uuid4().hex[:10]}", provider, model, usage, self._cost(provider, usage, model)
+                            session["id"], f"sub-{uuid.uuid4().hex[:10]}", provider, model, usage
                         )
                     except Exception:
                         pass
@@ -1455,17 +1440,6 @@ class AgentRuntime:
             await self.emit(session_id, "artifact.created", record)
         except Exception:
             pass
-
-    @staticmethod
-    def _cost(provider: str, usage: dict[str, Any], model: str | None = None) -> float:
-        price = price_for(provider, model)
-        prompt = int(usage.get("prompt_tokens") or 0)
-        completion = int(usage.get("completion_tokens") or 0)
-        cached = min(int(usage.get("cached_tokens") or 0), prompt)
-        hit_price = price.get("cache_hit", price["prompt"])
-        return round(
-            ((prompt - cached) * price["prompt"] + cached * hit_price + completion * price["completion"]) / 1_000_000, 6
-        )
 
     @staticmethod
     def _reference_drift(reference_paths: list[str], outputs: list[str]) -> str:

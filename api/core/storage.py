@@ -412,16 +412,15 @@ class Storage:
         row = await self._one("SELECT rowid AS seq, * FROM messages WHERE id=?", (mid,))
         return row or {}
 
-    async def update_message_usage(self, message_id: str, usage: dict[str, Any], cost: float) -> None:
+    async def update_message_usage(self, message_id: str, usage: dict[str, Any]) -> None:
         await self._write(
-            "UPDATE messages SET prompt_tokens=?, completion_tokens=?, cached_tokens=?, reasoning_tokens=?, cost_est=?"
+            "UPDATE messages SET prompt_tokens=?, completion_tokens=?, cached_tokens=?, reasoning_tokens=?"
             " WHERE id=?",
             (
                 int(usage.get("prompt_tokens") or 0),
                 int(usage.get("completion_tokens") or 0),
                 int(usage.get("cached_tokens") or 0),
                 int(usage.get("reasoning_tokens") or 0),
-                cost,
                 message_id,
             ),
         )
@@ -618,43 +617,39 @@ class Storage:
         provider: str,
         model: str,
         usage: dict[str, Any],
-        cost: float,
     ) -> dict[str, Any]:
         p = int(usage.get("prompt_tokens") or 0)
         c = int(usage.get("completion_tokens") or 0)
         cached = int(usage.get("cached_tokens") or 0)
         reasoning = int(usage.get("reasoning_tokens") or 0)
-        await self.update_message_usage(message_id, usage, cost)
+        await self.update_message_usage(message_id, usage)
         day = now()[:10]
         await self._write(
             "INSERT INTO usage_daily(day, provider, model, prompt_tokens, completion_tokens, cached_tokens,"
-            " reasoning_tokens, cost_est) VALUES (?,?,?,?,?,?,?,?)"
+            " reasoning_tokens) VALUES (?,?,?,?,?,?,?)"
             " ON CONFLICT(day, provider, model) DO UPDATE SET"
             " prompt_tokens=prompt_tokens+excluded.prompt_tokens,"
             " completion_tokens=completion_tokens+excluded.completion_tokens,"
             " cached_tokens=cached_tokens+excluded.cached_tokens,"
-            " reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens,"
-            " cost_est=cost_est+excluded.cost_est",
-            (day, provider, model, p, c, cached, reasoning, cost),
+            " reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens",
+            (day, provider, model, p, c, cached, reasoning),
         )
         await self._write(
             "UPDATE sessions SET context_tokens=?, total_prompt=total_prompt+?,"
-            " total_completion=total_completion+?, cost_est=cost_est+?, updated_at=? WHERE id=?",
-            (p + c, p, c, cost, now(), session_id),
+            " total_completion=total_completion+?, updated_at=? WHERE id=?",
+            (p + c, p, c, now(), session_id),
         )
         row = await self._one(
-            "SELECT context_tokens, total_prompt, total_completion, cost_est FROM sessions WHERE id=?",
+            "SELECT context_tokens, total_prompt, total_completion FROM sessions WHERE id=?",
             (session_id,),
         )
         return {
             "prompt": p,
             "completion": c,
-            "cost_est": cost,
             "session_total": {
                 "context_tokens": (row or {}).get("context_tokens", 0),
                 "prompt": (row or {}).get("total_prompt", 0),
                 "completion": (row or {}).get("total_completion", 0),
-                "cost_est": (row or {}).get("cost_est", 0),
             },
         }
 
@@ -670,7 +665,6 @@ class Storage:
             "day": day,
             "prompt_tokens": sum(int(r.get("prompt_tokens") or 0) for r in rows),
             "completion_tokens": sum(int(r.get("completion_tokens") or 0) for r in rows),
-            "cost_est": round(sum(float(r.get("cost_est") or 0) for r in rows), 6),
             "models": rows,
         }
 

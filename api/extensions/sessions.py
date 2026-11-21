@@ -243,7 +243,6 @@ def _message_usage(row: dict[str, Any]) -> dict[str, Any]:
         "total_tokens": prompt + completion,
         "cached_tokens": int(row.get("cached_tokens") or 0),
         "reasoning_tokens": int(row.get("reasoning_tokens") or 0),
-        "cost_est": float(row.get("cost_est") or 0),
     }
 
 

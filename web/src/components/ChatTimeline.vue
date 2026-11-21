@@ -209,7 +209,7 @@ const runSteps = computed(() => {
   if (run?.step_count) return Number(run.step_count)
   return state.activity.steps || groups.value.filter((group) => group.kind === 'turn').reduce((sum, group) => sum + group.segments.length, 0)
 })
-const runCost = computed(() => Number(currentSession.value?.cost_est || 0))
+const runTokens = computed(() => Number(currentSession.value?.total_prompt || 0) + Number(currentSession.value?.total_completion || 0))
 const showSummary = computed(() => {
   const status = currentSession.value?.status
   return !isBusy.value && (status === 'done' || status === 'error') && toolTotal.value > 0
@@ -220,10 +220,8 @@ function groupDuration(tools) {
   return total ? formatDuration(total) : ''
 }
 
-function activityVisible(id, count = 0) {
-  const value = activityOpen.value[id]
-  if (value === undefined) return count <= 6
-  return value
+function activityVisible(id) {
+  return activityOpen.value[id] !== false
 }
 
 function toggleActivity(id, visible) {
@@ -441,31 +439,20 @@ function timeLabel(value) {
                 </button>
               </div>
 
-              <details v-if="group.reasoning" class="thinking">
-                <summary>
-                  <Icon name="brain" :size="12" />
-                  <span>{{ t('chat.reasoning') }}</span>
-                  <span v-if="group.reasoningCount > 1" class="thinking-count">{{ t('run.reasoningSegments', { n: group.reasoningCount }) }}</span>
-                  <span class="spacer" />
-                  <Icon name="chevron-right" :size="12" class="thinking-caret" />
-                </summary>
-                <div class="thinking-body">{{ group.reasoning }}</div>
-              </details>
-
               <template v-for="segment in group.segments" :key="segment.id">
                 <div v-if="segment.content" class="assistant-text">
                   <Markdown :content="segment.content" />
                 </div>
                 <div v-if="segment.tools.length" class="tool-group">
-                  <button class="tool-group-head" type="button" @click="toggleActivity(segment.id, activityVisible(segment.id, segment.tools.length))">
+                  <button class="tool-group-head" type="button" @click="toggleActivity(segment.id, activityVisible(segment.id))">
                     <Icon name="layers" :size="12" />
                     <span>{{ t('run.activity') }}</span>
                     <span class="tool-group-count mono">{{ segment.tools.length }}</span>
                     <span class="spacer" />
                     <span v-if="groupDuration(segment.tools)" class="tool-group-dur mono">{{ groupDuration(segment.tools) }}</span>
-                    <Icon :name="activityVisible(segment.id, segment.tools.length) ? 'chevron-down' : 'chevron-right'" :size="12" />
+                    <Icon :name="activityVisible(segment.id) ? 'chevron-down' : 'chevron-right'" :size="12" />
                   </button>
-                  <div v-show="activityVisible(segment.id, segment.tools.length)" class="tool-list">
+                  <div v-show="activityVisible(segment.id)" class="tool-list">
                     <ToolCard v-for="tool in segment.tools" :key="tool.call_id" :item="tool" :step="tool.step" />
                   </div>
                 </div>
@@ -504,17 +491,6 @@ function timeLabel(value) {
               <span v-if="currentSession?.model" class="live-run-model mono">{{ currentSession.model }}</span>
             </div>
 
-            <details v-if="liveReasoning" class="thinking" open>
-              <summary>
-                <Icon name="brain" :size="12" />
-                <span>{{ t('chat.reasoning') }}</span>
-                <span v-if="isBusy && !liveText" class="spinner" style="width: 10px; height: 10px" />
-                <span class="spacer" />
-                <Icon name="chevron-right" :size="12" class="thinking-caret" />
-              </summary>
-              <div class="thinking-body">{{ liveReasoning }}</div>
-            </details>
-
             <div v-if="liveText" class="assistant-text" :class="{ streaming: isBusy }">
               <Markdown :content="liveText" />
             </div>
@@ -544,7 +520,7 @@ function timeLabel(value) {
             <span>{{ t('run.steps') }} {{ runSteps }}</span>
             <span>{{ t('run.ops') }} {{ toolTotal }}</span>
             <span :class="{ bad: toolFailed }">{{ t('run.failed') }} {{ toolFailed }}</span>
-            <span class="mono">¥{{ runCost.toFixed(4) }}</span>
+            <span v-if="runTokens" class="mono">Token {{ runTokens.toLocaleString() }}</span>
           </span>
         </div>
         <div style="height: 12px" />

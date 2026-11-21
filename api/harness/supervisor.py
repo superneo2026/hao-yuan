@@ -10,7 +10,6 @@ from typing import Any
 from configs.configs import (
     SUPERVISOR_AUTO_CANCEL_SEC,
     SUPERVISOR_AUTO_RESUME,
-    SUPERVISOR_DAILY_COST_CAP,
     SUPERVISOR_INTERVAL,
     SUPERVISOR_RESUME_BACKOFF_SEC,
     SUPERVISOR_RESUME_KEYWORDS,
@@ -43,7 +42,7 @@ def reset_resume_state(session_id: str | None = None) -> None:
 
 
 async def _auto_resume(harness, item: dict[str, Any]) -> bool:
-    """Resume an interrupted long-running session with backoff and a cost cap."""
+    """Resume an interrupted long-running session with backoff."""
     if not SUPERVISOR_AUTO_RESUME or item.get("health") != "error":
         return False
     session_id = item["id"]
@@ -65,21 +64,6 @@ async def _auto_resume(harness, item: dict[str, Any]) -> bool:
             },
         )
         return False
-    if SUPERVISOR_DAILY_COST_CAP > 0:
-        usage = await harness.storage.usage_today()
-        spent = float(usage.get("cost_est") or 0)
-        if spent >= SUPERVISOR_DAILY_COST_CAP:
-            state["next_at"] = current + SUPERVISOR_RESUME_MAX_BACKOFF_SEC
-            await harness.events.emit(
-                session_id,
-                "supervisor.alert",
-                {
-                    "health": "cost-capped",
-                    "reason": f"daily cost cap reached ({spent:.4f} >= {SUPERVISOR_DAILY_COST_CAP:.4f})",
-                    "cost_est": spent,
-                },
-            )
-            return False
     session = await harness.storage.get_session(session_id)
     if not session or session.get("status") != "error":
         return False

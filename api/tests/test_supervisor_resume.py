@@ -8,9 +8,8 @@ from harness import supervisor
 
 
 class FakeStorage:
-    def __init__(self, session: dict, usage: dict | None = None):
+    def __init__(self, session: dict):
         self.session = session
-        self.usage = usage or {"cost_est": 0.0}
         self.updates: list[dict] = []
 
     async def get_session(self, session_id: str):
@@ -19,9 +18,6 @@ class FakeStorage:
     async def update_session(self, session_id: str, **fields):
         self.session.update(fields)
         self.updates.append(fields)
-
-    async def usage_today(self):
-        return self.usage
 
 
 class FakeManager:
@@ -51,8 +47,8 @@ class FakeEvents:
 
 
 class FakeHarness:
-    def __init__(self, session: dict, usage: dict | None = None):
-        self.storage = FakeStorage(session, usage)
+    def __init__(self, session: dict):
+        self.storage = FakeStorage(session)
         self.manager = FakeManager()
         self.events = FakeEvents()
 
@@ -78,7 +74,6 @@ def _clean_state(monkeypatch):
     monkeypatch.setattr(supervisor, "SUPERVISOR_RESUME_MAX", 1000)
     monkeypatch.setattr(supervisor, "SUPERVISOR_RESUME_BACKOFF_SEC", 60.0)
     monkeypatch.setattr(supervisor, "SUPERVISOR_RESUME_MAX_BACKOFF_SEC", 1800.0)
-    monkeypatch.setattr(supervisor, "SUPERVISOR_DAILY_COST_CAP", 0.0)
     yield
     supervisor.reset_resume_state()
 
@@ -123,15 +118,6 @@ def test_auto_resume_skips_user_cancel():
     item = {"id": "s_test", "health": "error", "error": "用户取消"}
     assert _run(supervisor._auto_resume(harness, item)) is False
     assert harness.manager.enqueued == []
-
-
-def test_auto_resume_cost_cap(monkeypatch):
-    harness = FakeHarness(_session(), usage={"cost_est": 5.0})
-    monkeypatch.setattr(supervisor, "SUPERVISOR_DAILY_COST_CAP", 1.0)
-    item = {"id": "s_test", "health": "error", "error": "max steps reached"}
-    assert _run(supervisor._auto_resume(harness, item)) is False
-    assert harness.manager.enqueued == []
-    assert harness.events.emitted[-1][2]["health"] == "cost-capped"
 
 
 def test_auto_resume_exhausted(monkeypatch):

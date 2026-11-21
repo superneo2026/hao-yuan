@@ -100,30 +100,6 @@ class ProviderConfig:
     key_source: str = "default"
 
 
-# 单价表：元 / 百万 tokens。键优先按具体模型，未命中时回退到 PROVIDER_FALLBACK_PRICES。
-# "prompt" = 缓存未命中输入单价；"cache_hit" = 缓存命中输入单价；"completion" = 输出单价。
-# 来源（2026-11 核对）：
-#   智谱 BigModel 官方：GLM-5.3-Flash 0.8/2.8（命中 0.23）、GLM-5.3 8/28（命中 2）
-#   小米 MiMo 官方：MiMo-V2.6-Flash 约 1.0/2.0
-#   DeepSeek 官方（美元价按 1 USD≈7.1 CNY 折算，取峰值档，谷时减半，估算偏保守）：
-#     deepseek-flash 0.30/0.006/1.20 → 2.13/0.04/8.52
-#     deepseek-v4-pro 1.32/0.044/3.96 → 9.37/0.31/28.12
-PRICES_PER_MTOK: dict[str, dict[str, float]] = {
-    "glm-5.3-flash": {"prompt": 0.8, "cache_hit": 0.23, "completion": 2.8},
-    "glm-5.3": {"prompt": 8.0, "cache_hit": 2.0, "completion": 28.0},
-    "mimo-v2.6-flash": {"prompt": 1.0, "completion": 2.0},
-    "deepseek-flash": {"prompt": 2.13, "cache_hit": 0.04, "completion": 8.52},
-    "deepseek-v4-pro": {"prompt": 9.37, "cache_hit": 0.31, "completion": 28.12},
-    "mock-deterministic": {"prompt": 0.0, "completion": 0.0},
-}
-
-PROVIDER_FALLBACK_PRICES: dict[str, dict[str, float]] = {
-    "zhipu": PRICES_PER_MTOK["glm-5.3-flash"],
-    "mimo": PRICES_PER_MTOK["mimo-v2.6-flash"],
-    "deepseek": PRICES_PER_MTOK["deepseek-flash"],
-    "mock": {"prompt": 0.0, "completion": 0.0},
-}
-
 THINKING_OFF_PROVIDERS = {"zhipu"}
 
 _LOCK = threading.RLock()
@@ -324,12 +300,6 @@ def get_providers() -> dict[str, ProviderConfig]:
 
 def configured_providers() -> list[str]:
     return [name for name, conf in get_providers().items() if name != "mock" and conf.api_key]
-
-
-def price_for(provider: str, model: str | None = None) -> dict[str, float]:
-    if model and model in PRICES_PER_MTOK:
-        return PRICES_PER_MTOK[model]
-    return PROVIDER_FALLBACK_PRICES.get(provider, {"prompt": 0.0, "completion": 0.0})
 
 
 def _split_model(model: str) -> tuple[str, str]:

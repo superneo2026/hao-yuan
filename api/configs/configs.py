@@ -57,8 +57,6 @@ AGENT_MAX_STEPS = int(os.getenv("HAOYUAN_MAX_STEPS", "60"))
 AGENT_MAX_TOTAL_STEPS = int(os.getenv("HAOYUAN_MAX_TOTAL_STEPS", "200000"))
 # Maximum automatic boot-resumes for an interrupted run (crash / restart).
 MAX_AUTO_ROLLOVER = int(os.getenv("HAOYUAN_MAX_ROLLOVER", "100"))
-# Hard cost ceiling per session/run in estimated USD. 0 disables the ceiling.
-MAX_SESSION_COST = float(os.getenv("HAOYUAN_MAX_COST", "0"))
 GATE_CONFIRM_TIMEOUT = float(os.getenv("HAOYUAN_GATE_TIMEOUT", "600"))
 AUTO_APPROVE_HIGH_RISK = os.getenv("HAOYUAN_AUTO_APPROVE", "0").strip() in {"1", "true", "yes"}
 
@@ -176,7 +174,6 @@ SUPERVISOR_AUTO_RESUME = os.getenv("HAOYUAN_SUPERVISOR_AUTO_RESUME", "1").strip(
 SUPERVISOR_RESUME_MAX = int(os.getenv("HAOYUAN_SUPERVISOR_RESUME_MAX", "1000"))
 SUPERVISOR_RESUME_BACKOFF_SEC = float(os.getenv("HAOYUAN_SUPERVISOR_RESUME_BACKOFF_SEC", "60"))
 SUPERVISOR_RESUME_MAX_BACKOFF_SEC = float(os.getenv("HAOYUAN_SUPERVISOR_RESUME_MAX_BACKOFF_SEC", "1800"))
-SUPERVISOR_DAILY_COST_CAP = float(os.getenv("HAOYUAN_SUPERVISOR_DAILY_COST_CAP", "0"))
 SUPERVISOR_RESUME_KEYWORDS = (
     "max steps",
     "stale",

@@ -399,8 +399,7 @@ function applyEvent(event) {
           ...state.session,
           context_tokens: payload.session_total.context_tokens,
           total_prompt: payload.session_total.prompt,
-          total_completion: payload.session_total.completion,
-          cost_est: payload.session_total.cost_est
+          total_completion: payload.session_total.completion
         }
       }
       break
@@ -818,13 +817,8 @@ export async function selectSession(id, navigate = true, options = {}) {
     // A freshly created session has no events yet. Do not open an idle SSE
     // stream here: it holds a connection and can delay the next create request.
     // The stream is started by sendMessage when the first message is sent.
-    // Tree/changes are loaded lazily when the right panel is opened.
-    if (state.rightPanelOpen && listed?.workspace) {
-      Promise.all([loadTree(), loadChanges()]).catch(() => {})
-    } else {
-      state.tree = []
-      state.changes = []
-    }
+    state.tree = []
+    state.changes = []
     return
   }
   state.switching = true
@@ -853,17 +847,11 @@ export async function selectSession(id, navigate = true, options = {}) {
     state.switching = false
     state.scrollTick++
     startSessionStream(id, detail.session.last_event_id || 0)
+    state.tree = []
+    state.changes = []
     if (state.rightPanelOpen) {
       loadActivity(id).catch(() => {})
-      if (detail.session.workspace) {
-        Promise.all([loadTree(), loadChanges()]).catch(() => {})
-      } else {
-        state.tree = []
-        state.changes = []
-      }
     } else {
-      state.tree = []
-      state.changes = []
       state.activity = { tools: {}, steps: 0, startedAt: 0, endedAt: 0 }
     }
   } catch (error) {
@@ -958,7 +946,6 @@ export async function refreshCurrent() {
     ])
     state.messages = messages
     state.artifacts = artifacts
-    if (detail.session.workspace) loadChanges().catch(() => {})
     if (['done', 'error', 'idle'].includes(detail.session.status)) {
       state.live.streams = {}
       state.live.reasoning = {}
