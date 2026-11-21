@@ -344,7 +344,7 @@ function goConsole() {
       </div>
     </div>
 
-    <div v-else class="workbench-body" :style="{ gridTemplateColumns: rightOpen ? `minmax(0, 1fr) ${rightWidth}px` : 'minmax(0, 1fr)' }">
+    <div v-else class="workbench-body" :style="{ gridTemplateColumns: rightOpen ? `minmax(0, 1fr) 5px ${rightWidth}px` : 'minmax(0, 1fr)' }">
       <section class="main-column">
         <ChatTimeline />
         <ApprovalCard />
@@ -467,7 +467,7 @@ function goConsole() {
 .tab-context-menu button:disabled { opacity: .38; cursor: default; }
 .tab-context-menu .menu-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
 .tab-context-menu .menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
-.workbench-body { flex: 1; min-height: 0; display: grid; }
+.workbench-body { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
 .main-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .resizer { width: 5px; cursor: col-resize; background: transparent; position: relative; z-index: 4; }
 .resizer:hover { background: var(--brand-line); }

@@ -42,6 +42,7 @@ from configs.configs import (
 )
 from configs.models import THINKING_OFF_PROVIDERS, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
+from core.instructions import addition_message, classify_instruction, interrupt_message, interrupt_notice
 from harness import durability, reference, repair, repoindex, sysinfo
 from harness.skills import SkillLibrary
 
@@ -213,6 +214,14 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Preserve the existing artifact unless the user explicitly asks for a redesign. When a target file already exists, edit it in place and keep its markup, CSS, layout system, section order and naming exactly as they are except for the diff the request requires. Never re-theme, restructure, renumber or "polish" on your own initiative; style/format changes require an explicit user request.
 - Deliver only what was asked. Do not add unrequested sections, scaffolding, commentary, checklists, FAQs, interview prep or meta-analysis. For outward-facing documents (resume/CV, cover letter, proposal, report), match the stated audience and keep internal notes, job-description mapping and Q&A material out unless the user explicitly asks for them. For analytical or evaluation deliverables (feasibility study, audit, benchmark report), completeness is part of the request: include assumptions, risks, alternatives, acceptance gates and a summary, but no off-topic padding.
 - When a decision, missing detail, or risk check blocks safe progress mid-task, call ask_user with one clear question and 2-4 short options instead of ending your turn. Execution pauses, the user answers, and you continue the same task with that answer. Do not ask for confirmation you do not need.
+
+# Mid-task additions
+The user may send new requirements while you are still working. Treat them as parallel workstreams:
+- Acknowledge the addition briefly, then judge priority yourself. Urgent or blocking additions come first; keep lower-priority work queued.
+- Preserve the original task and all completed progress. Never discard it just because a new requirement arrived.
+- Only stop the original task when the user explicitly asks to interrupt, cancel, or replace it.
+- If one workstream is blocked on a command, approval, or missing information, advance the other one instead of idling.
+- If a plan is active, add the new requirement as a step without erasing completed steps.
 """
 
 
@@ -737,6 +746,9 @@ class AgentRuntime:
         if summary:
             system += "\n\n--- Compressed history memory ---\n" + summary
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}] + recent
+        if self.manager and self.manager.consume_interrupt(session_id):
+            messages.append({"role": "user", "content": interrupt_notice()})
+            await self.emit(session_id, "instruction.interrupted", {"status": "cancelled"}, run_id)
         tool_names = self._tools_for(agent, kind, lite, bool(workspace), user_text)
         schemas = self.tools.openai_tools(tool_names)
 
@@ -818,7 +830,12 @@ class AgentRuntime:
 
             cursor, injected = await self._inject_pending(session_id, messages, cursor)
             if injected:
-                await self.emit(session_id, "instruction.merged", {"count": injected}, run_id)
+                await self.emit(
+                    session_id,
+                    "instruction.merged",
+                    {"count": len(injected), "items": injected},
+                    run_id,
+                )
 
             session = await self.storage.get_session(session_id) or session
             compaction = await self.context.midturn_compact(session, messages, state["total_steps"])
@@ -908,7 +925,12 @@ class AgentRuntime:
             if not parsed_calls:
                 cursor, injected = await self._inject_pending(session_id, messages, cursor)
                 if injected:
-                    await self.emit(session_id, "instruction.merged", {"count": injected}, run_id)
+                    await self.emit(
+                        session_id,
+                        "instruction.merged",
+                        {"count": len(injected), "items": injected},
+                        run_id,
+                    )
                     continue
                 if finish_reason == "length" and state["trunc_nudges"] < 2:
                     state["trunc_nudges"] += 1
@@ -1237,14 +1259,31 @@ class AgentRuntime:
             text = text[:TOOL_RESULT_CONTEXT_CHARS] + TOOL_RESULT_CONTEXT_MARK
         return text
 
-    async def _inject_pending(self, session_id: str, messages: list[dict[str, Any]], cursor: int) -> tuple[int, int]:
+    async def _inject_pending(
+        self, session_id: str, messages: list[dict[str, Any]], cursor: int
+    ) -> tuple[int, list[dict[str, Any]]]:
         rows = await self.storage.list_messages(session_id, after_rowid=cursor)
         new_users = [row for row in rows if row["role"] == "user"]
         if not new_users:
-            return cursor, 0
+            return cursor, []
+        merged: list[dict[str, Any]] = []
         for row in new_users:
-            messages.append({"role": "user", "content": row.get("content") or ""})
-        return int(new_users[-1]["seq"]), len(new_users)
+            content = row.get("content") or ""
+            verdict = classify_instruction(content)
+            if verdict.kind == "chatter":
+                continue
+            if verdict.kind == "interrupt":
+                messages.append({"role": "user", "content": interrupt_message(content)})
+            else:
+                messages.append({"role": "user", "content": addition_message(content, verdict.priority)})
+            merged.append(
+                {
+                    "kind": verdict.kind,
+                    "priority": verdict.priority,
+                    "preview": content.strip()[:160],
+                }
+            )
+        return int(new_users[-1]["seq"]), merged
 
     async def _repair_after_tests(self, session, calls, results, messages, run_id, state) -> None:
         if not REPAIR_LOOP_ENABLED:

@@ -4,7 +4,6 @@ import { createSessionStream } from '../api/sse'
 import { i18n, setLocale, t } from '../i18n'
 
 const LAST_SESSION = 'hy.lastSession'
-const MESSAGE_PAGE = 80
 const ACTIVITY_EVENT_LIMIT = 800
 const THEME = 'hy.theme.v2'
 const SIDEBAR = 'hy.sidebar'
@@ -48,8 +47,6 @@ export const state = reactive({
   })(),
   session: null,
   messages: [],
-  hasMoreMessages: false,
-  loadingEarlier: false,
   switching: false,
   artifacts: [],
   tree: [],
@@ -109,6 +106,7 @@ export const state = reactive({
 })
 
 let sessionStream = null
+const seenInstructions = new Set()
 let sessionPollTimer = null
 let requestToken = 0
 let refreshTimer = null
@@ -459,6 +457,17 @@ function applyEvent(event) {
     case 'instruction.merged':
       pushNotice({ kind: 'merge', text: t('notice.merge', { count: payload.count }) })
       break
+    case 'instruction.queued': {
+      const key = payload.msg_id || `${payload.kind}:${payload.preview || ''}`
+      if (seenInstructions.has(key)) break
+      seenInstructions.add(key)
+      if (seenInstructions.size > 400) seenInstructions.clear()
+      const interrupted = payload.kind === 'interrupt'
+      const text = interrupted ? t('notice.instructionInterrupted') : t('notice.instructionQueued')
+      pushNotice({ kind: interrupted ? 'warn' : 'merge', text })
+      toast(text, interrupted ? 'warn' : 'info', 5000)
+      break
+    }
     case 'session.resume':
       pushNotice({ kind: 'resume', text: t('notice.resumed') })
       break
@@ -583,8 +592,6 @@ function clearCurrentSession() {
   state.currentId = ''
   state.session = null
   state.messages = []
-  state.hasMoreMessages = false
-  state.loadingEarlier = false
   state.switching = false
   state.artifacts = []
   state.plan = { title: '', steps: [] }
@@ -806,8 +813,6 @@ export async function selectSession(id, navigate = true, options = {}) {
   state.messages = []
   state.artifacts = []
   state.runs = []
-  state.hasMoreMessages = false
-  state.loadingEarlier = false
   if (options.skipFetch) {
     // A freshly created session has no messages/artifacts yet. Paint it and
     // open its stream now instead of waiting on three extra round-trips.
@@ -823,11 +828,9 @@ export async function selectSession(id, navigate = true, options = {}) {
   }
   state.switching = true
   try {
-    // Fetch the session, a bounded window of messages, and artifacts in parallel
-    // instead of three sequential round-trips.
     const [detail, messages, artifacts] = await Promise.all([
       api.session(id),
-      api.messages(id, { limit: MESSAGE_PAGE }),
+      api.messages(id),
       api.artifacts(id)
     ])
     if (token !== requestToken) return
@@ -842,7 +845,6 @@ export async function selectSession(id, navigate = true, options = {}) {
     updateSessionInList(detail.session)
     const rows = messages || []
     state.messages = rows
-    state.hasMoreMessages = rows.length >= MESSAGE_PAGE
     state.artifacts = artifacts
     state.switching = false
     state.scrollTick++
@@ -858,33 +860,6 @@ export async function selectSession(id, navigate = true, options = {}) {
     if (token !== requestToken) return
     state.switching = false
     toast(error.message, 'bad')
-  }
-}
-
-export async function loadEarlierMessages() {
-  const id = state.currentId
-  if (!id || state.loadingEarlier || !state.hasMoreMessages) return
-  const first = state.messages.find((item) => item.seq !== undefined && item.seq !== null)
-  const before = first ? Number(first.seq) : 0
-  if (!before) {
-    state.hasMoreMessages = false
-    return
-  }
-  const token = requestToken
-  state.loadingEarlier = true
-  try {
-    const older = await api.messages(id, { limit: MESSAGE_PAGE, before })
-    if (token !== requestToken || state.currentId !== id) return
-    if (!older || !older.length) {
-      state.hasMoreMessages = false
-      return
-    }
-    state.messages = [...older, ...state.messages]
-    state.hasMoreMessages = older.length >= MESSAGE_PAGE
-  } catch (error) {
-    toast(error.message, 'bad')
-  } finally {
-    if (token === requestToken) state.loadingEarlier = false
   }
 }
 
@@ -939,9 +914,8 @@ export async function refreshCurrent() {
     state.session = detail.session
     updateSessionInList(detail.session)
     state.plan = safeJson(detail.session.plan, { title: '', steps: [] })
-    const limit = Math.max(MESSAGE_PAGE, state.messages.length)
     const [messages, artifacts] = await Promise.all([
-      api.messages(state.currentId, { limit }),
+      api.messages(state.currentId),
       api.artifacts(state.currentId)
     ])
     state.messages = messages

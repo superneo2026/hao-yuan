@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from configs.configs import prefix
 from configs.models import list_models, resolve
 from core.harness import get_harness
+from core.instructions import classify_instruction
 from core.storage import now
 from extensions.common import fail, ok
 
@@ -454,11 +455,10 @@ async def get_messages(session_id: str, limit: int = 0, before: int = 0):
         rows = await harness.storage.list_messages_tail(
             session_id, limit=min(limit, 2000), before_rowid=before
         )
-        for row in rows:
-            _compact_message(row)
     else:
         rows = await harness.storage.list_messages(session_id)
     for row in rows:
+        _compact_message(row)
         row["usage"] = _message_usage(row)
     return ok(rows)
 
@@ -473,6 +473,7 @@ async def send_message(session_id: str, body: MessageSend):
     if not session:
         return fail("session not found", 404)
     active = harness.manager.is_active(session_id) or session["status"] in ("running", "queued", "waiting_input")
+    verdict = classify_instruction(content)
     if not active:
         try:
             plan = json.loads(session.get("plan") or "{}")
@@ -486,15 +487,49 @@ async def send_message(session_id: str, body: MessageSend):
     await harness.events.emit(
         session_id,
         "message.saved",
-        {"msg_id": message["id"], "role": "user", "content": content, "appended": active},
+        {
+            "msg_id": message["id"],
+            "role": "user",
+            "content": content,
+            "appended": active,
+            "kind": verdict.kind,
+            "priority": verdict.priority,
+        },
     )
+    result = {
+        "msg_id": message["id"],
+        "session_id": session_id,
+        "appended": active,
+        "kind": verdict.kind,
+        "priority": verdict.priority,
+    }
+    if active and verdict.kind != "chatter":
+        await harness.events.emit(
+            session_id,
+            "instruction.queued",
+            {
+                "msg_id": message["id"],
+                "kind": verdict.kind,
+                "priority": verdict.priority,
+                "preview": content[:160],
+                "interrupted": verdict.kind == "interrupt",
+            },
+        )
     if body.locale and _is_default_title(session.get("title")):
         first = await harness.storage.first_user_message(session_id)
         if first and first["id"] == message["id"]:
             _spawn_title_task(harness, session, content, body.locale)
-    if not active:
+    if active and verdict.kind == "interrupt":
+        empty_plan = {"title": "", "steps": []}
+        await harness.storage.update_session(session_id, plan=json.dumps(empty_plan, ensure_ascii=False))
+        await harness.events.emit(session_id, "plan.updated", empty_plan)
+        result["interrupted"] = await harness.manager.interrupt(session_id)
+        if not result["interrupted"] and not harness.manager.is_active(session_id):
+            harness.manager.enqueue(session_id)
+        return ok(result)
+    if not active or not harness.manager.is_active(session_id):
         harness.manager.enqueue(session_id)
-    return ok({"msg_id": message["id"], "session_id": session_id, "appended": active})
+    return ok(result)
 
 
 @router.get("/sessions/{session_id}/events")

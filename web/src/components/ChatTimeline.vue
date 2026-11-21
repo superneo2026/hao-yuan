@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { currentSession, loadEarlierMessages, state, toast } from '../stores/app'
+import { currentSession, state, toast } from '../stores/app'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
 import Markdown from './Markdown.vue'
@@ -365,14 +365,6 @@ async function copy(text, key = '') {
   }
 }
 
-async function loadEarlier() {
-  const el = scroller.value
-  const beforeHeight = el?.scrollHeight || 0
-  await loadEarlierMessages()
-  await nextTick()
-  if (el) el.scrollTop += el.scrollHeight - beforeHeight
-}
-
 function timeLabel(value) {
   if (!value) return ''
   const date = new Date(String(value).replace(' ', 'T'))
@@ -405,17 +397,11 @@ function timeLabel(value) {
       </div>
 
       <div v-else class="timeline-inner">
-        <div v-if="state.hasMoreMessages" class="load-earlier">
-          <button class="btn sm" :disabled="state.loadingEarlier" @click="loadEarlier">
-            <span v-if="state.loadingEarlier" class="spinner" style="width: 12px; height: 12px" />
-            {{ state.loadingEarlier ? t('chat.loadingEarlier') : t('chat.loadEarlier') }}
-          </button>
-        </div>
-
         <div v-for="group in groups" :key="group.id" class="log-entry slide-up" :class="group.kind">
           <template v-if="group.kind === 'user'">
-            <div class="log-row" :data-user-id="group.id">
-              <div class="log-head">
+            <div class="log-row user-row" :data-user-id="group.id">
+              <div class="user-text">{{ group.content }}</div>
+              <div class="log-head user-head">
                 <span class="role-badge user">{{ t('chat.you') }}</span>
                 <span v-if="timeLabel(group.created_at)" class="log-time">{{ timeLabel(group.created_at) }}</span>
                 <span class="spacer" />
@@ -423,7 +409,6 @@ function timeLabel(value) {
                   <Icon :name="copiedKey === group.id ? 'check' : 'copy'" :size="12" />
                 </button>
               </div>
-              <div class="user-text">{{ group.content }}</div>
             </div>
           </template>
 
@@ -531,7 +516,7 @@ function timeLabel(value) {
       <Icon name="chevron-down" :size="14" /> {{ t('chat.latest') }}
     </button>
 
-    <div v-if="!showEmpty && userQuestions.length" class="question-rail">
+    <div v-if="!showEmpty && userQuestions.length" class="question-rail" :class="{ scrollable: userQuestions.length > 12 }">
       <button
         v-for="question in userQuestions"
         :key="question.id"
@@ -539,6 +524,7 @@ function timeLabel(value) {
         class="question-pin"
         :class="{ active: question.id === activeQuestionId }"
         :aria-label="question.content"
+        :title="question.content"
         @click="jumpToQuestion(question.id)"
       >
         <span class="question-pin-dot" />
@@ -565,16 +551,24 @@ function timeLabel(value) {
 .live-badge { animation: pulse 2s infinite; }
 .log-time { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .log-stat { font-size: 10px; color: var(--faint); }
+.user-row { align-items: flex-end; gap: 4px; }
+.user-row .log-head { width: 100%; justify-content: flex-end; }
+.user-row .log-head .spacer { display: none; }
+.user-row .ghost-icon { opacity: .5; }
+.user-row:hover .ghost-icon { opacity: 1; }
 .user-text {
+  align-self: flex-end;
+  max-width: min(78%, 640px);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 13.5px;
   line-height: 1.72;
   color: var(--ink);
-  padding: 8px 12px;
-  border-left: 2px solid var(--user-brand);
-  border-radius: 0 8px 8px 0;
-  background: color-mix(in srgb, var(--user-brand) 6%, var(--surface-2));
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--user-brand) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--user-brand) 20%, var(--line));
+  border-radius: 16px 16px 5px 16px;
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--user-brand) 7%, transparent);
 }
 .assistant-text { min-width: 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.76; }
 .assistant-text.streaming .markdown > :last-child::after {
@@ -646,6 +640,8 @@ function timeLabel(value) {
   box-shadow: 0 6px 20px color-mix(in srgb, #000 8%, transparent);
   backdrop-filter: blur(8px);
 }
+.question-rail.scrollable { max-height: calc(100% - 40px); overflow-y: auto; scrollbar-width: none; }
+.question-rail.scrollable::-webkit-scrollbar { display: none; }
 .question-pin {
   position: relative;
   width: 16px;
@@ -728,15 +724,16 @@ function timeLabel(value) {
   white-space: pre-wrap;
   word-break: break-word;
 }
-@container (max-width: 980px) {
+@container (max-width: 720px) {
   .question-rail { display: none; }
 }
-@media (max-width: 1000px) {
+@media (max-width: 720px) {
   .question-rail { display: none; }
 }
 @media (max-width: 720px) {
   .timeline { padding: 18px 16px 8px; }
   .timeline-inner { gap: 22px; }
+  .user-text { max-width: 88%; }
   .tool-only { padding-left: 0; }
   .ghost-icon { opacity: .6; }
 }

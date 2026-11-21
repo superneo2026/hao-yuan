@@ -186,7 +186,7 @@ defineExpose({ fill })
           v-model="text"
           class="composer-input"
           rows="1"
-          :placeholder="t('chat.placeholder')"
+          :placeholder="isActive ? t('chat.midrunPlaceholder') : t('chat.placeholder')"
           @input="onInput"
           @keydown="onKeydown"
         />

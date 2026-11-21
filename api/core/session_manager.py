@@ -25,6 +25,8 @@ class SessionManager:
         self.approvals: dict[str, asyncio.Future] = {}
         self.pending: dict[str, dict[str, Any]] = {}
         self.resume_pending: set[str] = set()
+        self.interrupt_pending: set[str] = set()
+        self.requeue_after_cancel: set[str] = set()
 
     async def create_session(
         self,
@@ -77,29 +79,56 @@ class SessionManager:
         return True
 
     async def _run_wrapped(self, session_id: str) -> None:
+        requeue = False
         try:
             await self.set_status(session_id, "queued")
             async with self.semaphore:
                 await self.runtime.run_session(session_id)
         except asyncio.CancelledError:
-            await self.set_status(session_id, "error", "用户取消")
+            if session_id in self.requeue_after_cancel:
+                self.requeue_after_cancel.discard(session_id)
+                requeue = True
+                await self.set_status(session_id, "queued")
+            else:
+                await self.set_status(session_id, "error", "用户取消")
         except Exception as exc:
             await self.set_status(session_id, "error", str(exc)[:500])
         finally:
             self.tasks.pop(session_id, None)
+            if requeue:
+                self.enqueue(session_id)
 
-    async def cancel(self, session_id: str) -> bool:
-        task = self.tasks.get(session_id)
-        if not task or task.done():
-            return False
-        task.cancel()
+    async def _drop_approvals(self, session_id: str) -> None:
         for approval_id, future in list(self.approvals.items()):
             approval = await self.storage.get_approval(approval_id)
             if approval and approval["session_id"] == session_id:
                 await self.storage.resolve_approval(approval_id, False, "task cancelled", "system")
                 if not future.done():
                     future.set_result(False)
+
+    async def cancel(self, session_id: str) -> bool:
+        task = self.tasks.get(session_id)
+        if not task or task.done():
+            return False
+        task.cancel()
+        await self._drop_approvals(session_id)
         return True
+
+    async def interrupt(self, session_id: str) -> bool:
+        task = self.tasks.get(session_id)
+        if not task or task.done():
+            return False
+        self.interrupt_pending.add(session_id)
+        self.requeue_after_cancel.add(session_id)
+        task.cancel()
+        await self._drop_approvals(session_id)
+        return True
+
+    def consume_interrupt(self, session_id: str) -> bool:
+        if session_id in self.interrupt_pending:
+            self.interrupt_pending.discard(session_id)
+            return True
+        return False
 
     async def archive(self, session_id: str) -> None:
         await self.storage.update_session(session_id, hidden=1)
