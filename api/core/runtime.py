@@ -141,6 +141,10 @@ READONLY_TOOLS = (
     "baseline_audit", "doc_consistency", "web_screenshot", "describe_image",
     "reference_digest", "reference_compare", "web_audit",
 )
+# Read-only tools plus shell commands are safe to de-duplicate: re-running the exact
+# same command with the same args yields nothing new (observed: the model re-running
+# one `python -c` budget calculation 20+ times).
+_DUPLICATE_TOOLS = frozenset(READONLY_TOOLS) | {"run_shell"}
 
 # Shell commands that materialise workspace files. A task can be completed entirely
 # through the shell (heredoc, redirect, python -c, tee ...), so these writes must be
@@ -908,6 +912,7 @@ class AgentRuntime:
             "output_targets": extract_output_targets(user_text, workspace) if write_required else [],
             "delivery_since": time.time(),
             "delivery_start_step": 0,
+            "delivered_at_step": None,
             "output_nudges": 0,
             "tool_fp_counts": {},
             "read_path_counts": {},
@@ -1294,11 +1299,48 @@ class AgentRuntime:
                     state["stuck_streak"] = 0
                 else:
                     state["stuck_streak"] += 1
+                has_deliverable = bool(state["output_targets"]) and not missing
+                if has_deliverable and state["delivered_at_step"] is None:
+                    state["delivered_at_step"] = state["total_steps"]
                 if state["stuck_streak"] >= NO_PROGRESS_STREAK:
                     state["stuck_streak"] = 0
                     state["no_progress_nudges"] += 1
                     target_hint = "、".join(missing)
-                    if missing:
+                    if has_deliverable:
+                        delivered_hint = "、".join(state["output_targets"])
+                        # The file the user asked for already exists; the model is
+                        # just spinning. Give one nudge to summarize, then finish as
+                        # DONE (not an error) so the user isn't told a good run failed.
+                        grace = state["delivered_at_step"] is not None and (
+                            state["total_steps"] - state["delivered_at_step"]
+                        ) >= NO_PROGRESS_STREAK
+                        if state["no_progress_nudges"] >= 2 and grace:
+                            summary = "deliverable created: " + delivered_hint
+                            if CHECKPOINT_ENABLED:
+                                await durability.clear_checkpoints(self.storage, session_id)
+                            await self.storage.update_session(session_id, status="done", error="")
+                            await self.storage.finish_run(
+                                run_id, "done", output=summary, step_count=state["total_steps"]
+                            )
+                            await self.emit(session_id, "done", {"summary": summary, "text": summary}, run_id)
+                            await self.emit(session_id, "session.status", {"status": "done"}, run_id)
+                            return
+                        guard_text = (
+                            "[system no-progress guard] The requested deliverable already exists at: "
+                            + delivered_hint + ". Stop calling tools now; do not rerun the same command. "
+                            "Reply with a short summary of the deliverable and finish."
+                        )
+                        await self.emit(
+                            session_id,
+                            "no_progress.nudge",
+                            {
+                                "streak": state["no_progress_nudges"],
+                                "finalize": True,
+                                "delivered": state["output_targets"],
+                            },
+                            run_id,
+                        )
+                    elif missing:
                         state["write_only"] = True
                         guard_text = (
                             "[system no-progress guard] You are repeating the same tool calls without making "
@@ -1307,24 +1349,34 @@ class AgentRuntime:
                             "create it at that exact path (create the directory first if needed). Read-only "
                             "tools are disabled until the file is written."
                         )
+                        await self.emit(
+                            session_id,
+                            "no_progress.nudge",
+                            {
+                                "streak": state["no_progress_nudges"],
+                                "missing": missing,
+                                "read_paths": len(state["read_path_counts"]),
+                            },
+                            run_id,
+                        )
                     else:
                         guard_text = (
                             "[system no-progress guard] You are repeating the same tool calls without making "
                             "progress. Do not call the same tool with the same arguments again. Use the results "
                             "you already have, finish the current step, and produce the final answer."
                         )
-                    await self.emit(
-                        session_id,
-                        "no_progress.nudge",
-                        {
-                            "streak": state["no_progress_nudges"],
-                            "missing": missing,
-                            "read_paths": len(state["read_path_counts"]),
-                        },
-                        run_id,
-                    )
+                        await self.emit(
+                            session_id,
+                            "no_progress.nudge",
+                            {
+                                "streak": state["no_progress_nudges"],
+                                "missing": [],
+                                "read_paths": len(state["read_path_counts"]),
+                            },
+                            run_id,
+                        )
                     messages.append({"role": "user", "content": guard_text})
-                    if state["no_progress_nudges"] > NO_PROGRESS_MAX:
+                    if not has_deliverable and state["no_progress_nudges"] > NO_PROGRESS_MAX:
                         if missing:
                             reason = f"no progress: deliverable not created at {target_hint} after repeated retries"
                         else:
@@ -1426,7 +1478,7 @@ class AgentRuntime:
                 ),
                 summary="read disabled by no-progress guard",
             )
-        elif NO_PROGRESS_GUARD and call.name in READONLY_TOOLS and prior >= REPEAT_TOOL_LIMIT:
+        elif NO_PROGRESS_GUARD and call.name in _DUPLICATE_TOOLS and prior >= REPEAT_TOOL_LIMIT:
             suppressed = ToolResult(
                 call_id=call.call_id,
                 name=call.name,

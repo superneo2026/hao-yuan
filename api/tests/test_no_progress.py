@@ -129,3 +129,63 @@ def test_looping_model_is_stopped_by_no_progress_guard(client, tmp_path, monkeyp
     assert final["status"] == "error"
     assert "no progress" in (final["error"] or "")
 
+
+def test_delivered_file_then_spin_finishes_done(client, tmp_path, monkeypatch):
+    from core.harness import harness_instance
+
+    workspace = tmp_path / "ws2"
+    workspace.mkdir()
+    out = workspace / "plan.html"
+
+    state = {"calls": 0}
+
+    async def fake_stream(provider, model, messages, tools=None, thinking="", strict=None):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            call = {
+                "id": "call_write",
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "arguments": json.dumps({"path": str(out), "content": "<html>ok</html>"}),
+                },
+            }
+        else:
+            # After shipping the file the model keeps re-running one command.
+            call = {
+                "id": "call_shell",
+                "type": "function",
+                "function": {
+                    "name": "run_shell",
+                    "arguments": json.dumps({"command": "echo budget"}),
+                },
+            }
+        yield {
+            "type": "message",
+            "message": {"role": "assistant", "content": "", "tool_calls": [call]},
+            "usage": {},
+            "provider": "mock",
+            "model": "mock",
+            "fallbacks": [],
+            "finish_reason": "tool_calls",
+        }
+
+    monkeypatch.setattr(harness_instance().gateway, "stream", fake_stream)
+
+    session = client.post(
+        "/api/sessions",
+        json={
+            "kind": "dev",
+            "title": "delivered then spin",
+            "workspace": str(workspace),
+            "gate_mode": "allow_all",
+        },
+    ).json()["data"]
+    client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={"content": f"write the plan to {out}"},
+    )
+    final = _wait_status(client, session["id"])
+    assert out.is_file()
+    assert final["status"] == "done"
+
