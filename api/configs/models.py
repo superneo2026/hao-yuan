@@ -18,7 +18,8 @@ _BASE_URL_DEFAULTS = {
 }
 
 _MODEL_DEFAULTS = {
-    # 第三项为默认最大输出 tokens；0 表示不指定，交给模型使用自身支持的上限。
+    # 第三项为渠道默认最大输出 tokens；0 表示未配置，请求时回退 HAOYUAN_MAX_OUTPUT（默认 32768）。
+    # 之前回退到服务商默认值（zhipu 为 8192），会把一次整页写入截断成半截 JSON。
     "deepseek": ("deepseek-flash", ["deepseek-flash", "deepseek-v4-pro"], 0, True),
     "zhipu": ("glm-5.3-flash", ["glm-5.3-flash", "glm-5.3"], 0, True),
     "mimo": ("mimo-v2.6-flash", ["mimo-v2.6-flash", "mimo-v2.6-pro"], 0, True),
@@ -95,6 +96,9 @@ class ProviderConfig:
     thinking_models: set[str] = field(default_factory=set)
     tiers: dict[str, str] = field(default_factory=dict)
     max_output_tokens: int = 0  # 0 = 不指定，交给模型使用默认上限
+    # Context window in tokens; 0 = unknown, resolve via known_context_window().
+    # Drives the compaction thresholds in core.context (see context_budget).
+    context_window: int = 0
     supports_thinking: bool = True
     supports_tools: bool = True
     supports_vision: bool = False
@@ -102,7 +106,46 @@ class ProviderConfig:
     key_source: str = "default"
 
 
-THINKING_OFF_PROVIDERS = {"zhipu"}
+# No provider is forced to "thinking off" any more. zhipu used to be listed here,
+# which made every glm run on complex plan/audit tasks execute with zero reasoning
+# (observed: 1.5 reasoning tokens per step over 1040 steps). glm-5.x handles
+# thinking + tool calls; the provider adapter falls back gracefully on HTTP 400.
+THINKING_OFF_PROVIDERS: set[str] = set()
+
+# Known context windows by model-name prefix (longest prefix wins). Only entries
+# verified against the vendor docs or observed in practice are listed; everything
+# else falls back to DEFAULT_CONTEXT_WINDOW. Per-provider override: {ENV}_CONTEXT_WINDOW.
+_KNOWN_WINDOWS: tuple[tuple[str, int], ...] = (
+    ("glm-5", 200_000),
+    ("glm-4.6", 200_000),
+    ("glm-4.5", 128_000),
+    ("glm-4.7", 128_000),
+)
+_KNOWN_WINDOWS_MAX_PREFIX = max(len(prefix) for prefix, _ in _KNOWN_WINDOWS)
+
+
+def known_context_window(model: str) -> int:
+    """Return the known context window for a model name, or 0 when unknown."""
+    from configs.configs import DEFAULT_CONTEXT_WINDOW
+
+    lowered = (model or "").strip().lower()
+    if not lowered:
+        return 0
+    for size in range(min(_KNOWN_WINDOWS_MAX_PREFIX, len(lowered)), 0, -1):
+        for prefix, window in _KNOWN_WINDOWS:
+            if len(prefix) == size and lowered.startswith(prefix):
+                return window
+    return 0
+
+
+def effective_context_window(conf: ProviderConfig | None, model: str = "") -> int:
+    """Context window for (provider, model): explicit config > known table > default."""
+    from configs.configs import DEFAULT_CONTEXT_WINDOW
+
+    explicit = int(getattr(conf, "context_window", 0) or 0)
+    if explicit > 0:
+        return explicit
+    return known_context_window(model) or DEFAULT_CONTEXT_WINDOW
 
 _LOCK = threading.RLock()
 PROVIDERS: dict[str, ProviderConfig] = {}
@@ -163,11 +206,15 @@ def _builtin(name: str) -> ProviderConfig:
     enabled = [model for model in _as_list(secrets.get_secret(f"{env}_ENABLED_MODELS", "")) if model in models]
     thinking = set(_as_list(secrets.get_secret(f"{env}_THINKING_MODELS", "")))
     if not thinking:
-        thinking = {default_model} if name in ("deepseek", "mimo") else set()
+        thinking = {default_model} if name in ("deepseek", "mimo", "zhipu") else set()
     try:
         max_output = int(secrets.get_secret(f"{env}_MAX_OUTPUT", str(default_max)) or default_max)
     except ValueError:
         max_output = default_max
+    try:
+        context_window = int(secrets.get_secret(f"{env}_CONTEXT_WINDOW", "0") or 0)
+    except ValueError:
+        context_window = 0
     api_key = secrets.get_secret(f"{env}_API_KEY", "")
     return ProviderConfig(
         name=name,
@@ -179,6 +226,7 @@ def _builtin(name: str) -> ProviderConfig:
         thinking_models=thinking,
         tiers={tier: default_model for tier in ("lite", "standard", "pro")} | {tier: models[-1] for tier in ("pro",)},
         max_output_tokens=max_output,
+        context_window=max(0, context_window),
         supports_thinking=_truthy(secrets.get_secret(f"{env}_SUPPORTS_THINKING", ""), default_thinking),
         builtin=True,
         key_source=secrets.secret_source(f"{env}_API_KEY") if api_key else "default",
@@ -230,6 +278,13 @@ def _apply_nested(conf: ProviderConfig, raw: dict[str, Any]) -> ProviderConfig:
         if max_output not in (None, ""):
             try:
                 conf.max_output_tokens = max(0, int(max_output))
+            except (TypeError, ValueError):
+                pass
+    if "context_window" in raw or "contextWindow" in raw:
+        context_window = raw.get("context_window", raw.get("contextWindow"))
+        if context_window not in (None, ""):
+            try:
+                conf.context_window = max(0, int(context_window))
             except (TypeError, ValueError):
                 pass
     tiers = raw.get("tiers")
@@ -473,6 +528,8 @@ def describe_config() -> dict:
                 "supports_vision": conf.supports_vision,
                 "thinking_models": sorted(conf.thinking_models),
                 "max_output_tokens": conf.max_output_tokens,
+                "context_window": conf.context_window,
+                "effective_context_window": effective_context_window(conf, conf.default_model),
                 "tiers": conf.tiers,
             }
         )
@@ -509,6 +566,7 @@ def _normalize_payload(item: dict[str, Any]) -> dict[str, Any]:
         ),
         "thinking_models": _as_list(item.get("thinking_models") or item.get("thinkingModels")),
         "max_output_tokens": item.get("max_output_tokens", item.get("maxOutputTokens")),
+        "context_window": item.get("context_window", item.get("contextWindow")),
         "tiers": item.get("tiers") if isinstance(item.get("tiers"), dict) else {},
     }
 
@@ -595,6 +653,11 @@ def update_config(
                     data[f"{env}_MAX_OUTPUT"] = str(max(0, int(item["max_output_tokens"])))
                 except (TypeError, ValueError):
                     pass
+            if item["context_window"] is not None:
+                try:
+                    data[f"{env}_CONTEXT_WINDOW"] = str(max(0, int(item["context_window"])))
+                except (TypeError, ValueError):
+                    pass
             # 内置渠道以扁平字段为准，移除可能残留的嵌套覆盖，避免两份配置不一致。
             nested.pop(name, None)
             continue
@@ -617,6 +680,11 @@ def update_config(
         if item["max_output_tokens"] is not None:
             try:
                 entry["max_output_tokens"] = max(0, int(item["max_output_tokens"]))
+            except (TypeError, ValueError):
+                pass
+        if item["context_window"] is not None:
+            try:
+                entry["context_window"] = max(0, int(item["context_window"]))
             except (TypeError, ValueError):
                 pass
         if item["tiers"]:

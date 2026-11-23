@@ -21,12 +21,18 @@ from configs.configs import (
     CHECKPOINT_EVERY_STEPS,
     CONTEXT_PACK_MAX_CHARS,
     DEFAULT_AGENT,
+    DELIVERY_AUDIT_NUDGE,
     DELIVERY_DEADLINE_STEPS,
+    DELIVERY_MIN_REFERENCE_RATIO,
+    DELIVERY_MIN_VISIBLE_CHARS,
+    EXPLORATION_MAX_PROMPT_TOKENS,
+    EXPLORATION_MAX_SEC,
     IDEMPOTENT_TOOLS,
     LITE_MODE,
     LITE_MULTIPHASE_HINTS,
     LITE_SINGLE_FILE_MAX_PATHS,
     LITE_TOOL_SET,
+    LOOP_PATH_SUPPRESS_LIMIT,
     NO_PROGRESS_GUARD,
     NO_PROGRESS_MAX,
     NO_PROGRESS_STREAK,
@@ -34,10 +40,14 @@ from configs.configs import (
     REPEAT_TOOL_LIMIT,
     REPAIR_LOOP_ENABLED,
     REPO_MAP_ENABLED,
+    RUN_MAX_PROMPT_TOKENS,
     SUBAGENT_ENABLED,
     SUBAGENT_MAX_STEPS,
     SUBAGENT_SUMMARY_CHARS,
     SUBAGENT_TIMEOUT_SEC,
+    TEXT_PREFIX_CHARS,
+    TEXT_PREFIX_REPEAT_LIMIT,
+    TEXT_PREFIX_WINDOW,
     TOOL_RESULT_CONTEXT_CHARS,
     TOOL_RESULT_CONTEXT_MARK,
     TOOL_SCHEMA_TRIM,
@@ -50,6 +60,7 @@ from configs.configs import (
 from configs.models import PROVIDERS, THINKING_OFF_PROVIDERS, effective_default_model, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
 from core.instructions import addition_message, classify_instruction, interrupt_message, interrupt_notice
+from harness import deliverable as deliverable_check
 from harness import durability, reference, repair, repoindex, sysinfo, vision
 from harness.skills import SkillLibrary
 
@@ -139,8 +150,12 @@ CHAT_CONTEXT_HINTS = (
 READONLY_TOOLS = (
     "read_file", "read_range", "search_symbol", "glob", "grep", "list_dir", "project_scan",
     "baseline_audit", "doc_consistency", "web_screenshot", "describe_image",
-    "reference_digest", "reference_compare", "web_audit",
+    "reference_digest", "reference_compare", "web_audit", "web_fetch",
 )
+# Tools whose only argument of interest is a file path; loop detection counts
+# these per path instead of per exact argument (shifting start/end by a few lines
+# used to produce a fresh fingerprint on every call and evade the guard).
+_PATH_READ_TOOLS = frozenset({"read_file", "read_range", "reference_digest", "reference_compare", "list_dir"})
 # Read-only tools plus shell commands are safe to de-duplicate: re-running the exact
 # same command with the same args yields nothing new (observed: the model re-running
 # one `python -c` budget calculation 20+ times).
@@ -193,6 +208,34 @@ _DOC_TEXT_RE = re.compile(r"简历|resume|\bcv\b|求职|报告|提案|文档|自
 _DEBUG_TEXT_RE = re.compile(r"修复|调试|报错|失败|排查|\bbug\b|\berror\b|pytest|测试不过|regression|failing", re.I)
 
 
+_DOC_TARGET_EXTS = (".html", ".htm", ".md")
+
+
+def wants_document_workflow(text: str, write_required: bool, kind: str, output_targets: list[str]) -> bool:
+    """True for plan/report/page deliverables, false for code changes.
+
+    Such tasks need the document workflow and the research protocol, not the
+    coding protocol; the request is about producing a document, not changing
+    repository code.
+    """
+    if not write_required or kind == "general" or is_casual_chat(text or ""):
+        return False
+    if kind == "plan":
+        return True
+    if any(hint in (text or "") for hint in CODE_WORK_INTENT) or _CODE_RE.search(text or ""):
+        return False
+    research = bool(_RESEARCH_HINTS.search(text or "")) or wants_web_tools(text or "")
+    for target in output_targets:
+        lowered = target.lower()
+        if lowered.endswith(_DOC_TARGET_EXTS):
+            return True
+        # A bare directory is a document target only for plan/report/page work;
+        # "write the script into D:\proj\scripts" must stay a coding task.
+        if os.path.isdir(target) and research:
+            return True
+    return research and wants_web_tools(text or "")
+
+
 def relevant_skills(skills: list, text: str) -> list:
     """Drop domain skills that BM25 pulled in on incidental keyword overlap.
 
@@ -222,10 +265,11 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Locate before editing: use search_symbol, grep, read_range, then apply the smallest possible patch.
 - Inspect files with the dedicated tools (read_file/read_range/grep/glob/list_dir/search_symbol), not with shell cat/grep/find/head: they are faster, stay inside the workspace, and return cleaner context. Use run_shell mainly for builds, tests, git and commands that have no dedicated tool, and avoid scanning large binaries or sleeping to poll.
 - Prefer apply_patch / edit_file / multi_edit over write_file. Never rewrite a whole file for a small change.
-- Large files: model output is capped, so never emit an entire big file in one tool call. Create it with write_file using a small skeleton, then append the remaining sections in chunks (<= 150 lines each) with apply_patch or edit_file. If a tool result says the arguments were truncated, split the write instead of retrying the same call.
+- Large files: model output is capped, so never emit an entire big file in one tool call. Create it with write_file using a small skeleton, then append the remaining sections in chunks (<= 150 lines each) with apply_patch or edit_file. If a tool result says the arguments were truncated, split the write instead of retrying the same call. If a tool result says "[auto-continued]", the complete prefix was already saved to disk: keep appending from the reported line and never re-send or rewrite the saved part.
 - Batch independent tool calls in the same assistant message. Reads can run in parallel; writes run in order.
 - Verify code changes: run the project's tests/lint/build once after the final code edit. Documentation-only changes do not require a test run.
 - Use the task tool for broad read-only reconnaissance when raw tool output would flood the context. It returns only conclusions.
+- Use web_fetch to verify external facts you cannot find in the workspace (licenses, model specs, dataset sizes, API docs). If a fetch fails, label the fact as unverified instead of guessing.
 - Use plan_task for multi-step work and update_plan as you progress.
 - Match effort to size: a one-symbol fix needs no plan and no whole-repo scan; a multi-file feature needs a short plan and a checklist.
 - Budget exploration by task type. For a single-symbol fix, commit after roughly 8 reads/searches. For a plan, report, audit or benchmark, read the baseline evidence set first (README, model card, changelog, every stage summary, data-quality/license registry and the real pipeline scripts); do not start writing until the evidence table is complete. Never re-read an unchanged range you already have.
@@ -259,6 +303,17 @@ RESEARCH_RULES = """# Research and evaluation protocol (plans, reports, audits, 
 - Use baseline_audit (baseline directory) to pull measured facts, and doc_consistency (plan file + optional baseline) before finishing. Fix every contradiction instead of hiding it in prose.
 - Before finalizing, run a cross-section consistency check: the same entity's numbers and attributes must agree everywhere.
 - In the final report, list measured numbers with their source, and label planned numbers explicitly.
+"""
+
+DOCUMENT_RULES = """# Document delivery workflow (plans, reports, audits, reference-styled pages)
+Follow the steps in order and never loop back to an earlier one:
+1. Reference: call reference_digest ONCE per reference file; use read_range only for blocks the digest does not cover. After that the reference is known: do not re-read it, and do not re-check the output directory state.
+2. Evidence: call baseline_audit once per baseline project, then read the specific report files it points to. Record every number with its source path. Use web_fetch for external facts you cannot find locally; when a fetch fails, label the fact "unverified" instead of guessing.
+3. Decide the plan (architecture, data, stages, budget, gates) in your reasoning before writing anything.
+4. Compute budgets with one run_shell python snippet. If the numbers change the plan, update the plan; do not rewrite the snippet more than twice.
+5. Write the skeleton: one write_file with the full <style> block copied verbatim from the reference, both navs listing every section id, and the header. Do NOT write </body></html> yet. Then append the sections one at a time (<= 150 lines per apply_patch/edit_file), in order, and add the closing tags only after the last section.
+6. Validate: run web_audit (with the reference path) and doc_consistency on the finished page and fix every dead anchor and contradiction. The harness refuses to mark the task done while navigation anchors have no target, the page has no closing tag, or its visible text is a fraction of the reference's length.
+7. Finish with a short summary. Do not end the turn to "confirm" anything; the task is unattended.
 """
 
 
@@ -394,8 +449,10 @@ def needs_write(text: str, qa: bool, kind: str, workspace: bool) -> bool:
 
 
 _OUTPUT_HINT_RE = re.compile(
+    # The path must sit in the same clause as the hint keyword: "输出…方案，开发项目的代码目录路径：D:\x"
+    # used to register the code directory as a second deliverable.
     r"(?:输出|保存|写到|写入|生成|交付|放到|存到|放在|导出|output|save|write|deliver)"
-    r"[^\n]{0,40}?[:：]?\s*"
+    r"[^\n，,。；;]{0,40}?"
     r"((?:[A-Za-z]:[\\/]|/)[^\s\"'<>|，。；、）】]+)",
     re.I,
 )
@@ -457,13 +514,14 @@ def extract_output_targets(text: str, workspace: str) -> list[str]:
 
 def output_target_ready(target: str, since: float) -> bool:
     if os.path.isdir(target):
-        for root, _dirs, files in os.walk(target):
-            for name in files:
-                try:
-                    if os.path.getmtime(os.path.join(root, name)) >= since:
-                        return True
-                except OSError:
-                    continue
+        # Scratch files (the agent's own .tmp_*.py arithmetic helpers) must not
+        # count as the deliverable; only real documents/files do.
+        for path in deliverable_check.deliverable_files(target):
+            try:
+                if os.path.getmtime(path) >= since:
+                    return True
+            except OSError:
+                continue
         return False
     if os.path.isfile(target):
         try:
@@ -484,6 +542,148 @@ def _tool_fingerprint(call: ToolCall) -> str:
 def _call_path(call: ToolCall) -> str:
     path = (call.arguments or {}).get("path")
     return str(path) if path else ""
+
+
+def _normalize_path(path: str, workspace: str) -> str:
+    try:
+        full = path if os.path.isabs(path) else os.path.join(workspace or "", path)
+        return os.path.normcase(os.path.normpath(full))
+    except (TypeError, ValueError):
+        return path
+
+
+# Reads of the same path are counted per path, not per exact arguments.
+def _path_fingerprint(call: ToolCall) -> str:
+    if call.name in _PATH_READ_TOOLS:
+        path = _call_path(call)
+        if path:
+            return f"{call.name}:{os.path.normcase(os.path.normpath(path))}"
+    return ""
+
+
+def announcement_prefix(text: str) -> str:
+    """Normalized head of an assistant announcement, for repeat detection."""
+    normalized = re.sub(r"\s+", " ", (text or "").strip()).lower()
+    normalized = re.sub(r"[^\w\u4e00-\u9fff ]", "", normalized)
+    return normalized[:TEXT_PREFIX_CHARS]
+
+
+_SALVAGE_MIN_CHARS = 400
+
+
+def _decode_partial_json_string(body: str) -> str:
+    """Decode a JSON string literal that was cut off before its closing quote."""
+    out: list[str] = []
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch == '"':
+            break
+        if ch == "\\":
+            i += 1
+            if i >= n:
+                break
+            esc = body[i]
+            if esc == "n":
+                out.append("\n")
+            elif esc == "t":
+                out.append("\t")
+            elif esc == "r":
+                out.append("\r")
+            elif esc in ('"', "\\", "/"):
+                out.append(esc)
+            elif esc == "b":
+                out.append("\b")
+            elif esc == "f":
+                out.append("\f")
+            elif esc == "u" and i + 4 < n:
+                try:
+                    out.append(chr(int(body[i + 1 : i + 5], 16)))
+                    i += 4
+                except ValueError:
+                    out.append(esc)
+            else:
+                out.append(esc)
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def salvage_truncated_write(name: str, raw: str) -> dict[str, Any] | None:
+    """Recover path + complete-line prefix from a write_file call cut by the output limit.
+
+    A single write_file of a full HTML page exceeded the provider's default
+    8192-token ceiling; the JSON never closed and the whole generation was
+    thrown away. Salvaging the prefix turns that waste into progress and gives
+    the model an exact line to resume from.
+    """
+    if name != "write_file" or not raw:
+        return None
+    match = re.search(r'"path"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+    if not match:
+        return None
+    try:
+        path = json.loads('"' + match.group(1) + '"')
+    except ValueError:
+        return None
+    content = re.search(r'"content"\s*:\s*"', raw[match.end() :])
+    if not content:
+        return None
+    text = _decode_partial_json_string(raw[match.end() + content.end() :])
+    lines = text.split("\n")
+    if len(lines) > 1:
+        lines = lines[:-1]  # the last line is almost certainly cut mid-way
+    complete = "\n".join(lines)
+    if complete and not complete.endswith("\n"):
+        complete += "\n"
+    if len(complete) < _SALVAGE_MIN_CHARS:
+        return None
+    return {"path": path, "content": complete, "lines": complete.count("\n")}
+
+
+def delivery_ledger(state: dict[str, Any]) -> str:
+    """Harness-managed task state injected after every compaction.
+
+    The LLM-written summary is prose and loses precise state; this block lists
+    deliverable files, how far each got, and what remains, so the agent resumes
+    without re-reading its own output.
+    """
+    lines: list[str] = []
+    for target in state.get("output_targets") or []:
+        files = deliverable_check.deliverable_files(target)
+        if not files:
+            lines.append(f"- MISSING {target}: not written yet")
+            continue
+        for path in files[:4]:
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if path.lower().endswith(deliverable_check.HTML_EXTS):
+                report = deliverable_check.html_report(path)
+                lines.append(
+                    f"- WRITTEN {path}: {size} bytes, {report.get('line_count', 0)} lines, "
+                    f"{report.get('visible_chars', 0)} visible chars, "
+                    f"{report.get('resolved_anchors', 0)}/{report.get('nav_anchors', 0)} nav anchors resolved, "
+                    f"closed={report.get('closed', False)}"
+                )
+                if report.get("dead_anchors"):
+                    listed = ", ".join(f"#{anchor}" for anchor in report["dead_anchors"][:12])
+                    lines.append(f"    sections still missing (anchors without target): {listed}")
+                if not report.get("closed"):
+                    lines.append("    document is not closed: continue appending from the end of the file")
+            else:
+                lines.append(f"- WRITTEN {path}: {size} bytes")
+    written = state.get("written_paths") or []
+    if written:
+        lines.append("- files written this run (oldest first): " + ", ".join(Path(p).name for p in written[-8:]))
+    refs = state.get("reference_paths") or []
+    if refs:
+        lines.append("- reference files (already digested; do not re-read): " + ", ".join(Path(p).name for p in refs))
+    lines.append(f"- step {state.get('total_steps', 0)}; next: write the missing sections / fix the listed issues, validate, finish")
+    return "\n".join(lines)
 
 
 def missing_deliverables(state: dict[str, Any]) -> list[str]:
@@ -833,6 +1033,12 @@ class AgentRuntime:
             except Exception:
                 reference_paths = []
                 reference_text = ""
+        output_targets = extract_output_targets(user_text, workspace) if write_required else []
+        doc_mode = wants_document_workflow(user_text, write_required, kind, output_targets)
+        if doc_mode:
+            # Repository playbooks are noise for a document deliverable and used to
+            # take up most of the (tiny) context budget.
+            matched = [skill for skill in matched if getattr(skill, "name", "") not in ("dev-loop", "debug-loop")]
         system = self._system_prompt(
             session,
             agent,
@@ -849,6 +1055,7 @@ class AgentRuntime:
             context_pack_text,
             reference_text,
             research=bool(_RESEARCH_HINTS.search(user_text)),
+            doc_mode=doc_mode,
         )
         contract = budget_contract(user_text)
         if contract:
@@ -909,7 +1116,7 @@ class AgentRuntime:
             "reference_outputs": [],
             "reference_drift": "",
             "fidelity_nudges": 0,
-            "output_targets": extract_output_targets(user_text, workspace) if write_required else [],
+            "output_targets": output_targets,
             "delivery_since": time.time(),
             "delivery_start_step": 0,
             "delivered_at_step": None,
@@ -919,6 +1126,12 @@ class AgentRuntime:
             "write_only": False,
             "stuck_streak": 0,
             "no_progress_nudges": 0,
+            "audit_nudges": 0,
+            "prompt_tokens_total": 0,
+            "last_prompt_tokens": 0,
+            "text_prefixes": [],
+            "written_paths": [],
+            "explore_budget_hit": False,
             "strict_route": strict,
         }
         max_total = AGENT_MAX_TOTAL_STEPS
@@ -959,6 +1172,51 @@ class AgentRuntime:
             state["step"] += 1
             state["total_steps"] += 1
 
+            # Prompt-token budgets: a looping model once burned 67M prompt tokens
+            # in 38 minutes without writing anything.
+            if RUN_MAX_PROMPT_TOKENS and state["prompt_tokens_total"] >= RUN_MAX_PROMPT_TOKENS:
+                message = f"prompt token budget exhausted ({state['prompt_tokens_total']} tokens, {state['total_steps']} steps)"
+                await self.emit(session_id, "error", {"message": message}, run_id)
+                await self.storage.update_session(session_id, status="error", error=message[:500])
+                await self.storage.finish_run(run_id, "error", error=message, step_count=state["total_steps"])
+                return
+            if (
+                NO_PROGRESS_GUARD
+                and write_required
+                and not state["write_only"]
+                and not state["explore_budget_hit"]
+                and missing_deliverables(state)
+                and (
+                    time.time() - state["started_at"] >= EXPLORATION_MAX_SEC
+                    or (EXPLORATION_MAX_PROMPT_TOKENS and state["prompt_tokens_total"] >= EXPLORATION_MAX_PROMPT_TOKENS)
+                )
+            ):
+                # Exploration has cost enough; switch to write-only so the agent
+                # ships what it has instead of reading for another hour.
+                state["explore_budget_hit"] = True
+                state["write_only"] = True
+                await self.emit(
+                    session_id,
+                    "explore.budget",
+                    {
+                        "elapsed_s": int(time.time() - state["started_at"]),
+                        "prompt_tokens": state["prompt_tokens_total"],
+                        "step": state["total_steps"],
+                    },
+                    run_id,
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[system exploration budget] The exploration budget (wall time / prompt tokens) is "
+                            "exhausted and the deliverable does not exist yet. Read-only tools are now disabled. "
+                            "Write the deliverable now from what you already know; label unknowns as assumptions "
+                            "instead of reading further."
+                        ),
+                    }
+                )
+
             cursor, injected = await self._inject_pending(session_id, messages, cursor)
             if injected:
                 await self.emit(
@@ -969,7 +1227,13 @@ class AgentRuntime:
                 )
 
             session = await self.storage.get_session(session_id) or session
-            compaction = await self.context.midturn_compact(session, messages, state["total_steps"])
+            compaction = await self.context.midturn_compact(
+                session,
+                messages,
+                state["total_steps"],
+                last_prompt_tokens=state["last_prompt_tokens"],
+                ledger_text=delivery_ledger(state),
+            )
             if compaction.get("compacted"):
                 await self.emit(session_id, "context.compact", compaction, run_id)
 
@@ -1006,6 +1270,26 @@ class AgentRuntime:
             content = message.get("content") or ""
             reasoning = message.get("reasoning_content") or ""
             raw_calls = message.get("tool_calls") or []
+            if usage:
+                state["prompt_tokens_total"] += int(usage.get("prompt_tokens") or 0)
+                state["last_prompt_tokens"] = int(usage.get("prompt_tokens") or 0)
+            # "I'll start by checking the current state of the deliverable directory"
+            # repeated 30 times in one run while the tool args kept varying: count
+            # repeated announcements as no progress even when every call is new.
+            repeated_announcement = False
+            prefix = announcement_prefix(content)
+            if prefix:
+                history = state["text_prefixes"]
+                history.append(prefix)
+                del history[:-TEXT_PREFIX_WINDOW]
+                if history.count(prefix) >= TEXT_PREFIX_REPEAT_LIMIT:
+                    repeated_announcement = True
+                    await self.emit(
+                        session_id,
+                        "loop.announcement",
+                        {"prefix": prefix[:60], "count": history.count(prefix), "step": state["total_steps"]},
+                        run_id,
+                    )
             stored_calls = []
             parsed_calls: list[ToolCall] = []
             for index, raw in enumerate(raw_calls):
@@ -1017,6 +1301,22 @@ class AgentRuntime:
                     arguments = {}
                 if not isinstance(arguments, dict):
                     arguments = {"value": arguments}
+                if isinstance(arguments.get("_raw"), str) and finish_reason == "length":
+                    recovered = salvage_truncated_write(function.get("name") or "", arguments["_raw"])
+                    if recovered:
+                        # Keep the complete prefix instead of discarding an
+                        # 8k-token generation; the executor writes it as usual.
+                        arguments = {
+                            "path": recovered["path"],
+                            "content": recovered["content"],
+                            "_salvaged": {"lines": recovered["lines"], "chars": len(recovered["content"])},
+                        }
+                        await self.emit(
+                            session_id,
+                            "write.salvaged",
+                            {"path": recovered["path"], "lines": recovered["lines"], "chars": len(recovered["content"])},
+                            run_id,
+                        )
                 stored_calls.append(
                     {
                         "id": call_id,
@@ -1177,6 +1477,33 @@ class AgentRuntime:
                         }
                     )
                     continue
+                if missing_outputs:
+                    reason = "deliverable not created at: " + ", ".join(missing_outputs)
+                    await self.emit(session_id, "error", {"message": reason}, run_id)
+                    await self.storage.update_session(session_id, status="error", error=reason[:500])
+                    await self.storage.finish_run(run_id, "error", error=reason, step_count=state["total_steps"])
+                    return
+                if state["output_targets"]:
+                    # Exists is not complete: a page with dead anchors or a
+                    # fraction of the reference's length goes back for fixes.
+                    issues = self._deliverable_issues(session, state)
+                    if issues:
+                        if state["audit_nudges"] < DELIVERY_AUDIT_NUDGE:
+                            state["audit_nudges"] += 1
+                            state["write_only"] = False
+                            await self.emit(
+                                session_id,
+                                "delivery.audit",
+                                {"issues": issues, "nudge": state["audit_nudges"], "step": state["total_steps"]},
+                                run_id,
+                            )
+                            messages.append({"role": "user", "content": self._audit_nudge_text(issues)})
+                            continue
+                        reason = "deliverable incomplete: " + "; ".join(issues)[:600]
+                        await self.emit(session_id, "error", {"message": reason}, run_id)
+                        await self.storage.update_session(session_id, status="error", error=reason[:500])
+                        await self.storage.finish_run(run_id, "error", error=reason, step_count=state["total_steps"])
+                        return
                 if (
                     audit
                     and not state["spec_audit"]
@@ -1217,6 +1544,7 @@ class AgentRuntime:
             # Record call fingerprints BEFORE executing: duplicates can then be
             # suppressed, and the guard can distinguish new work from repetition.
             call_prior: dict[str, int] = {}
+            suppressed_paths: dict[str, int] = {}
             new_fingerprints = 0
             new_reads = 0
             for call in parsed_calls:
@@ -1224,21 +1552,45 @@ class AgentRuntime:
                 prior = state["tool_fp_counts"].get(fingerprint, 0)
                 call_prior[call.call_id] = prior
                 state["tool_fp_counts"][fingerprint] = prior + 1
-                if prior == 0:
-                    new_fingerprints += 1
+                overused = False
                 path = _call_path(call)
                 if path and call.name in READONLY_TOOLS:
-                    seen_path = state["read_path_counts"].get(path, 0)
-                    state["read_path_counts"][path] = seen_path + 1
+                    # Count per resolved path: the same file was read as both
+                    # "git/x/index.html" and "D:\Env\git\x\index.html" in one run.
+                    key = _normalize_path(path, workspace)
+                    seen_path = state["read_path_counts"].get(key, 0)
+                    state["read_path_counts"][key] = seen_path + 1
                     if seen_path == 0:
                         new_reads += 1
+                    if NO_PROGRESS_GUARD and seen_path + 1 > LOOP_PATH_SUPPRESS_LIMIT:
+                        overused = True
+                        suppressed_paths[call.call_id] = seen_path + 1
+                        await self.emit(
+                            session_id,
+                            "loop.path_suppressed",
+                            {"path": path, "reads": seen_path + 1, "step": state["total_steps"]},
+                            run_id,
+                        )
+                if prior == 0 and not overused:
+                    new_fingerprints += 1
             state["_call_prior"] = call_prior
+            state["_suppressed_paths"] = suppressed_paths
 
             results = await self._execute_calls(session, parsed_calls, run_id, state)
             for call in parsed_calls:
                 result = results.get(call.call_id)
                 if result is None:
                     continue
+                salvaged = (call.arguments or {}).get("_salvaged")
+                if salvaged and result.ok:
+                    result.result = (
+                        f"[auto-continued] The write_file call hit the model's output length limit and its JSON "
+                        f"was cut off. The complete prefix ({salvaged.get('lines')} lines) was saved to "
+                        f"{call.arguments.get('path')}. Continue by appending the next section with apply_patch or "
+                        "edit_file (<= 150 lines per call). Do not rewrite the file from the beginning and do not "
+                        "re-send the saved lines."
+                    )
+                    result.summary = f"truncated write salvaged: {salvaged.get('lines')} lines saved"
                 content_for_context = self._tool_context_text(result)
                 await self.storage.add_message(
                     session_id,
@@ -1256,6 +1608,9 @@ class AgentRuntime:
                         messages.append({"role": "user", "content": attachment})
                 if result.ok and call.name in ("write_file", "edit_file", "apply_patch", "multi_edit"):
                     path = str(call.arguments.get("path") or "")
+                    full = path if os.path.isabs(path) else os.path.join(workspace, path)
+                    if os.path.isfile(full) and full not in state["written_paths"]:
+                        state["written_paths"].append(full)
                     if Path(path).suffix.lower() in VERIFY_CODE_EXTS:
                         state["last_write_step"] = state["total_steps"]
                     if Path(path).suffix.lower() in (".html", ".htm") and state["reference_paths"]:
@@ -1292,8 +1647,9 @@ class AgentRuntime:
                     # counts as progress (temp scripts and suppressed reads do not).
                     made_progress = not missing
                 else:
-                    made_progress = bool(wrote or new_reads) or (
-                        bool(new_fingerprints) and not path_overused
+                    made_progress = bool(wrote) or (
+                        (bool(new_reads) or (bool(new_fingerprints) and not path_overused))
+                        and not repeated_announcement
                     )
                 if made_progress:
                     state["stuck_streak"] = 0
@@ -1315,6 +1671,29 @@ class AgentRuntime:
                             state["total_steps"] - state["delivered_at_step"]
                         ) >= NO_PROGRESS_STREAK
                         if state["no_progress_nudges"] >= 2 and grace:
+                            issues = self._deliverable_issues(session, state)
+                            if issues:
+                                # Exists is not complete. Send it back for the
+                                # missing sections; a second failure is an error,
+                                # never a "deliverable created" success.
+                                if state["audit_nudges"] < DELIVERY_AUDIT_NUDGE:
+                                    state["audit_nudges"] += 1
+                                    state["write_only"] = False
+                                    await self.emit(
+                                        session_id,
+                                        "delivery.audit",
+                                        {"issues": issues, "nudge": state["audit_nudges"], "step": state["total_steps"]},
+                                        run_id,
+                                    )
+                                    messages.append({"role": "user", "content": self._audit_nudge_text(issues)})
+                                    continue
+                                reason = "deliverable incomplete: " + "; ".join(issues)[:600]
+                                await self.emit(session_id, "error", {"message": reason}, run_id)
+                                await self.storage.update_session(session_id, status="error", error=reason[:500])
+                                await self.storage.finish_run(
+                                    run_id, "error", error=reason, step_count=state["total_steps"]
+                                )
+                                return
                             summary = "deliverable created: " + delivered_hint
                             if CHECKPOINT_ENABLED:
                                 await durability.clear_checkpoints(self.storage, session_id)
@@ -1330,6 +1709,12 @@ class AgentRuntime:
                             + delivered_hint + ". Stop calling tools now; do not rerun the same command. "
                             "Reply with a short summary of the deliverable and finish."
                         )
+                        if repeated_announcement:
+                            guard_text += (
+                                " You have announced the same step (\""
+                                + prefix[:60]
+                                + "\") several times in a row; announcing is not progress."
+                            )
                         await self.emit(
                             session_id,
                             "no_progress.nudge",
@@ -1467,7 +1852,18 @@ class AgentRuntime:
         started = time.monotonic()
         prior = (state.get("_call_prior") or {}).get(call.call_id, 0)
         suppressed: ToolResult | None = None
-        if NO_PROGRESS_GUARD and state.get("write_only") and call.name in READONLY_TOOLS:
+        path_reads = (state.get("_suppressed_paths") or {}).get(call.call_id)
+        if NO_PROGRESS_GUARD and path_reads:
+            # Same file read LOOP_PATH_SUPPRESS_LIMIT times already (with varying
+            # ranges): answer with an authoritative digest instead of more bytes.
+            suppressed = ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                ok=True,
+                result=self._loop_digest(session, call, int(path_reads), state),
+                summary="path over-read; digest returned",
+            )
+        elif NO_PROGRESS_GUARD and state.get("write_only") and call.name in READONLY_TOOLS:
             suppressed = ToolResult(
                 call_id=call.call_id,
                 name=call.name,
@@ -1562,8 +1958,77 @@ class AgentRuntime:
         }
         text = json.dumps(payload, ensure_ascii=False, default=str)
         if len(text) > TOOL_RESULT_CONTEXT_CHARS:
-            text = text[:TOOL_RESULT_CONTEXT_CHARS] + TOOL_RESULT_CONTEXT_MARK
+            # Cut at a line boundary when possible so the model never sees half a line.
+            cut = text.rfind("\\n", TOOL_RESULT_CONTEXT_CHARS // 2, TOOL_RESULT_CONTEXT_CHARS)
+            if cut <= 0:
+                cut = TOOL_RESULT_CONTEXT_CHARS
+            total = len(text)
+            text = text[:cut] + TOOL_RESULT_CONTEXT_MARK.replace(
+                "re-read the precise range if needed",
+                f"showed {cut} of {total} chars; re-read the precise range if needed",
+            )
         return text
+
+    def _loop_digest(self, session: dict[str, Any], call: ToolCall, reads: int, state: dict[str, Any]) -> str:
+        workspace = session.get("workspace") or ""
+        path = _call_path(call)
+        full = path if os.path.isabs(path) else os.path.join(workspace, path)
+        if not os.path.isfile(full):
+            return f"[loop guard] {path} was read {reads} times in this run and does not exist. Stop reading it."
+        deliverables = {
+            os.path.normcase(os.path.normpath(item))
+            for target in state.get("output_targets") or []
+            for item in deliverable_check.deliverable_files(target)
+        }
+        if os.path.normcase(os.path.normpath(full)) in deliverables:
+            # Re-reading its own half-finished output was the dominant loop: give
+            # the precise state instead of the bytes.
+            return (
+                f"[loop guard] {path} is your own deliverable and has been read {reads} times; further reads "
+                "are suppressed. Authoritative state:\n" + delivery_ledger(state)
+            )
+        if Path(full).suffix.lower() in (".html", ".htm", ".css", ".svg", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte"):
+            try:
+                body = reference.digest(full, 9000)
+            except Exception as exc:
+                body = f"(digest failed: {type(exc).__name__}: {exc})"
+        else:
+            try:
+                raw = Path(full).read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                return f"[loop guard] {path}: cannot read ({exc}). Stop reading it."
+            body = raw[:6000] + ("\n...[clipped at 6000 chars]" if len(raw) > 6000 else "")
+        return (
+            f"[loop guard] {path} has already been read {reads} times in this run; further reads are suppressed. "
+            "Use the digest below together with what you already have, and move on to producing the deliverable.\n\n"
+            + body
+        )
+
+    def _deliverable_issues(self, session: dict[str, Any], state: dict[str, Any]) -> list[str]:
+        issues: list[str] = []
+        for target in state.get("output_targets") or []:
+            # Only the newest document per target is the deliverable; stale drafts
+            # and side files must not block completion.
+            for path in deliverable_check.main_document(deliverable_check.deliverable_files(target)):
+                found = deliverable_check.completeness_issues(
+                    path,
+                    reference_paths=state.get("reference_paths") or [],
+                    min_visible_chars=DELIVERY_MIN_VISIBLE_CHARS,
+                    min_reference_ratio=DELIVERY_MIN_REFERENCE_RATIO,
+                )
+                issues.extend(f"{Path(path).name}: {item}" for item in found)
+        return issues[:8]
+
+    @staticmethod
+    def _audit_nudge_text(issues: list[str]) -> str:
+        listed = "\n".join(f"- {item}" for item in issues)
+        return (
+            "[system delivery audit] The deliverable exists but is NOT complete:\n"
+            + listed
+            + "\nFix every item now: append the missing sections in order (<= 150 lines per apply_patch/edit_file), "
+            "close the document, and make every navigation anchor point at an existing id. Do not re-read the "
+            "reference or the output directory; use what you already have. Then reply with a short summary."
+        )
 
     async def _inject_pending(
         self, session_id: str, messages: list[dict[str, Any]], cursor: int
@@ -1757,7 +2222,7 @@ class AgentRuntime:
                         {
                             "role": "tool",
                             "tool_call_id": call.call_id,
-                            "content": body[:6000],
+                            "content": body[:TOOL_RESULT_CONTEXT_CHARS],
                         }
                     )
                     if result.ok and body:
@@ -1857,6 +2322,7 @@ class AgentRuntime:
         context_pack_text: str = "",
         reference_text: str = "",
         research: bool = False,
+        doc_mode: bool = False,
     ) -> str:
         workspace = session.get("workspace") or ""
         parts = [SYSTEM_RULES]
@@ -1895,15 +2361,18 @@ class AgentRuntime:
                 "only when no reference and no target path are given. Include executive summary, KPIs, sections, tables, "
                 "risks, milestones, and budget. Keep the document self-contained.\n"
             )
+        if doc_mode:
+            parts.append("\n" + DOCUMENT_RULES)
         if kind in ("dev", "coding") and workspace and not qa:
-            parts.append(
-                "\n# Coding protocol\n"
-                "1. Inspect the project (project_scan / list_dir / repo map) before editing.\n"
-                "2. Locate symbols precisely with search_symbol and read_range.\n"
-                "3. Apply minimal patches; never rewrite a file unless it is new.\n"
-                "4. After code edits, run the relevant verification command once.\n"
-                "5. Finish with a short summary of files changed, verification result, and any remaining risk.\n"
-            )
+            if not doc_mode:
+                parts.append(
+                    "\n# Coding protocol\n"
+                    "1. Inspect the project (project_scan / list_dir / repo map) before editing.\n"
+                    "2. Locate symbols precisely with search_symbol and read_range.\n"
+                    "3. Apply minimal patches; never rewrite a file unless it is new.\n"
+                    "4. After code edits, run the relevant verification command once.\n"
+                    "5. Finish with a short summary of files changed, verification result, and any remaining risk.\n"
+                )
             parts.append(
                 "\n# Acceptance protocol (highest priority)\n"
                 "- If the task ships a checker or test entry (e.g. /app/check_*.py, /app/tests, run-tests.sh, *_test.py, pytest), run it and keep iterating until it passes before you finish.\n"
@@ -1913,17 +2382,17 @@ class AgentRuntime:
             )
             if lite:
                 parts.append("This is a lightweight task: keep the loop short, avoid unnecessary planning, and verify once.\n")
-            if TWO_PHASE_PLAN and not lite:
+            if TWO_PHASE_PLAN and not lite and not doc_mode:
                 parts.append(
                     "\n# Two-phase discipline\nFor complex tasks, first locate and plan (search_symbol/read_range/plan_task), "
                     "then execute patches, then verify. Do not interleave broad exploration with edits.\n"
                 )
-            if task_type == "debug":
+            if task_type == "debug" and not doc_mode:
                 parts.append(
                     "\n# Debug protocol\nReproduce the failure, read the failing assertion, fix the smallest root cause, "
                     "and rerun the same test. If the same failure fingerprint repeats, change strategy instead of retrying.\n"
                 )
-        if research or kind == "plan":
+        if research or kind == "plan" or doc_mode:
             parts.append("\n" + RESEARCH_RULES)
         if matched:
             parts.append(SkillLibrary.render(matched, skill_how, 8000))

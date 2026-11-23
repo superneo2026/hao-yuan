@@ -232,7 +232,7 @@ def test_mimo_provider_is_wired():
     assert resolve("mimo", "mimo-v2.6-flash") == ("mimo", "mimo-v2.6-flash")
     assert PROVIDERS["mimo"].supports_thinking is True
     assert "mimo-v2.6-flash" in PROVIDERS["mimo"].thinking_models
-    assert PROVIDERS["mimo"].max_output_tokens == 0  # 0 = 不指定，交给模型自身上限
+    assert PROVIDERS["mimo"].max_output_tokens == 0  # 0 = 未配置；请求时回退 HAOYUAN_MAX_OUTPUT
 
 def test_lite_mode_keeps_domain_tools_for_plan():
     harness = harness_instance()

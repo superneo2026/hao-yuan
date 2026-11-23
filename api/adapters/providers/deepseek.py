@@ -7,7 +7,7 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
-from configs.configs import LLM_FIRST_CHUNK_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, LLM_TOTAL_TIMEOUT
+from configs.configs import DEFAULT_MAX_OUTPUT_TOKENS, LLM_FIRST_CHUNK_TIMEOUT, LLM_STREAM_IDLE_TIMEOUT, LLM_TOTAL_TIMEOUT
 from configs.configs import LLM_CONNECT_TIMEOUT
 from configs.models import ProviderConfig
 
@@ -50,6 +50,9 @@ class DeepSeekProvider:
 
     def __init__(self):
         self._client: httpx.AsyncClient | None = None
+        # Whether the last request carried an explicit max_tokens (used by the
+        # 400-retry path to drop only that field).
+        self._sent_max_tokens = False
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -85,19 +88,30 @@ class DeepSeekProvider:
                     messages, tools, profile, model, thinking, use_temperature=False
                 ):
                     yield event
-            # Some OpenAI-compatible models reject thinking/reasoning or tools.
-            # Retry once without those optional fields instead of falling back.
-            elif exc.status == 400 and any(
-                token in body for token in ("thinking", "reasoning", "tool", "function")
-            ):
+            # A provider that rejects our explicit max_tokens (model limit lower
+            # than DEFAULT_MAX_OUTPUT_TOKENS) gets the request again without it.
+            elif exc.status == 400 and "max_tokens" in body and self._sent_max_tokens:
+                self._sent_max_tokens = False
                 async for event in self._stream_once(
-                    messages,
-                    tools,
-                    profile,
-                    model,
-                    thinking,
-                    use_thinking=False,
-                    use_tools=False,
+                    messages, tools, profile, model, thinking, use_max_tokens=False
+                ):
+                    yield event
+            # Some OpenAI-compatible models reject reasoning_effort, thinking or tools.
+            # Drop only the offending field and retry instead of falling back to
+            # another model or disabling everything at once.
+            elif exc.status == 400 and "reasoning_effort" in body:
+                async for event in self._stream_once(
+                    messages, tools, profile, model, thinking, use_reasoning_effort=False
+                ):
+                    yield event
+            elif exc.status == 400 and any(token in body for token in ("thinking", "reasoning")):
+                async for event in self._stream_once(
+                    messages, tools, profile, model, thinking, use_thinking=False
+                ):
+                    yield event
+            elif exc.status == 400 and any(token in body for token in ("tool", "function")):
+                async for event in self._stream_once(
+                    messages, tools, profile, model, thinking, use_tools=False
                 ):
                     yield event
             else:
@@ -113,6 +127,8 @@ class DeepSeekProvider:
         use_temperature: bool = True,
         use_thinking: bool = True,
         use_tools: bool = True,
+        use_max_tokens: bool = True,
+        use_reasoning_effort: bool = True,
     ) -> AsyncGenerator[dict[str, Any], None]:
         if not profile.api_key:
             raise RuntimeError(f"{profile.name} API key is not configured")
@@ -125,9 +141,14 @@ class DeepSeekProvider:
         }
         if use_temperature:
             payload["temperature"] = 0.2
-        if profile.max_output_tokens > 0:
-            # 0 表示不指定，交给模型使用自身默认的最大输出。
-            payload["max_tokens"] = profile.max_output_tokens
+        # Always request an explicit output ceiling. Leaving it unset made the
+        # provider apply its own default (8192 on zhipu), which cut a single
+        # write_file of a full HTML page in half.
+        max_output = profile.max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+        self._sent_max_tokens = False
+        if max_output > 0 and use_max_tokens:
+            payload["max_tokens"] = max_output
+            self._sent_max_tokens = True
         if tools and use_tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -138,10 +159,12 @@ class DeepSeekProvider:
             payload["thinking"] = {"type": "disabled"}
         elif thinking in ("low", "high"):
             payload["thinking"] = {"type": "enabled"}
-            payload["reasoning_effort"] = thinking
+            if use_reasoning_effort:
+                payload["reasoning_effort"] = thinking
         elif model in profile.thinking_models:
             payload["thinking"] = {"type": "enabled"}
-            payload["reasoning_effort"] = "high"
+            if use_reasoning_effort:
+                payload["reasoning_effort"] = "high"
 
         headers = {
             "Authorization": f"Bearer {profile.api_key}",

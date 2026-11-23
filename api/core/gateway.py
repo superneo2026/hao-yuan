@@ -229,6 +229,7 @@ class ModelGateway:
                 thinking_models=conf.thinking_models,
                 tiers=conf.tiers,
                 max_output_tokens=conf.max_output_tokens,
+                context_window=conf.context_window,
                 supports_thinking=conf.supports_thinking,
                 supports_tools=conf.supports_tools,
                 supports_vision=conf.supports_vision,

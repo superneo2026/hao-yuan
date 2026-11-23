@@ -33,7 +33,7 @@ def register(ctx) -> None:
                 "plan_task", "update_plan", "make_plan", "read_file", "read_range", "grep", "glob",
                 "list_dir", "project_scan", "write_file", "apply_patch", "edit_file", "run_shell",
                 "web_audit", "web_screenshot", "describe_image", "reference_digest",
-                "reference_compare", "baseline_audit", "doc_consistency", "task", "ask_user",
+                "reference_compare", "baseline_audit", "doc_consistency", "web_fetch", "task", "ask_user",
             ],
             auto_skills=True,
             kind="plan",

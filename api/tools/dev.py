@@ -29,11 +29,14 @@ from configs.configs import (
     SHELL_TIMEOUT,
     TOOL_RESULT_MAX_BYTES,
     VERIFY_CMD_HINTS,
+    WEB_FETCH_ENABLED,
+    WEB_FETCH_TIMEOUT,
 )
 from core.contracts import ToolContext, ToolSpec
 from harness import evidence as evidence_analysis
 from harness import reference as reference_analysis
 from harness import vision as vision_analysis
+from harness import webfetch
 from harness.sandbox import SafeWorkspace
 
 _CHILD_IO_ENV = {
@@ -117,6 +120,61 @@ def _suggest_similar(src: str, old: str, limit: int = 3) -> str:
     return "Closest candidates:\n" + "\n".join(hits[:limit])
 
 
+def _read_budget_chars() -> int:
+    """Raw text a read may return so the JSON-wrapped result still fits the context cap.
+
+    The runtime keeps at most TOOL_RESULT_CONTEXT_CHARS of each tool result. Reads
+    used to ignore that and get clipped by the runtime at an arbitrary byte, so the
+    model never knew which lines it had actually seen. Reading within this budget
+    lets the tool itself report the exact range returned.
+    """
+    from configs.configs import TOOL_RESULT_CONTEXT_CHARS
+
+    return max(2000, int(TOOL_RESULT_CONTEXT_CHARS * 0.78))
+
+
+def _json_cost(text: str) -> int:
+    return len(json.dumps(text, ensure_ascii=False)) - 2
+
+
+def _clip_line(text: str, budget: int) -> str:
+    return text[: max(0, budget - 60)] + " ...[line clipped: this single line exceeds the result budget; use run_shell/python to slice it]"
+
+
+def _render_lines(lines: list[str], start: int, end: int, budget: int) -> tuple[str, int]:
+    """Render numbered lines ``start..end`` (1-based, inclusive) within ``budget``.
+
+    Returns the rendered text and the last line that was actually rendered.
+    """
+    parts: list[str] = []
+    used = 0
+    last = start - 1
+    for index in range(start, end + 1):
+        piece = f"{index}: {lines[index - 1]}"
+        cost = _json_cost(piece)
+        if cost > budget:
+            piece = _clip_line(piece, budget)
+            cost = _json_cost(piece)
+        if parts and used + cost > budget:
+            break
+        parts.append(piece)
+        used += cost
+        last = index
+        if used >= budget:
+            break
+    return "".join(parts), last
+
+
+def _range_note(start: int, end: int, last: int) -> str:
+    if last >= end:
+        return ""
+    return (
+        f"\n[range clipped to fit the tool-result budget: lines {start}-{last} of the requested "
+        f"{start}-{end} were returned. Call read_range(start={last + 1}, end={end}) for the rest; "
+        "do not repeat the lines you already have.]"
+    )
+
+
 def read_file(ctx: ToolContext, args: dict[str, Any]) -> str:
     workspace = _workspace(ctx)
     path = workspace.resolve(args.get("path", ""))
@@ -135,15 +193,17 @@ def read_file(ctx: ToolContext, args: dict[str, Any]) -> str:
             f"[read_file] {label}: lines {start}-{end} were already read earlier in this run. "
             "Reuse that content instead of re-reading; request a different range only if you need new lines."
         )
-    segment = lines[start - 1 : end]
-    body = "".join(f"{index + start}: {line}" for index, line in enumerate(segment))
+    body, last = _render_lines(lines, start, end, _read_budget_chars())
     head = f"{label} ({len(lines)} lines)"
     overlap_note = ""
     if start <= end and _overlaps(entry, start, end):
         overlap_note = "\n[read ledger] This range overlaps lines already read; avoid re-reading unchanged ranges."
-    if start <= end:
-        _record(entry, start, end)
-    return _truncate(f"{head}\n{body}{overlap_note}" if body else f"{head} is empty")
+    if last >= start:
+        # Record only what the model actually received, so a later request for the
+        # clipped remainder is served instead of being refused as "already read".
+        _record(entry, start, last)
+    rendered = f"{head}\n{body}{_range_note(start, end, last)}{overlap_note}" if body else f"{head} is empty"
+    return _truncate(rendered)
 
 
 def read_range(ctx: ToolContext, args: dict[str, Any]) -> str:
@@ -165,15 +225,15 @@ def read_range(ctx: ToolContext, args: dict[str, Any]) -> str:
             f"[read_range] {label}: lines {start}-{end} were already read earlier in this run. "
             "Reuse that content instead of re-reading; request a different range only if you need new lines."
         )
-    segment = lines[start - 1 : end]
-    body = "".join(f"{index + start}: {line}" for index, line in enumerate(segment))
+    body, last = _render_lines(lines, start, end, _read_budget_chars())
     head = f"{label} (range {start}-{end} / {len(lines)} lines)"
     overlap_note = ""
     if start <= end and _overlaps(entry, start, end):
         overlap_note = "\n[read ledger] This range overlaps lines already read; avoid re-reading unchanged ranges."
-    if start <= end:
-        _record(entry, start, end)
-    return _truncate(f"{head}\n{body}{overlap_note}" if body else f"{head} (empty range)")
+    if last >= start:
+        _record(entry, start, last)
+    rendered = f"{head}\n{body}{_range_note(start, end, last)}{overlap_note}" if body else f"{head} (empty range)"
+    return _truncate(rendered)
 
 
 def search_symbol(ctx: ToolContext, args: dict[str, Any]) -> str:
@@ -914,6 +974,15 @@ def task_placeholder(ctx: ToolContext, args: dict[str, Any]) -> str:
     return "task is handled by the runtime subagent dispatcher"
 
 
+async def web_fetch(ctx: ToolContext, args: dict[str, Any]) -> str:
+    if not WEB_FETCH_ENABLED:
+        return "[web_fetch] disabled by configuration (HAOYUAN_WEB_FETCH=0)"
+    url = str(args.get("url") or "").strip()
+    if not url:
+        raise ValueError("url is required")
+    return await webfetch.fetch(url, args.get("max_chars") or None)
+
+
 def reference_digest(ctx: ToolContext, args: dict[str, Any]) -> str:
     workspace = _workspace(ctx)
     path = workspace.resolve(args.get("path", ""))
@@ -1247,6 +1316,10 @@ def tool_specs(source: str = "coding") -> list[ToolSpec]:
             "prompt": {"type": "string"},
             "readonly": {"type": "boolean"},
         }, ["description", "prompt"], readonly=True, subagent=True, source=source),
+        _spec("web_fetch", "Fetch a public http(s) URL and return its readable text (HTML is stripped to text; JSON/plain/markdown pass through). Use it to verify external facts before citing them: licenses, model specs, dataset sizes, API docs. Private/loopback addresses are blocked. When a fetch fails, label the fact as unverified instead of guessing.", {
+            "url": {"type": "string", "description": "Absolute http:// or https:// URL."},
+            "max_chars": {"type": "integer", "description": "Output cap; default 12000."},
+        }, ["url"], readonly=True, timeout_s=WEB_FETCH_TIMEOUT + 15, source=source),
     ]
 
 
@@ -1276,6 +1349,7 @@ EXECUTORS = {
     "describe_image": describe_image,
     "ask_user": ask_user,
     "task": task_placeholder,
+    "web_fetch": web_fetch,
 }
 
 
