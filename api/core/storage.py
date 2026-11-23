@@ -388,6 +388,17 @@ class Storage:
             (status, output, error, step_count, now(), run_id),
         )
 
+    async def update_run_progress(self, run_id: str, step_count: int) -> None:
+        """Keep runs.step_count/updated_at fresh while a run is still executing.
+
+        Previously these fields were only written by finish_run, so a long (or
+        looping) run looked frozen at step 0 in the UI and to the supervisor.
+        """
+        await self._write(
+            "UPDATE runs SET step_count=?, updated_at=? WHERE id=?",
+            (step_count, now(), run_id),
+        )
+
     async def add_message(
         self,
         session_id: str,
@@ -530,6 +541,21 @@ class Storage:
         return await self._one(
             "SELECT * FROM events WHERE session_id=? ORDER BY id DESC LIMIT 1", (session_id,)
         )
+
+    async def recent_tool_starts(self, session_id: str, limit: int = 24) -> list[dict[str, Any]]:
+        rows = await self._fetch(
+            "SELECT payload, created_at FROM events WHERE session_id=? AND type='tool.start'"
+            " ORDER BY id DESC LIMIT ?",
+            (session_id, max(1, int(limit))),
+        )
+        out = []
+        for row in rows:
+            try:
+                row["payload"] = json.loads(row.get("payload") or "{}")
+            except (ValueError, TypeError):
+                row["payload"] = {}
+            out.append(row)
+        return out
 
     async def delete_events(self, session_id: str) -> None:
         await self._write("DELETE FROM events WHERE session_id=?", (session_id,))

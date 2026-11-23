@@ -13,6 +13,7 @@ from typing import Any
 
 from configs.configs import (
     AGENT_MAX_STEPS,
+    AGENT_MAX_RUN_SEC,
     AGENT_MAX_TOTAL_STEPS,
     APPLY_PATCH_ENABLED,
     ARTIFACTS_DIR,
@@ -20,11 +21,17 @@ from configs.configs import (
     CHECKPOINT_EVERY_STEPS,
     CONTEXT_PACK_MAX_CHARS,
     DEFAULT_AGENT,
+    DELIVERY_DEADLINE_STEPS,
     IDEMPOTENT_TOOLS,
     LITE_MODE,
     LITE_MULTIPHASE_HINTS,
     LITE_SINGLE_FILE_MAX_PATHS,
     LITE_TOOL_SET,
+    NO_PROGRESS_GUARD,
+    NO_PROGRESS_MAX,
+    NO_PROGRESS_STREAK,
+    REPEAT_READ_LIMIT,
+    REPEAT_TOOL_LIMIT,
     REPAIR_LOOP_ENABLED,
     REPO_MAP_ENABLED,
     SUBAGENT_ENABLED,
@@ -132,6 +139,7 @@ CHAT_CONTEXT_HINTS = (
 READONLY_TOOLS = (
     "read_file", "read_range", "search_symbol", "glob", "grep", "list_dir", "project_scan",
     "baseline_audit", "doc_consistency", "web_screenshot", "describe_image",
+    "reference_digest", "reference_compare", "web_audit",
 )
 
 # Shell commands that materialise workspace files. A task can be completed entirely
@@ -461,6 +469,25 @@ def output_target_ready(target: str, since: float) -> bool:
     return False
 
 
+def _tool_fingerprint(call: ToolCall) -> str:
+    try:
+        args = json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        args = str(call.arguments)
+    return f"{call.name}:{args}"
+
+
+def _call_path(call: ToolCall) -> str:
+    path = (call.arguments or {}).get("path")
+    return str(path) if path else ""
+
+
+def missing_deliverables(state: dict[str, Any]) -> list[str]:
+    since = float(state.get("delivery_since") or 0.0)
+    return [target for target in (state.get("output_targets") or []) if not output_target_ready(target, since)]
+
+
+
 def _workspace_diff(workspace: str, limit: int = 24000) -> str:
     if not workspace:
         return ""
@@ -740,6 +767,16 @@ class AgentRuntime:
             names = [name for name in names if name != "task"]
         return names
 
+    @staticmethod
+    def _guarded_tools(names: list[str], state: dict[str, Any]) -> list[str]:
+        # When the no-progress guard has decided the agent must ship the file,
+        # hide read-only tools so it cannot keep looping on reads.
+        if not state.get("write_only"):
+            return names
+        blocked = set(READONLY_TOOLS)
+        allowed = [name for name in names if name not in blocked]
+        return allowed or names
+
     async def _drive(
         self,
         session: dict[str, Any],
@@ -826,7 +863,6 @@ class AgentRuntime:
             messages.append({"role": "user", "content": interrupt_notice()})
             await self.emit(session_id, "instruction.interrupted", {"status": "cancelled"}, run_id)
         tool_names = self._tools_for(agent, kind, lite, bool(workspace), user_text)
-        schemas = self.tools.openai_tools(tool_names)
 
         resumed = self.manager.consume_resume(session_id) if self.manager else False
         prior_effects = await durability.load_effects(self.storage, session_id) if resumed else {}
@@ -852,6 +888,7 @@ class AgentRuntime:
             "run_id": run_id,
             "step": 0,
             "total_steps": 0,
+            "started_at": time.time(),
             "last_write_step": 0,
             "last_verify_step": 0,
             "verify_nudges": 0,
@@ -870,13 +907,25 @@ class AgentRuntime:
             "fidelity_nudges": 0,
             "output_targets": extract_output_targets(user_text, workspace) if write_required else [],
             "delivery_since": time.time(),
+            "delivery_start_step": 0,
             "output_nudges": 0,
+            "tool_fp_counts": {},
+            "read_path_counts": {},
+            "write_only": False,
+            "stuck_streak": 0,
+            "no_progress_nudges": 0,
             "strict_route": strict,
         }
         max_total = AGENT_MAX_TOTAL_STEPS
         session = await self.storage.get_session(session_id) or session
 
         while True:
+            if AGENT_MAX_RUN_SEC > 0 and time.time() - state["started_at"] > AGENT_MAX_RUN_SEC:
+                message = f"run exceeded wall-clock budget ({int(AGENT_MAX_RUN_SEC)}s)"
+                await self.emit(session_id, "error", {"message": message}, run_id)
+                await self.storage.update_session(session_id, status="error", error=message)
+                await self.storage.finish_run(run_id, "error", error=message, step_count=state["total_steps"])
+                return
             if state["step"] >= AGENT_MAX_STEPS:
                 if state["total_steps"] < max_total:
                     state["rollovers"] += 1
@@ -927,6 +976,10 @@ class AgentRuntime:
             actual_provider, actual_model = provider, model
             fallbacks: list[str] = []
             finish_reason = ""
+            # Recompute per step: the no-progress guard can switch the agent to
+            # "write-only" mode, which removes read tools from the schema so a
+            # looping model physically cannot keep re-reading the same file.
+            schemas = self.tools.openai_tools(self._guarded_tools(tool_names, state))
             async for event in self.gateway.stream(
                 provider, model, messages, schemas, thinking, strict=bool(state.get("strict_route"))
             ):
@@ -984,7 +1037,12 @@ class AgentRuntime:
                 bill = await self.storage.record_usage(session_id, assistant_row["id"], actual_provider, actual_model, usage)
                 await self.emit(session_id, "usage", {**bill, "provider": actual_provider, "model": actual_model}, run_id)
             if fallbacks:
-                await self.emit(session_id, "model.fallback", {"fallbacks": fallbacks}, run_id)
+                await self.emit(
+                    session_id,
+                    "model.fallback",
+                    {"fallbacks": fallbacks, "provider": actual_provider, "model": actual_model},
+                    run_id,
+                )
 
             if content or stored_calls:
                 assistant_message: dict[str, Any] = {"role": "assistant", "content": content or None}
@@ -1151,6 +1209,26 @@ class AgentRuntime:
                 state["escalated"] = True
                 await self.emit(session_id, "route", {"level": "complex", "reason": "tool use detected; escalate", "model": actual_model}, run_id)
 
+            # Record call fingerprints BEFORE executing: duplicates can then be
+            # suppressed, and the guard can distinguish new work from repetition.
+            call_prior: dict[str, int] = {}
+            new_fingerprints = 0
+            new_reads = 0
+            for call in parsed_calls:
+                fingerprint = _tool_fingerprint(call)
+                prior = state["tool_fp_counts"].get(fingerprint, 0)
+                call_prior[call.call_id] = prior
+                state["tool_fp_counts"][fingerprint] = prior + 1
+                if prior == 0:
+                    new_fingerprints += 1
+                path = _call_path(call)
+                if path and call.name in READONLY_TOOLS:
+                    seen_path = state["read_path_counts"].get(path, 0)
+                    state["read_path_counts"][path] = seen_path + 1
+                    if seen_path == 0:
+                        new_reads += 1
+            state["_call_prior"] = call_prior
+
             results = await self._execute_calls(session, parsed_calls, run_id, state)
             for call in parsed_calls:
                 result = results.get(call.call_id)
@@ -1192,6 +1270,72 @@ class AgentRuntime:
                         state["last_verify_step"] = state["total_steps"]
                 await self._register_generated_artifact(session_id, call, result)
 
+            wrote = state["last_write_step"] == state["total_steps"]
+            if NO_PROGRESS_GUARD:
+                missing = missing_deliverables(state)
+                # Clear the write-only lock as soon as the deliverable exists;
+                # otherwise arm it once the exploration deadline is reached.
+                if not missing:
+                    state["write_only"] = False
+                elif (state["total_steps"] - state["delivery_start_step"]) >= DELIVERY_DEADLINE_STEPS:
+                    state["write_only"] = True
+                path_overused = any(
+                    count > REPEAT_READ_LIMIT for count in state["read_path_counts"].values()
+                )
+                if state["write_only"]:
+                    # In write-only mode only actually shipping the deliverable
+                    # counts as progress (temp scripts and suppressed reads do not).
+                    made_progress = not missing
+                else:
+                    made_progress = bool(wrote or new_reads) or (
+                        bool(new_fingerprints) and not path_overused
+                    )
+                if made_progress:
+                    state["stuck_streak"] = 0
+                else:
+                    state["stuck_streak"] += 1
+                if state["stuck_streak"] >= NO_PROGRESS_STREAK:
+                    state["stuck_streak"] = 0
+                    state["no_progress_nudges"] += 1
+                    target_hint = "、".join(missing)
+                    if missing:
+                        state["write_only"] = True
+                        guard_text = (
+                            "[system no-progress guard] You are repeating the same tool calls without making "
+                            "progress. Stop re-reading; you already have the content you need. The requested "
+                            "deliverable does not exist yet at: " + target_hint + ". Call write_file now to "
+                            "create it at that exact path (create the directory first if needed). Read-only "
+                            "tools are disabled until the file is written."
+                        )
+                    else:
+                        guard_text = (
+                            "[system no-progress guard] You are repeating the same tool calls without making "
+                            "progress. Do not call the same tool with the same arguments again. Use the results "
+                            "you already have, finish the current step, and produce the final answer."
+                        )
+                    await self.emit(
+                        session_id,
+                        "no_progress.nudge",
+                        {
+                            "streak": state["no_progress_nudges"],
+                            "missing": missing,
+                            "read_paths": len(state["read_path_counts"]),
+                        },
+                        run_id,
+                    )
+                    messages.append({"role": "user", "content": guard_text})
+                    if state["no_progress_nudges"] > NO_PROGRESS_MAX:
+                        if missing:
+                            reason = f"no progress: deliverable not created at {target_hint} after repeated retries"
+                        else:
+                            reason = "no progress: repeated identical tool calls"
+                        await self.emit(session_id, "error", {"message": reason}, run_id)
+                        await self.storage.update_session(session_id, status="error", error=reason)
+                        await self.storage.finish_run(
+                            run_id, "error", error=reason, step_count=state["total_steps"]
+                        )
+                        return
+
             if state["reference_paths"] and state["reference_outputs"]:
                 state["reference_drift"] = self._reference_drift(
                     state["reference_paths"], state["reference_outputs"]
@@ -1213,6 +1357,7 @@ class AgentRuntime:
                 await self.emit(
                     session_id, "checkpoint.saved", {"step": state["total_steps"]}, run_id
                 )
+                await self.storage.update_run_progress(run_id, state["total_steps"])
         if CHECKPOINT_ENABLED:
             await durability.save_checkpoint(
                     self.storage,
@@ -1268,8 +1413,34 @@ class AgentRuntime:
         workspace = session.get("workspace") or ""
         await self.emit(session_id, "tool.start", {"call_id": call.call_id, "tool": call.name, "args": call.arguments}, run_id)
         started = time.monotonic()
+        prior = (state.get("_call_prior") or {}).get(call.call_id, 0)
+        suppressed: ToolResult | None = None
+        if NO_PROGRESS_GUARD and state.get("write_only") and call.name in READONLY_TOOLS:
+            suppressed = ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                ok=True,
+                result=(
+                    "[no-progress guard] Read-only tools are disabled because the requested deliverable "
+                    "is still missing. Do not read again; call write_file now to create the file."
+                ),
+                summary="read disabled by no-progress guard",
+            )
+        elif NO_PROGRESS_GUARD and call.name in READONLY_TOOLS and prior >= REPEAT_TOOL_LIMIT:
+            suppressed = ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                ok=True,
+                result=(
+                    "[no-progress guard] This exact call was already executed; the result is in the "
+                    "history above. Do not repeat it. Use what you already have and write the deliverable."
+                ),
+                summary="duplicate call suppressed",
+            )
         spec = self.tools.get(call.name)
-        if not spec:
+        if suppressed is not None:
+            result = suppressed
+        elif not spec:
             result = ToolResult(call_id=call.call_id, name=call.name, ok=False, error=f"unknown tool: {call.name}", summary="unknown tool")
         elif call.name == "task" and SUBAGENT_ENABLED:
             text = await self._run_subagent(session, call.arguments, state)
@@ -1472,6 +1643,8 @@ class AgentRuntime:
         steps = 0
         calls = 0
         final = ""
+        seen_calls: dict[str, int] = {}
+        findings: list[str] = []
         provider, model = resolve(session.get("provider"), session.get("model"))
 
         async def run() -> str:
@@ -1513,16 +1686,30 @@ class AgentRuntime:
                     except (ValueError, TypeError):
                         call_args = {}
                     calls += 1
+                    dedupe_key = f"{function.get('name') or ''}:{json.dumps(call_args, ensure_ascii=False, sort_keys=True)}"
+                    seen_calls[dedupe_key] = seen_calls.get(dedupe_key, 0) + 1
+                    if seen_calls[dedupe_key] > REPEAT_TOOL_LIMIT:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": raw.get("id") or uuid.uuid4().hex[:12],
+                                "content": "[subagent guard] duplicate call suppressed; use the earlier result and return your conclusion.",
+                            }
+                        )
+                        continue
                     call = ToolCall(call_id=raw.get("id") or uuid.uuid4().hex[:12], name=function.get("name") or "", arguments=call_args)
                     ctx = ToolContext(runtime=self, session=session, workspace=session.get("workspace") or "", call=call, emit=self.emit)
                     result = await self.tools.execute(call, ctx)
+                    body = str(result.result if result.ok else result.error)
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call.call_id,
-                            "content": str(result.result if result.ok else result.error)[:6000],
+                            "content": body[:6000],
                         }
                     )
+                    if result.ok and body:
+                        findings.append(f"- {call.name}: {body[:400].replace(chr(10), ' ')}")
                     if result.ok and call.name == "describe_image":
                         attachment = vision.native_attachment_message(
                             result.result, session.get("workspace") or ""
@@ -1537,7 +1724,15 @@ class AgentRuntime:
             return f"[subagent {description}] timed out after {int(SUBAGENT_TIMEOUT_SEC)}s ({steps} steps / {calls} tools)"
         except Exception as exc:
             return f"[subagent {description}] failed: {type(exc).__name__}: {exc}"
-        body = (final or "").strip() or f"(subagent ran {steps} steps / {calls} tools but returned no text)"
+        final_text = (final or "").strip()
+        if not final_text and findings:
+            # Never hand the parent an empty result: that makes it repeat all the
+            # reconnaissance itself (one observed cause of the main-agent loop).
+            final_text = (
+                "Partial findings (subagent hit its step limit without a final answer):\n"
+                + "\n".join(findings[-12:])
+            )
+        body = final_text or f"(subagent ran {steps} steps / {calls} tools but returned no text)"
         return f"[subagent {description} - {steps} steps / {calls} tools]\n{body[:SUBAGENT_SUMMARY_CHARS]}"
 
     async def _register_change_artifact(self, session_id: str, call: ToolCall, result: ToolResult) -> None:

@@ -11,6 +11,7 @@ from configs.configs import (
     SUPERVISOR_AUTO_CANCEL_SEC,
     SUPERVISOR_AUTO_RESUME,
     SUPERVISOR_INTERVAL,
+    SUPERVISOR_NO_PROGRESS_REPEAT,
     SUPERVISOR_RESUME_BACKOFF_SEC,
     SUPERVISOR_RESUME_KEYWORDS,
     SUPERVISOR_RESUME_MAX,
@@ -87,16 +88,16 @@ async def _auto_resume(harness, item: dict[str, Any]) -> bool:
     return True
 
 
-async def _cancel_stale(harness, session_id: str) -> None:
+async def _cancel_stale(harness, session_id: str, reason: str = "stale: no progress") -> None:
     await harness.manager.cancel(session_id)
     deadline = time.time() + 15
     while harness.manager.is_active(session_id) and time.time() < deadline:
         await asyncio.sleep(0.2)
-    await harness.storage.update_session(session_id, status="error", error="stale: no progress")
+    await harness.storage.update_session(session_id, status="error", error=reason)
     await harness.events.emit(
         session_id,
         "supervisor.alert",
-        {"health": "cancelled", "reason": "auto-cancelled after no progress"},
+        {"health": "cancelled", "reason": reason},
     )
 
 
@@ -127,6 +128,32 @@ async def session_health(storage, session: dict[str, Any]) -> dict[str, Any]:
     if status == "running" and idle_sec > SUPERVISOR_STALE_SEC:
         health = "stale"
         reason = f"running with no events for {idle_sec // 60} minutes"
+    elif status == "running":
+        # Events can keep flowing while the agent loops on the same call. Look for
+        # repeated (tool,args) signatures so a busy-but-stuck run is flagged too.
+        try:
+            starts = await storage.recent_tool_starts(session_id, limit=24)
+        except Exception:
+            starts = []
+        signatures: dict[str, int] = {}
+        for row in starts:
+            payload = row.get("payload") or {}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (ValueError, TypeError):
+                    payload = {}
+            tool = str(payload.get("tool") or "")
+            if not tool:
+                continue
+            try:
+                key = tool + ":" + json.dumps(payload.get("args"), ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                key = tool + ":" + str(payload.get("args"))
+            signatures[key] = signatures.get(key, 0) + 1
+        if signatures and max(signatures.values()) >= SUPERVISOR_NO_PROGRESS_REPEAT:
+            health = "stale"
+            reason = "no progress: repeating identical tool calls"
     elif status == "error":
         health = "error"
         reason = (session.get("error") or "task failed")[:120]
@@ -222,13 +249,14 @@ async def watch_loop(harness) -> None:
                 if progressing:
                     reset_resume_state(item["id"])
             for item in snap["alerts"]:
-                if (
-                    item["health"] == "stale"
-                    and SUPERVISOR_AUTO_CANCEL_SEC
-                    and item.get("idle_sec", 0) >= SUPERVISOR_AUTO_CANCEL_SEC
+                no_progress = str(item.get("reason") or "").startswith("no progress")
+                if item["health"] == "stale" and (
+                    (SUPERVISOR_AUTO_CANCEL_SEC and item.get("idle_sec", 0) >= SUPERVISOR_AUTO_CANCEL_SEC)
+                    or no_progress
                 ):
-                    await _cancel_stale(harness, item["id"])
-                    item = {**item, "health": "error", "error": "stale: no progress"}
+                    reason = "no progress: repeating identical tool calls" if no_progress else "stale: no progress"
+                    await _cancel_stale(harness, item["id"], reason=reason)
+                    item = {**item, "health": "error", "error": reason}
                 if item["health"] == "error":
                     await _auto_resume(harness, item)
             await harness.events.emit("*", "supervisor.snapshot", snap)

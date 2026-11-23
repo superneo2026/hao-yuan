@@ -24,6 +24,7 @@ from core.storage import Storage
 
 AGED_MARK = "\n...[aged: full result remains in session history; re-read the target if needed]"
 TRUNC_MARK = "\n...[truncated by hard context budget; use a precise tool call to fetch details]"
+MID_SUMMARY_MARK = "--- Progress summary (earlier steps compacted) ---"
 
 _DIGEST_KEEP_RE = re.compile(
     r'File\s+"[^"]+",\s*line\s+\d+|'
@@ -271,6 +272,17 @@ class ContextManager:
         old, tail = body[:-keep_tail], body[-keep_tail:]
         if not old:
             return result
+        # Merge with the previous rolling summary and REPLACE it in the system
+        # prompt. The old code appended a new block on every compaction, so the
+        # system prompt grew without bound (~110k tokens after 130 compactions)
+        # and the model slowly forgot what it had already done.
+        system_content = messages[0].get("content") or ""
+        previous = ""
+        if MID_SUMMARY_MARK in system_content:
+            base_content, _, previous = system_content.partition(MID_SUMMARY_MARK)
+            previous = previous.strip()
+        else:
+            base_content = system_content
         try:
             rows = [
                 {
@@ -283,15 +295,15 @@ class ContextManager:
             summary = await self._summarize(
                 session.get("provider") or "mock",
                 session.get("model") or "",
-                "",
+                previous,
                 self._render(rows),
             )
             if not summary:
                 return result
         except Exception:
             return result
-        note = "\n\n--- Progress summary (earlier steps compacted) ---\n" + summary
-        messages[0] = {**messages[0], "content": (messages[0].get("content") or "") + note}
+        note = "\n\n" + MID_SUMMARY_MARK + "\n" + summary
+        messages[0] = {**messages[0], "content": base_content.rstrip() + note}
         del messages[1 : 1 + len(old)]
         messages[1:] = sanitize(messages[1:])
         result["compacted"] = len(old)

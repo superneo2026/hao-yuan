@@ -53,8 +53,13 @@ MAX_CONCURRENT_SESSIONS = int(os.getenv("HAOYUAN_MAX_CONCURRENT", "5"))
 # Steps per segment; at each boundary the agent gets a "continue, don't repeat" nudge.
 AGENT_MAX_STEPS = int(os.getenv("HAOYUAN_MAX_STEPS", "60"))
 # Total steps a single run may execute, across all rollover segments. This is the
-# long-horizon budget; set it high for multi-hour / multi-day tasks.
-AGENT_MAX_TOTAL_STEPS = int(os.getenv("HAOYUAN_MAX_TOTAL_STEPS", "200000"))
+# long-horizon hard budget. It used to default to 200000, which let a looping model
+# burn tens of millions of tokens for hours; 600 steps (~10 segments) is already far
+# beyond any healthy task. Raise it explicitly for genuinely huge migrations.
+AGENT_MAX_TOTAL_STEPS = int(os.getenv("HAOYUAN_MAX_TOTAL_STEPS", "600"))
+# Wall-clock budget for one run. 0 disables it. This is the last line of defence
+# against a model that keeps emitting tool calls but never converges.
+AGENT_MAX_RUN_SEC = float(os.getenv("HAOYUAN_MAX_RUN_SEC", "7200"))
 # Maximum automatic boot-resumes for an interrupted run (crash / restart).
 MAX_AUTO_ROLLOVER = int(os.getenv("HAOYUAN_MAX_ROLLOVER", "100"))
 GATE_CONFIRM_TIMEOUT = float(os.getenv("HAOYUAN_GATE_TIMEOUT", "600"))
@@ -80,12 +85,12 @@ TOOL_RESULT_CONTEXT_MARK = "\n...[result truncated; re-read the precise range if
 CONTEXT_PACK_MAX_CHARS = int(os.getenv("HAOYUAN_CONTEXT_PACK_MAX_CHARS", "6000"))
 
 CONTEXT_COMPACT_TOKENS = int(os.getenv("HAOYUAN_CONTEXT_COMPACT_TOKENS", "20000"))
-CONTEXT_KEEP_RECENT = int(os.getenv("HAOYUAN_CONTEXT_KEEP_RECENT", "8"))
+CONTEXT_KEEP_RECENT = int(os.getenv("HAOYUAN_CONTEXT_KEEP_RECENT", "10"))
 CONTEXT_SUMMARY_MAX_CHARS = int(os.getenv("HAOYUAN_CONTEXT_SUMMARY_MAX_CHARS", "2400"))
 MID_COMPACT_EVERY = int(os.getenv("HAOYUAN_MID_COMPACT_EVERY", "4"))
 MID_COMPACT_TOKENS = int(os.getenv("HAOYUAN_MID_COMPACT_TOKENS", "14000"))
-MID_COMPACT_MIN_MSGS = int(os.getenv("HAOYUAN_MID_COMPACT_MIN_MSGS", "14"))
-TOOL_AGING_KEEP = int(os.getenv("HAOYUAN_TOOL_AGING_KEEP", "4"))
+MID_COMPACT_MIN_MSGS = int(os.getenv("HAOYUAN_MID_COMPACT_MIN_MSGS", "18"))
+TOOL_AGING_KEEP = int(os.getenv("HAOYUAN_TOOL_AGING_KEEP", "6"))
 TOOL_AGING_CHARS = int(os.getenv("HAOYUAN_TOOL_AGING_CHARS", "300"))
 CONTEXT_HARD_LIMIT = int(os.getenv("HAOYUAN_CONTEXT_HARD_LIMIT", "48000"))
 CONTEXT_HARD_TRUNCATE_CHARS = int(os.getenv("HAOYUAN_CONTEXT_HARD_TRUNCATE_CHARS", "800"))
@@ -164,6 +169,23 @@ APPLY_PATCH_ENABLED = os.getenv("HAOYUAN_APPLY_PATCH", "1").strip() not in {"0",
 REPAIR_LOOP_ENABLED = os.getenv("HAOYUAN_REPAIR_LOOP", "1").strip() not in {"0", "false"}
 REPAIR_REPEAT_ESCALATE = int(os.getenv("HAOYUAN_REPAIR_REPEAT_ESCALATE", "2"))
 
+# No-progress / anti-loop guards. A weak or degraded model can get stuck re-reading
+# the same files forever (observed: 600+ identical read_range calls in one run).
+# These guards detect repetition even while tool calls keep flowing, which the
+# old "only check when the model stops calling tools" gate could never catch.
+NO_PROGRESS_GUARD = os.getenv("HAOYUAN_NO_PROGRESS_GUARD", "1").strip() not in {"0", "false"}
+# Identical (tool,args) calls allowed before the call is suppressed as a duplicate.
+REPEAT_TOOL_LIMIT = int(os.getenv("HAOYUAN_REPEAT_TOOL_LIMIT", "2"))
+# Reads of the same path allowed before further reads count as no progress.
+REPEAT_READ_LIMIT = int(os.getenv("HAOYUAN_REPEAT_READ_LIMIT", "15"))
+# Consecutive steps with no new tool/read/write before the guard fires.
+NO_PROGRESS_STREAK = int(os.getenv("HAOYUAN_NO_PROGRESS_STREAK", "2"))
+# How many no-progress nudges before the run is terminated as stuck.
+NO_PROGRESS_MAX = int(os.getenv("HAOYUAN_NO_PROGRESS_MAX", "2"))
+# After this many steps without the requested deliverable, restrict the agent to
+# write tools so it stops exploring and ships the file.
+DELIVERY_DEADLINE_STEPS = int(os.getenv("HAOYUAN_DELIVERY_DEADLINE_STEPS", "60"))
+
 EVENT_FLUSH_INTERVAL = float(os.getenv("HAOYUAN_EVENT_FLUSH_INTERVAL", "0.4"))
 EVENT_FLUSH_BATCH = int(os.getenv("HAOYUAN_EVENT_FLUSH_BATCH", "32"))
 WS_SEND_QUEUE_MAX = int(os.getenv("HAOYUAN_WS_QUEUE_MAX", "2000"))
@@ -172,6 +194,9 @@ WS_SEND_TIMEOUT = float(os.getenv("HAOYUAN_WS_TIMEOUT", "5"))
 SUPERVISOR_INTERVAL = float(os.getenv("HAOYUAN_SUPERVISOR_INTERVAL", "30"))
 SUPERVISOR_STALE_SEC = float(os.getenv("HAOYUAN_SUPERVISOR_STALE_SEC", "600"))
 SUPERVISOR_AUTO_CANCEL_SEC = float(os.getenv("HAOYUAN_SUPERVISOR_AUTO_CANCEL_SEC", "1800"))
+# A run can emit events every second yet make no progress (same tool, same args).
+# Treat that many identical recent tool calls as "stale" so the watchdog fires.
+SUPERVISOR_NO_PROGRESS_REPEAT = int(os.getenv("HAOYUAN_SUPERVISOR_NO_PROGRESS_REPEAT", "8"))
 SUPERVISOR_AUTO_RESUME = os.getenv("HAOYUAN_SUPERVISOR_AUTO_RESUME", "1").strip() not in {"0", "false"}
 SUPERVISOR_RESUME_MAX = int(os.getenv("HAOYUAN_SUPERVISOR_RESUME_MAX", "1000"))
 SUPERVISOR_RESUME_BACKOFF_SEC = float(os.getenv("HAOYUAN_SUPERVISOR_RESUME_BACKOFF_SEC", "60"))

@@ -178,7 +178,9 @@ class ModelGateway:
                             self._cool_down(prov, mdl, delay)
                             break
                         if 400 <= status < 500:
-                            self._cool_down(prov, mdl, 300.0)
+                            # Bad key / unknown model: retrying every few minutes just
+                            # burns a failed request each time. Park it for 30 minutes.
+                            self._cool_down(prov, mdl, 1800.0)
                             break
                         self._cool_down(prov, mdl, 20.0)
                     elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
