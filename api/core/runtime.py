@@ -40,10 +40,10 @@ from configs.configs import (
     VERIFY_GATE,
     VERIFY_MAX_NUDGE,
 )
-from configs.models import THINKING_OFF_PROVIDERS, resolve
+from configs.models import PROVIDERS, THINKING_OFF_PROVIDERS, effective_default_model, resolve
 from core.contracts import ToolCall, ToolContext, ToolResult
 from core.instructions import addition_message, classify_instruction, interrupt_message, interrupt_notice
-from harness import durability, reference, repair, repoindex, sysinfo
+from harness import durability, reference, repair, repoindex, sysinfo, vision
 from harness.skills import SkillLibrary
 
 TERMINAL_STATUSES = {"done", "error", "cancelled"}
@@ -76,6 +76,15 @@ CODE_WORK_INTENT = (
 _PLAN_INTENT_RE = re.compile(r"(写|生成|做|出|制定|策划|规划).{0,10}(方案|计划书|计划|报告)|商业计划|调研报告|可行性分析|方案计划书")
 _PATH_RE = re.compile(
     r"[\w./\\-]+\.(py|js|ts|tsx|vue|java|go|rs|c|cpp|h|hpp|json|ya?ml|toml|md|sql|sh|bat|ps1|css|html)\b",
+    re.I,
+)
+# Research/evaluation deliverables need the full toolset even when the router
+# considers them "normal": subagents, reference diffing, baseline evidence and
+# high reasoning are part of the task, not optional polish. Lite mode used to
+# swallow exactly those capabilities.
+_RESEARCH_HINTS = re.compile(
+    r"预训练|训练计划|训练方案|技术方案|方案计划|实施方案|解决方案|可行性|调研|评估|对比|复盘|审计|评审|报告|"
+    r"benchmark|feasibility|survey|research|postmortem|audit",
     re.I,
 )
 _CODE_RE = re.compile(r"(^|\n)\s*(def |class |function |import |from |const |let |var |public |private |func |package |interface |async )")
@@ -120,7 +129,10 @@ CHAT_CONTEXT_HINTS = (
     "frontend", "backend", "script", "command", "error", "bug",
 )
 
-READONLY_TOOLS = ("read_file", "read_range", "search_symbol", "glob", "grep", "list_dir", "project_scan")
+READONLY_TOOLS = (
+    "read_file", "read_range", "search_symbol", "glob", "grep", "list_dir", "project_scan",
+    "baseline_audit", "doc_consistency", "web_screenshot", "describe_image",
+)
 
 # Shell commands that materialise workspace files. A task can be completed entirely
 # through the shell (heredoc, redirect, python -c, tee ...), so these writes must be
@@ -204,7 +216,8 @@ SYSTEM_RULES = """You are HaoYuan (豪源), an autonomous AI coding agent. You w
 - Use the task tool for broad read-only reconnaissance when raw tool output would flood the context. It returns only conclusions.
 - Use plan_task for multi-step work and update_plan as you progress.
 - Match effort to size: a one-symbol fix needs no plan and no whole-repo scan; a multi-file feature needs a short plan and a checklist.
-- Budget exploration. After roughly 8 exploratory calls (read/grep/search), commit to the best hypothesis and start editing. Do not read files that are not on the failing path, and never re-read an unchanged range you already have.
+- Budget exploration by task type. For a single-symbol fix, commit after roughly 8 reads/searches. For a plan, report, audit or benchmark, read the baseline evidence set first (README, model card, changelog, every stage summary, data-quality/license registry and the real pipeline scripts); do not start writing until the evidence table is complete. Never re-read an unchanged range you already have.
+- For research deliverables, use baseline_audit to extract measured facts and doc_consistency to catch cross-section contradictions before finishing.
 - Run the project's full verification command at most twice: once after the edit, and once more only if the first run failed and you changed code again. When it passes, stop testing and summarize.
 - Never fabricate results. If something cannot be verified, say exactly what is unverified and why.
 - Answer in the user's language. Be concise and outcome-oriented.
@@ -222,6 +235,18 @@ The user may send new requirements while you are still working. Treat them as pa
 - Only stop the original task when the user explicitly asks to interrupt, cancel, or replace it.
 - If one workstream is blocked on a command, approval, or missing information, advance the other one instead of idling.
 - If a plan is active, add the new requirement as a step without erasing completed steps.
+"""
+
+
+RESEARCH_RULES = """# Research and evaluation protocol (plans, reports, audits, benchmarks)
+- Before writing, build a baseline evidence table: claim | value | source (file:line or JSON field) | measured/planned.
+- Read the baseline project's README, MODEL_CARD, CHANGELOG, reports/*/summary.json, data-quality and license registries, and the real training/serving scripts. A single README headline is not enough.
+- Separate the stable release from commercial or experimental branches. Never mix their metrics in one baseline row.
+- For data facts (speaker count, gender, hours, license), read the data card or license registry. If a fact is not in the repository, label it as an assumption and state how it will be verified.
+- Inventory reusable assets (checkpoints, aligned manifests, vocoders, tokenizers, exports) and mark each as reuse / rebuild / discard.
+- Use baseline_audit (baseline directory) to pull measured facts, and doc_consistency (plan file + optional baseline) before finishing. Fix every contradiction instead of hiding it in prose.
+- Before finalizing, run a cross-section consistency check: the same entity's numbers and attributes must agree everywhere.
+- In the final report, list measured numbers with their source, and label planned numbers explicitly.
 """
 
 
@@ -514,7 +539,30 @@ class AgentRuntime:
         if casual:
             requested = "general"
         agent = self._choose_agent(session, requested, text)
-        provider, model = resolve(session.get("provider"), session.get("model"))
+        try:
+            session_meta = json.loads(session.get("meta") or "{}")
+        except (ValueError, TypeError):
+            session_meta = {}
+        requested_provider = str(
+            (session_meta or {}).get("requested_provider") or session.get("provider") or ""
+        ).strip()
+        requested_model = str(
+            (session_meta or {}).get("requested_model") or session.get("model") or ""
+        ).strip()
+        provider, model = resolve(requested_provider, requested_model)
+        strict = await self._strict_route()
+        if strict:
+            if requested_provider and requested_provider not in ("auto", ""):
+                conf = PROVIDERS.get(requested_provider)
+                if conf and conf.api_key:
+                    provider = requested_provider
+                    model = requested_model or effective_default_model(conf)
+                else:
+                    # Keep the requested provider so the gateway can raise a
+                    # precise strict-route error instead of silently falling back.
+                    provider, model = requested_provider, requested_model or "unknown"
+            elif provider == "mock":
+                provider, model = "strict", requested_model or "unknown"
         level = estimate_complexity(text, any(s.get("s") in ("pending", "doing") for s in _plan_steps(session)))
         lite = self._should_lite(session, level, text)
         task_type = detect_task_type(text)
@@ -546,6 +594,7 @@ class AgentRuntime:
                 "agent": agent.name,
                 "qa": qa,
                 "casual": casual,
+                "strict": strict,
             },
             run_id,
         )
@@ -568,6 +617,7 @@ class AgentRuntime:
                 text,
                 write_required,
                 casual,
+                strict,
             )
         except asyncio.CancelledError:
             await self.storage.update_session(session_id, status="error", error="用户取消")
@@ -582,6 +632,15 @@ class AgentRuntime:
             await self.storage.finish_run(run_id, "error", error=message)
         finally:
             await self.events.flush()
+
+    async def _strict_route(self) -> bool:
+        if os.getenv("HAOYUAN_STRICT_PROVIDER", "").strip().lower() in {"1", "true", "yes"}:
+            return True
+        try:
+            value = await self.storage.get_setting("strict_route", "0")
+        except Exception:
+            return False
+        return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def _selected_skills(self, session: dict[str, Any]) -> list[str]:
         try:
@@ -612,10 +671,19 @@ class AgentRuntime:
     def _should_lite(self, session: dict[str, Any], level: str, text: str) -> bool:
         if not LITE_MODE:
             return False
-        if level in ("simple", "normal"):
-            return True
+        # Web deliverables and research reports need the full toolset even when
+        # the router calls them "normal": subagents, reference diffing, baseline
+        # evidence and high reasoning are part of the task, not optional polish.
+        if wants_web_tools(text) or _RESEARCH_HINTS.search(text or ""):
+            return False
         if any(step.get("s") in ("pending", "doing") for step in _plan_steps(session)):
             return False
+        # Complex tasks always run full. Lite used to swallow the subagent tool
+        # and high reasoning exactly when they were most valuable.
+        if level == "complex":
+            return False
+        if level in ("simple", "normal"):
+            return True
         cleaned = _NEGATION_RE.sub("", text or "")
         if any(hint in cleaned for hint in LITE_MULTIPHASE_HINTS):
             return False
@@ -639,9 +707,15 @@ class AgentRuntime:
             return "off"
         if provider == "mock":
             return "off"
-        if qa or lite:
-            return "off" if qa else "low"
-        return "high" if level == "complex" else "low"
+        if qa:
+            return "off"
+        # Complex tasks get high reasoning even if a caller forced lite mode;
+        # this is where planning, baseline auditing and contradiction checks pay off.
+        if level == "complex":
+            return "high"
+        if lite:
+            return "low"
+        return "low"
 
     def _tools_for(self, agent, kind: str, lite: bool, workspace: bool, text: str = "") -> list[str]:
         if not agent.tools:
@@ -660,7 +734,7 @@ class AgentRuntime:
             # work. Only advertise them when the request is actually about a web
             # deliverable or a reference file; otherwise they are pure token cost.
             if not wants_web_tools(text):
-                allowed -= {"web_audit", "web_scaffold", "reference_digest", "reference_compare"}
+                allowed -= {"web_audit", "web_scaffold", "reference_digest", "reference_compare", "web_screenshot"}
             names = [name for name in names if name in allowed]
         if not SUBAGENT_ENABLED:
             names = [name for name in names if name != "task"]
@@ -684,6 +758,7 @@ class AgentRuntime:
         user_text: str = "",
         write_required: bool = False,
         casual: bool = False,
+        strict: bool = False,
     ) -> None:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
@@ -712,8 +787,8 @@ class AgentRuntime:
         if workspace and not casual and not qa:
             try:
                 reference_paths = reference.resolve_reference_paths(workspace, user_text)
-                blocks = [reference.digest(rel) for rel in reference_paths[:2]]
-                reference_text = "\n\n".join(blocks)[:16000]
+                blocks = [reference.digest(rel, 14000) for rel in reference_paths[:2]]
+                reference_text = "\n\n".join(blocks)[:18000]
             except Exception:
                 reference_paths = []
                 reference_text = ""
@@ -732,6 +807,7 @@ class AgentRuntime:
             casual,
             context_pack_text,
             reference_text,
+            research=bool(_RESEARCH_HINTS.search(user_text)),
         )
         contract = budget_contract(user_text)
         if contract:
@@ -795,6 +871,7 @@ class AgentRuntime:
             "output_targets": extract_output_targets(user_text, workspace) if write_required else [],
             "delivery_since": time.time(),
             "output_nudges": 0,
+            "strict_route": strict,
         }
         max_total = AGENT_MAX_TOTAL_STEPS
         session = await self.storage.get_session(session_id) or session
@@ -850,7 +927,9 @@ class AgentRuntime:
             actual_provider, actual_model = provider, model
             fallbacks: list[str] = []
             finish_reason = ""
-            async for event in self.gateway.stream(provider, model, messages, schemas, thinking):
+            async for event in self.gateway.stream(
+                provider, model, messages, schemas, thinking, strict=bool(state.get("strict_route"))
+            ):
                 event_type = event.get("type")
                 if event_type == "reasoning":
                     await self.emit(session_id, "reasoning", {"msg_id": msg_id, "text": event.get("text")}, run_id)
@@ -1088,6 +1167,10 @@ class AgentRuntime:
                     tool_args=call.arguments,
                 )
                 messages.append({"role": "tool", "tool_call_id": call.call_id, "content": content_for_context})
+                if result.ok and call.name == "describe_image":
+                    attachment = vision.native_attachment_message(result.result, workspace)
+                    if attachment:
+                        messages.append({"role": "user", "content": attachment})
                 if result.ok and call.name in ("write_file", "edit_file", "apply_patch", "multi_edit"):
                     path = str(call.arguments.get("path") or "")
                     if Path(path).suffix.lower() in VERIFY_CODE_EXTS:
@@ -1333,7 +1416,9 @@ class AgentRuntime:
                 try:
                     text = ""
                     usage: dict[str, Any] = {}
-                    async for event in self.gateway.stream(provider, model, messages, None, audit_thinking):
+                    async for event in self.gateway.stream(
+                        provider, model, messages, None, audit_thinking, strict=bool(state.get("strict_route"))
+                    ):
                         if event.get("type") == "message":
                             text = str((event.get("message") or {}).get("content") or "")
                             usage = event.get("usage") or {}
@@ -1395,7 +1480,9 @@ class AgentRuntime:
                 steps += 1
                 message = None
                 usage = {}
-                async for event in self.gateway.stream(provider, model, messages, schemas, "low"):
+                async for event in self.gateway.stream(
+                    provider, model, messages, schemas, "low", strict=bool(state.get("strict_route"))
+                ):
                     if event.get("type") == "message":
                         message = event.get("message")
                         usage = event.get("usage") or {}
@@ -1436,6 +1523,12 @@ class AgentRuntime:
                             "content": str(result.result if result.ok else result.error)[:6000],
                         }
                     )
+                    if result.ok and call.name == "describe_image":
+                        attachment = vision.native_attachment_message(
+                            result.result, session.get("workspace") or ""
+                        )
+                        if attachment:
+                            messages.append({"role": "user", "content": attachment})
             return final
 
         try:
@@ -1516,6 +1609,7 @@ class AgentRuntime:
         casual: bool = False,
         context_pack_text: str = "",
         reference_text: str = "",
+        research: bool = False,
     ) -> str:
         workspace = session.get("workspace") or ""
         parts = [SYSTEM_RULES]
@@ -1549,8 +1643,10 @@ class AgentRuntime:
             )
         if kind == "plan":
             parts.append(
-                "\n# Plan document mode\nWrite a rigorous proposal. Use make_plan to produce a standalone HTML document with "
-                "executive summary, KPIs, sections, tables, risks, milestones, and budget. Keep the document self-contained.\n"
+                "\n# Plan document mode\nWrite a rigorous proposal. If the user supplies a reference HTML or an explicit "
+                "output path, write the document directly with write_file/apply_patch in the reference style; use make_plan "
+                "only when no reference and no target path are given. Include executive summary, KPIs, sections, tables, "
+                "risks, milestones, and budget. Keep the document self-contained.\n"
             )
         if kind in ("dev", "coding") and workspace and not qa:
             parts.append(
@@ -1580,6 +1676,8 @@ class AgentRuntime:
                     "\n# Debug protocol\nReproduce the failure, read the failing assertion, fix the smallest root cause, "
                     "and rerun the same test. If the same failure fingerprint repeats, change strategy instead of retrying.\n"
                 )
+        if research or kind == "plan":
+            parts.append("\n" + RESEARCH_RULES)
         if matched:
             parts.append(SkillLibrary.render(matched, skill_how, 8000))
         if reference_text:

@@ -32,7 +32,13 @@ const toolIcon = {
   make_plan: 'document',
   make_storyboard: 'video',
   web_scaffold: 'layers',
-  web_audit: 'shield'
+  web_audit: 'shield',
+  reference_digest: 'document',
+  reference_compare: 'shield',
+  baseline_audit: 'compass',
+  doc_consistency: 'check',
+  describe_image: 'eye',
+  ask_user: 'message'
 }
 
 const args = computed(() => props.item.args || props.item.arguments || {})

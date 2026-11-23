@@ -10,6 +10,12 @@ version: 1.1.0
 ## Deliver a decision, not a brochure
 Open with the question, the constraint budget, and the recommended plan. If two readings exist (for example "<=50h total" vs "<=50h per model"), solve both and label which one the plan adopts. Separate estimates from measured values.
 
+## Baseline evidence first (non-negotiable)
+- If the user names a prior project, read its README, MODEL_CARD, CHANGELOG, `reports/*/summary.json`, `final_eval.json`, `data_quality.json`, license registry, and training/serving scripts. One README headline is not a baseline.
+- Build `claim | value | source (file:line or JSON field) | measured/planned`; separate stable vs commercial branches; label assumptions. For speaker count/gender/hours/license, read the data card.
+- Inventory reusable assets (checkpoints, aligned manifests, vocoder, tokenizer, export) as reuse / rebuild / discard.
+- Run `baseline_audit` and `doc_consistency`; fix every cross-section contradiction before delivery.
+
 ## Hard contract first (non-negotiable)
 - If the user states a total budget ("总训练时间不超过50小时", "total <= N h"), the TOTAL is binding: the plan's 合计 wall time must be <= N. Do not switch to a per-model reading unless the user explicitly says each model has its own budget. If all targets cannot fit, shrink parameters/data to the smallest viable sizes first; never change the budget semantics.
 - Minimal first: for each target start from the smallest viable configuration (<=200M trainable params where possible, reuse/freeze open components). Increase size only when a hard gate cannot be met. Cloud is the last resort: first reduce params/resolution/tokens to fit 16G, then prove with arithmetic why L20/H800 is unavoidable.
@@ -32,7 +38,7 @@ Never ship a nav link without a matching `id`. If budget runs low, finish every 
 
 ## Make every number traceable and self-consistent
 1. State the formula and every constant (peak FLOPS, MFU, overhead, price) before tables.
-2. Compute all throughput/time/memory/price numbers with a script (run_shell + python), never mentally; keep the script in a temp dir, not the deliverable dir.
+2. Compute all throughput/time/memory/price numbers with a script (run_shell + python), never mentally; write helper scripts under the OS temp dir, never in the workspace root or the deliverable dir. Run web_audit on both the output dir and the workspace root to catch stray tmp_*.py / calc_*.py files.
 3. Enforce invariants: tokens / tokens_per_second = hours; params * 6 * tokens / (effective_FLOPS * 3600) = pure_h; wall = pure * overhead; total = sum of parts + margin. If two rows disagree, fix them; never round over a contradiction.
 4. Put the assumption next to each estimate and never present a planning number as measured.
 5. Use exactly ONE effective TFLOPS constant per card in every table. Add a self-check table (N, D, effective FLOPS, pure_h, overhead, wall_h, 合计) and make the 合计 equal the sum of parts and <= the user's total budget.
@@ -44,7 +50,7 @@ Name which components are frozen vs trained, the data volume, memory peak, pure 
 Use small standard benchmarks where they exist; list at least one named metric per category even for tiny models: ARC-e/PIQA/HellaSwag for LLM, VQA-v2/POPE/CIDEr for VLM, LIBERO/CALVIN for VLA, PSNR/SSIM/FVD for world models, ASR WER/MOS for S2S. Add a task-specific dialogue set, explicit pass lines and a 10% pilot gate with a primary and an anti-regression metric.
 
 ## Finish and verify
-Include infeasibility alternatives, key risks with mitigations and a delivery checklist. Run web_audit; fix every must-fix item, especially broken in-page anchors and stray helper files. When the user supplied a reference page, call reference_compare after writing and report the score; reuse its component vocabulary (.qa / .code / .sb / .kpi / .callout). Include at least one SVG diagram (pipeline or budget bar) when the reference has one, and follow the reference design exactly.
+Include infeasibility alternatives, key risks with mitigations and a delivery checklist. Run baseline_audit on the prior project and doc_consistency on the finished page; fix every contradiction and every measured number without a source. Run web_audit; fix every must-fix item, especially broken in-page anchors and stray helper files. When the user supplied a reference page, call reference_compare after writing and report the score; reuse its component vocabulary (.qa / .code / .sb / .kpi / .callout) and copy-ready CSS. Include at least one SVG diagram (pipeline or budget bar) when the reference has one, and follow the reference design exactly.
 
 ## Work within a tool budget
 - Batch independent tool calls: put all reads/searches in one assistant message and all writes/patches in the next. Target at least two tool calls per step.

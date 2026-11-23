@@ -295,3 +295,24 @@ def test_purge_all_sessions(client):
         assert client.get(f"/api/sessions/{session_id}").json()["code"] == 404
     assert client.get(f"/api/sessions/{ids[0]}/messages").json()["data"] == []
     assert client.get("/api/sessions").json()["data"] == []
+
+
+def test_strict_route_setting(client):
+    assert client.put('/api/settings/strict_route', json={'value': '1'}).json()['code'] == 200
+    assert client.get('/api/settings').json()['data']['strict_route'] == '1'
+    client.put('/api/settings/strict_route', json={'value': '0'})
+
+
+def test_strict_route_blocks_mock_fallback(client):
+    client.put('/api/settings/strict_route', json={'value': '1'})
+    try:
+        session = client.post(
+            '/api/sessions',
+            json={'kind': 'general', 'title': 'strict route', 'provider': 'aliyun', 'model': 'qwen-plus'},
+        ).json()['data']
+        client.post(f"/api/sessions/{session['id']}/messages", json={'content': 'hello'})
+        final = wait_status(client, session['id'])
+        assert final['status'] == 'error'
+        assert 'strict route' in (final.get('error') or '').lower()
+    finally:
+        client.put('/api/settings/strict_route', json={'value': '0'})

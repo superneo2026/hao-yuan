@@ -263,9 +263,18 @@ def digest(path: str, max_chars: int = 9000) -> str:
         lines.append("structure (tag:line):")
         lines += tag_lines
 
+    style_blocks = _STYLE_BLOCK_RE.findall(raw)
+    if style_blocks:
+        css = "\n".join(block.strip() for block in style_blocks if block.strip())
+        if css:
+            # Give the model a copy-ready block instead of forcing it to
+            # reconstruct class names from a short sample (which causes
+            # "looks similar but not 1:1" output).
+            lines.append("copy-ready inline css (reuse verbatim; do not paraphrase class names):")
+            lines.append(css[:12000])
     first_style = (sig_lines and _STYLE_BLOCK_RE.search(raw))
     outline_head = ""
-    if first_style:
+    if first_style and not style_blocks:
         snippet = re.sub(r"\s+", " ", first_style.group(1).strip())
         outline_head = "css sample: " + snippet[:900]
         lines.append(outline_head)

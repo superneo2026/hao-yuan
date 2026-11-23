@@ -15,6 +15,33 @@ def strict_provider() -> bool:
     return os.getenv("HAOYUAN_STRICT_PROVIDER", "").strip().lower() in {"1", "true", "yes"}
 
 
+def describe_provider_error(exc: Exception) -> str:
+    """Turn raw provider failures into actionable messages for the UI."""
+    if isinstance(exc, ProviderHTTPError):
+        status = exc.status
+        body = (exc.body or "").lower()
+        if status in (401, 403):
+            return f"API Key 无效或无权限（HTTP {status}）"
+        if status == 404:
+            return "模型不存在或当前账号未开通（HTTP 404）"
+        if status == 429:
+            return "请求被限流（HTTP 429），请稍后重试"
+        if status == 400:
+            if "thinking" in body or "reasoning" in body:
+                return "模型不支持当前 thinking/reasoning 参数（HTTP 400）"
+            if "tool" in body or "function" in body:
+                return "模型不支持当前 tools/tool_choice 参数（HTTP 400）"
+            if "image" in body or "vision" in body:
+                return "模型不支持图片输入（HTTP 400）"
+            return "模型拒绝了请求参数（HTTP 400）"
+        if 500 <= status < 600:
+            return f"模型服务端错误（HTTP {status}）"
+        return f"模型调用失败（HTTP {status}）"
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "模型请求超时"
+    return f"模型调用失败：{type(exc).__name__}"
+
+
 class ModelGateway:
     def __init__(self):
         self.providers: dict[str, Any] = {"mock": MockProvider()}
@@ -46,8 +73,9 @@ class ModelGateway:
         self._cooldown.pop((provider, model), None)
         self._last_good = (provider, model)
 
-    def candidates(self, provider: str, model: str) -> list[tuple[str, str]]:
+    def candidates(self, provider: str, model: str, strict: bool | None = None) -> list[tuple[str, str]]:
         models_mod.get_providers()
+        strict = strict_provider() if strict is None else strict
         out: list[tuple[str, str]] = []
         conf = PROVIDERS.get(provider)
         if conf and (provider == "mock" or conf.api_key):
@@ -55,21 +83,23 @@ class ModelGateway:
                 item = (provider, candidate)
                 if item not in out:
                     out.append(item)
-        if strict_provider():
-            ordered = out or [("mock", "mock-deterministic")]
-        else:
-            for name, other in PROVIDERS.items():
-                if name in (provider, "mock") or not other.api_key:
-                    continue
-                for candidate in effective_models(other):
-                    item = (name, candidate)
-                    if item not in out:
-                        out.append(item)
-            if not conf or not conf.api_key:
-                out.append(("mock", "mock-deterministic"))
-            if not out:
-                out.append(("mock", "mock-deterministic"))
-            ordered = out
+        if strict:
+            # Strict routing means: use exactly the requested provider, never
+            # another provider and never mock. An empty list makes stream()
+            # raise a clear error instead of silently answering from elsewhere.
+            return out
+        for name, other in PROVIDERS.items():
+            if name in (provider, "mock") or not other.api_key:
+                continue
+            for candidate in effective_models(other):
+                item = (name, candidate)
+                if item not in out:
+                    out.append(item)
+        if not conf or not conf.api_key:
+            out.append(("mock", "mock-deterministic"))
+        if not out:
+            out.append(("mock", "mock-deterministic"))
+        ordered = out
         # If the requested model is currently cooling down, put the recently
         # successful model first so the next step does not re-walk dead entries.
         if self._last_good and ordered and self._open(*ordered[0]):
@@ -85,10 +115,21 @@ class ModelGateway:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         thinking: str = "",
+        strict: bool | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         last_error: Exception | None = None
         fallbacks: list[str] = []
-        candidates = self.candidates(provider, model)
+        candidates = self.candidates(provider, model, strict)
+        if not candidates:
+            if provider == "strict":
+                raise RuntimeError(
+                    "strict route: no configured provider is available. Configure a provider in Settings, "
+                    "or turn off strict routing."
+                )
+            raise RuntimeError(
+                f"strict route: provider '{provider}/{model}' is not configured or has no API key. "
+                "Configure it in Settings, or turn off strict routing."
+            )
         # If every candidate is cooling down, retry the first one anyway instead of
         # failing the whole run: a transient 429 must not make the session error out.
         honor_cooldown = any(not self._open(*item) for item in candidates)
@@ -104,11 +145,12 @@ class ModelGateway:
             handler = self._handler(prov)
             if handler is None:
                 continue
+            provider_tools = (tools or []) if conf.supports_tools else []
             attempts = 2
             for attempt in range(attempts):
                 produced = False
                 try:
-                    async for event in handler.stream(messages, tools or [], conf, mdl, thinking):
+                    async for event in handler.stream(messages, provider_tools, conf, mdl, thinking):
                         if event.get("type") in ("delta", "reasoning") and event.get("text"):
                             produced = True
                         if event.get("type") == "message":
@@ -148,7 +190,10 @@ class ModelGateway:
                     await asyncio.sleep(0.15)
             fallbacks.append(f"{prov}/{mdl}")
         if last_error:
-            raise RuntimeError(f"model call failed after fallbacks: {last_error}") from last_error
+            detail = str(last_error)[:240]
+            raise RuntimeError(
+                f"{describe_provider_error(last_error)}（已尝试：{', '.join(fallbacks) or '无'}；{detail}）"
+            ) from last_error
         raise RuntimeError("model call failed: no available provider")
 
     async def complete_text(
@@ -183,6 +228,8 @@ class ModelGateway:
                 tiers=conf.tiers,
                 max_output_tokens=conf.max_output_tokens,
                 supports_thinking=conf.supports_thinking,
+                supports_tools=conf.supports_tools,
+                supports_vision=conf.supports_vision,
                 builtin=conf.builtin,
                 key_source=conf.key_source,
             )

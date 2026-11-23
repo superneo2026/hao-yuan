@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -177,6 +178,44 @@ def test_plan_documents(client, tmp_path):
     info = json.loads(document)
     assert os.path.isfile(info["path"])
     assert "<!doctype html>" in open(info["path"], encoding="utf-8").read().lower()
+
+
+def test_make_plan_output_path_and_reference(client, tmp_path):
+    harness = harness_instance()
+    session = asyncio.run(
+        harness.manager.create_session(
+            kind="plan",
+            title="plan reference test",
+            provider="mock",
+            model="mock-deterministic",
+            workspace=str(tmp_path),
+        )
+    )
+    context = ToolContext(runtime=harness.runtime, session=session, workspace=str(tmp_path))
+    (tmp_path / "ref.html").write_text(
+        "<html><head><style>.kpi{color:#123456}</style></head><body></body></html>",
+        encoding="utf-8",
+    )
+    document = asyncio.run(
+        plan_tools.make_plan(
+            context,
+            {
+                "title": "Reference plan",
+                "sections": [{"title": "S", "html": "<p>x</p>"}],
+                "reference": "ref.html",
+                "output_path": "docs/plan.html",
+            },
+        )
+    )
+    info = json.loads(document)
+    path = Path(info["path"])
+    assert path == tmp_path / "docs" / "plan.html"
+    assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    assert "#123456" in text
+    assert info["reference_css"] is True
+
+
 def test_repo_map_ranks_query_files(tmp_path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "pricing.py").write_text("def stack_discounts(items):\n    return items\n", encoding="utf-8")

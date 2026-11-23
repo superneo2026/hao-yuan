@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
 import glob as globlib
+import hashlib
 import json
 import locale
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from configs.configs import (
@@ -25,7 +31,9 @@ from configs.configs import (
     VERIFY_CMD_HINTS,
 )
 from core.contracts import ToolContext, ToolSpec
+from harness import evidence as evidence_analysis
 from harness import reference as reference_analysis
+from harness import vision as vision_analysis
 from harness.sandbox import SafeWorkspace
 
 _CHILD_IO_ENV = {
@@ -47,6 +55,43 @@ def _truncate(text: str, limit: int | None = None) -> str:
     if len(data) <= limit:
         return text
     return data[:limit].decode("utf-8", errors="ignore") + f"\n... [truncated at {limit} bytes; read a narrower range]"
+
+
+def _read_ledger(ctx: ToolContext) -> dict[str, Any]:
+    ledger = ctx.session.get("_read_ledger")
+    if not isinstance(ledger, dict):
+        ledger = {}
+        ctx.session["_read_ledger"] = ledger
+    return ledger
+
+
+def _file_entry(ctx: ToolContext, key: str, content: str) -> dict[str, Any]:
+    digest = hashlib.sha1(content.encode("utf-8", errors="replace")).hexdigest()
+    ledger = _read_ledger(ctx)
+    entry = ledger.get(key)
+    if not isinstance(entry, dict) or entry.get("hash") != digest:
+        entry = {"hash": digest, "ranges": []}
+        ledger[key] = entry
+    return entry
+
+
+def _covered(entry: dict[str, Any], start: int, end: int) -> bool:
+    return any(a <= start and end <= b for a, b in entry.get("ranges") or [])
+
+
+def _overlaps(entry: dict[str, Any], start: int, end: int) -> bool:
+    return any(not (end < a or start > b) for a, b in entry.get("ranges") or [])
+
+
+def _record(entry: dict[str, Any], start: int, end: int) -> None:
+    merged: list[list[int]] = []
+    ranges = list(entry.get("ranges") or []) + [[start, end]]
+    for a, b in sorted(ranges):
+        if merged and a <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    entry["ranges"] = merged
 
 
 def _suggest_similar(src: str, old: str, limit: int = 3) -> str:
@@ -77,13 +122,28 @@ def read_file(ctx: ToolContext, args: dict[str, Any]) -> str:
     path = workspace.resolve(args.get("path", ""))
     if not path.is_file():
         raise FileNotFoundError(f"file not found: {args.get('path')}")
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines(keepends=True)
     offset = max(int(args.get("offset") or 1), 1)
     limit = int(args.get("limit") or 400)
-    segment = lines[offset - 1 : offset - 1 + limit]
-    body = "".join(f"{index + offset}: {line}" for index, line in enumerate(segment))
-    head = f"{args.get('path')} ({len(lines)} lines)"
-    return _truncate(f"{head}\n{body}" if body else f"{head} is empty")
+    start = offset
+    end = min(offset + limit - 1, len(lines))
+    label = str(args.get("path") or "")
+    entry = _file_entry(ctx, str(path), content)
+    if start <= end and _covered(entry, start, end):
+        return _truncate(
+            f"[read_file] {label}: lines {start}-{end} were already read earlier in this run. "
+            "Reuse that content instead of re-reading; request a different range only if you need new lines."
+        )
+    segment = lines[start - 1 : end]
+    body = "".join(f"{index + start}: {line}" for index, line in enumerate(segment))
+    head = f"{label} ({len(lines)} lines)"
+    overlap_note = ""
+    if start <= end and _overlaps(entry, start, end):
+        overlap_note = "\n[read ledger] This range overlaps lines already read; avoid re-reading unchanged ranges."
+    if start <= end:
+        _record(entry, start, end)
+    return _truncate(f"{head}\n{body}{overlap_note}" if body else f"{head} is empty")
 
 
 def read_range(ctx: ToolContext, args: dict[str, Any]) -> str:
@@ -91,15 +151,29 @@ def read_range(ctx: ToolContext, args: dict[str, Any]) -> str:
     path = workspace.resolve(args.get("path", ""))
     if not path.is_file():
         raise FileNotFoundError(f"file not found: {args.get('path')}")
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines(keepends=True)
     start = max(int(args.get("start") or 1), 1)
     end = int(args.get("end") or (start + 119))
     if end < start:
         start, end = end, start
+    end = min(end, len(lines))
+    label = str(args.get("path") or "")
+    entry = _file_entry(ctx, str(path), content)
+    if start <= end and _covered(entry, start, end):
+        return _truncate(
+            f"[read_range] {label}: lines {start}-{end} were already read earlier in this run. "
+            "Reuse that content instead of re-reading; request a different range only if you need new lines."
+        )
     segment = lines[start - 1 : end]
     body = "".join(f"{index + start}: {line}" for index, line in enumerate(segment))
-    head = f"{args.get('path')} (range {start}-{min(end, len(lines))} / {len(lines)} lines)"
-    return _truncate(f"{head}\n{body}" if body else f"{head} (empty range)")
+    head = f"{label} (range {start}-{end} / {len(lines)} lines)"
+    overlap_note = ""
+    if start <= end and _overlaps(entry, start, end):
+        overlap_note = "\n[read ledger] This range overlaps lines already read; avoid re-reading unchanged ranges."
+    if start <= end:
+        _record(entry, start, end)
+    return _truncate(f"{head}\n{body}{overlap_note}" if body else f"{head} (empty range)")
 
 
 def search_symbol(ctx: ToolContext, args: dict[str, Any]) -> str:
@@ -833,6 +907,13 @@ async def ask_user(ctx: ToolContext, args: dict[str, Any]) -> str:
     return await manager.ask_question(ctx.session, ctx.call, ctx.run_id)
 
 
+def task_placeholder(ctx: ToolContext, args: dict[str, Any]) -> str:
+    # The runtime intercepts `task` before it reaches the registry and runs the
+    # subagent loop there. This handler exists only so the tool spec is
+    # registered and advertised to the model.
+    return "task is handled by the runtime subagent dispatcher"
+
+
 def reference_digest(ctx: ToolContext, args: dict[str, Any]) -> str:
     workspace = _workspace(ctx)
     path = workspace.resolve(args.get("path", ""))
@@ -846,6 +927,152 @@ def reference_compare(ctx: ToolContext, args: dict[str, Any]) -> str:
     reference = workspace.resolve(args.get("reference", ""))
     target = workspace.resolve(args.get("target", ""))
     return reference_analysis.compare(str(reference), str(target))
+
+
+def baseline_audit(ctx: ToolContext, args: dict[str, Any]) -> str:
+    workspace = _workspace(ctx)
+    path = workspace.resolve(args.get("path") or ".")
+    return evidence_analysis.baseline_audit(
+        str(path), int(args.get("max_chars") or 12000)
+    )
+
+
+def doc_consistency(ctx: ToolContext, args: dict[str, Any]) -> str:
+    workspace = _workspace(ctx)
+    path = workspace.resolve(args.get("path", ""))
+    baseline = str(args.get("baseline") or "").strip()
+    baseline_path = str(workspace.resolve(baseline)) if baseline else ""
+    return evidence_analysis.doc_consistency(str(path), baseline_path)
+
+
+async def describe_image(ctx: ToolContext, args: dict[str, Any]) -> Any:
+    workspace = _workspace(ctx)
+    path = workspace.resolve(args.get("path") or "")
+    if not path.is_file():
+        raise FileNotFoundError(f"image not found: {args.get('path')}")
+    prompt = str(args.get("prompt") or "请描述这张图片的内容、布局和明显问题。")[:2000]
+    mode = vision_analysis.vision_mode(ctx.session)
+    if mode == "native":
+        # The runtime attaches this image to the next model call; the main model
+        # must have supports_vision=true.
+        return vision_analysis.native_image_result(str(path), prompt)
+    if mode == "sidecar":
+        return await vision_analysis.describe_via_sidecar(
+            str(path), prompt, int(args.get("max_tokens") or 800)
+        )
+    return (
+        "[describe_image] 多模态能力未配置：当前主模型不支持视觉，也没有可用的 Qwen-VL sidecar。"
+        "已按纯文本模式处理；可继续使用 web_audit / doc_consistency，或配置 "
+        "ALIYUN_API_KEY / DASHSCOPE_API_KEY（或 aliyun 渠道的 qwen-vl 模型）。"
+    )
+
+
+def _find_browser() -> str | None:
+    env_browser = os.getenv("HAOYUAN_BROWSER", "").strip()
+    if env_browser and os.path.isfile(env_browser):
+        return env_browser
+    candidates: list[str] = []
+    if os.name == "nt":
+        for base in (os.getenv("PROGRAMFILES"), os.getenv("PROGRAMFILES(X86)"), os.getenv("LOCALAPPDATA")):
+            if not base:
+                continue
+            candidates += [
+                os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+            ]
+    elif sys.platform == "darwin":
+        candidates += [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+    else:
+        candidates += [
+            "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
+            "/usr/bin/microsoft-edge",
+        ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    for name in ("google-chrome", "chromium", "chromium-browser", "microsoft-edge", "chrome", "msedge"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+async def web_screenshot(ctx: ToolContext, args: dict[str, Any]) -> str:
+    workspace = _workspace(ctx)
+    target = workspace.resolve(args.get("path") or "")
+    if not target.is_file():
+        raise FileNotFoundError(f"file not found: {args.get('path')}")
+    if target.suffix.lower() not in (".html", ".htm"):
+        raise ValueError("web_screenshot only supports .html/.htm files")
+    browser = _find_browser()
+    if not browser:
+        return (
+            "[web_screenshot] no Chrome/Edge executable found. Install Chrome/Edge or set "
+            "HAOYUAN_BROWSER to the browser executable."
+        )
+    width = max(320, min(int(args.get("width") or 1440), 2560))
+    height = max(240, min(int(args.get("height") or (6000 if args.get("full_page") else 900)), 20000))
+    # Keep the screenshot inside the workspace so describe_image can read it
+    # through SafeWorkspace; the hidden folder is ignored by web_audit.
+    out_dir = workspace.root / ".haoyuan" / "screenshots"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ignore = out_dir / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n", encoding="utf-8")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out = out_dir / f"{target.stem}-{width}x{height}-{stamp}.png"
+    url = target.as_uri()
+    with tempfile.TemporaryDirectory(prefix="haoyuan-shot-") as profile:
+        command = [
+            browser,
+            "--headless=new",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--no-sandbox",
+            f"--user-data-dir={profile}",
+            f"--window-size={width},{height}",
+            f"--screenshot={out}",
+            url,
+        ]
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return "[web_screenshot] browser timed out after 60s"
+        if not out.is_file() or out.stat().st_size == 0:
+            detail = (proc.stderr or proc.stdout or "").strip()[:800]
+            return f"[web_screenshot] capture failed (exit {proc.returncode}): {detail}"
+    try:
+        record = await ctx.runtime.storage.create_artifact(
+            ctx.session_id, str(out), "screenshot", out.name, out.stat().st_size
+        )
+        if ctx.emit:
+            await ctx.emit(ctx.session_id, "artifact.created", record, ctx.run_id)
+        artifact_id = record.get("id")
+    except Exception:
+        artifact_id = None
+    return json.dumps(
+        {
+            "ok": True,
+            "path": str(out),
+            "artifact_id": artifact_id,
+            "width": width,
+            "height": height,
+            "bytes": out.stat().st_size,
+            "note": "Screenshot saved as an artifact. Open it in the UI for visual verification; text-only models cannot inspect the image.",
+        },
+        ensure_ascii=False,
+    )
 
 
 def _unified(old: str, new: str, path: str, max_lines: int = 60) -> str:
@@ -990,6 +1217,25 @@ def tool_specs(source: str = "coding") -> list[ToolSpec]:
             "reference": {"type": "string"},
             "target": {"type": "string"},
         }, ["reference", "target"], readonly=True, source=source),
+        _spec("baseline_audit", "Extract measured facts (params, steps, minutes, CER, PESQ, F0, speakers, hours, licenses) from a prior project's README/MODEL_CARD/reports/data cards so a new plan can cite real baselines instead of guessing.", {
+            "path": {"type": "string", "description": "Baseline project directory (or one report file)."},
+            "max_chars": {"type": "integer", "description": "Output cap; default 12000."},
+        }, ["path"], readonly=True, source=source),
+        _spec("doc_consistency", "Check a plan/report HTML for cross-section contradictions (same entity with different numbers/attributes) and compare against a baseline directory when provided. Run before finishing any research deliverable.", {
+            "path": {"type": "string", "description": "Generated plan/report HTML file."},
+            "baseline": {"type": "string", "description": "Optional baseline project directory for data-card cross-checks."},
+        }, ["path"], readonly=True, source=source),
+        _spec("web_screenshot", "Capture a workspace HTML page with headless Chrome/Edge at a viewport (default 1440x900). Use height>=6000 or full_page for long reports. Saves a PNG artifact for visual verification and delivery.", {
+            "path": {"type": "string", "description": "HTML file inside the workspace."},
+            "width": {"type": "integer", "description": "Viewport width; default 1440."},
+            "height": {"type": "integer", "description": "Viewport height; default 900, or 6000 with full_page."},
+            "full_page": {"type": "boolean", "description": "Use a tall viewport for a full-report capture."},
+        }, ["path"], readonly=True, source=source),
+        _spec("describe_image", "Understand an image (screenshot/photo) with the hybrid vision path: if the main model supports vision, attach the image to the next model call (native); otherwise use the Qwen-VL sidecar and return text; if neither is configured, return a clear text-only notice.", {
+            "path": {"type": "string", "description": "Image file inside the workspace (png/jpg/webp/gif)."},
+            "prompt": {"type": "string", "description": "What to look for; default describes layout and visible problems."},
+            "max_tokens": {"type": "integer", "description": "Sidecar output cap; default 800."},
+        }, ["path"], readonly=True, source=source),
         _spec("ask_user", "Pause the running task and ask the user a blocking question. Call this instead of ending your turn whenever a decision, missing detail, or confirmation blocks safe progress. The task resumes in place with the user's answer.", {
             "question": {"type": "string", "description": "One clear, specific question."},
             "options": {"type": "array", "items": {"type": "string"}, "description": "Optional 2-4 short choices."},
@@ -1024,7 +1270,12 @@ EXECUTORS = {
     "web_audit": web_audit,
     "reference_digest": reference_digest,
     "reference_compare": reference_compare,
+    "baseline_audit": baseline_audit,
+    "doc_consistency": doc_consistency,
+    "web_screenshot": web_screenshot,
+    "describe_image": describe_image,
     "ask_user": ask_user,
+    "task": task_placeholder,
 }
 
 

@@ -20,4 +20,7 @@ Every important claim gets a number, a range, or a clear assumption. Separate fa
 Include probability, impact, mitigation, and owner. Do not list generic risks.
 
 ## Deliverable
-Call make_plan with title, summary, 3-4 KPIs, and sections containing clean HTML: tables, callouts, timelines. Keep the document standalone and readable offline.
+If the user supplies a reference HTML or an explicit output path, write the document directly with write_file/apply_patch in the reference style (reference wins over the built-in scaffold). Otherwise call make_plan with title, summary, 3-4 KPIs, and sections containing clean HTML: tables, callouts, timelines. Keep the document standalone and readable offline.
+
+## Baseline evidence
+If the plan compares or continues a prior project, run baseline_audit on that project first and doc_consistency on the finished page. Cite measured numbers with their source and label planned numbers explicitly.

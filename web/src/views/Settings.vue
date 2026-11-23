@@ -13,6 +13,7 @@ const info = ref(null)
 const savingGate = ref(false)
 const autoResume = ref(state.settings.auto_resume !== '0')
 const checkpoints = ref(state.settings.checkpoints !== '0')
+const strictRoute = ref(state.settings.strict_route === '1')
 
 const confirmTools = computed(() => (info.value?.tools || []).filter((tool) => tool.confirm))
 
@@ -191,6 +192,7 @@ async function refreshAllModels() {
         enabled_models: enabled,
         default_model: defaultModel,
         supports_thinking: provider.supports_thinking,
+        supports_vision: provider.supports_vision === true,
         thinking_models: provider.thinking_models || [],
         max_output_tokens: provider.max_output_tokens || 0
       })
@@ -229,6 +231,7 @@ function startAddProvider(template = null) {
     modelsText: (template?.models || []).join('\n'),
     default_model: template?.default_model || '',
     supports_thinking: template ? template.supports_thinking !== false : true,
+    supports_vision: template ? template.supports_vision === true : false,
     thinkingText: (template?.thinking_models || []).join(','),
     max_output_tokens: template?.max_output_tokens || ''
   }
@@ -269,6 +272,7 @@ function startEditProvider(provider) {
     modelsText: (provider.models || []).join('\n'),
     default_model: provider.default_model || '',
     supports_thinking: provider.supports_thinking !== false,
+    supports_vision: provider.supports_vision === true,
     thinkingText: (provider.thinking_models || []).join(','),
     max_output_tokens: provider.max_output_tokens || ''
   }
@@ -322,6 +326,7 @@ async function saveProvider() {
           enabled_models: enabled.length === models.length ? [] : enabled,
           default_model: defaultModel,
           supports_thinking: draft.supports_thinking,
+          supports_vision: draft.supports_vision === true,
           thinking_models: splitList(draft.thinkingText),
           max_output_tokens: Number(draft.max_output_tokens) || 0
         }
@@ -368,6 +373,7 @@ function sync() {
   workspace.value = state.settings.default_workspace || ''
   autoResume.value = state.settings.auto_resume !== '0'
   checkpoints.value = state.settings.checkpoints !== '0'
+  strictRoute.value = state.settings.strict_route === '1'
 }
 
 function toggleAllow(name) {
@@ -531,6 +537,13 @@ onMounted(async () => {
           <div><b>{{ t('settings.autoResume') }}</b><span>{{ t('settings.autoResumeDesc') }}</span></div>
           <button class="switch" :class="{ on: autoResume }" @click="autoResume = !autoResume; toggleRuntime('auto_resume', autoResume)"><span /></button>
         </div>
+        <div class="toggle-row">
+          <div>
+            <b>{{ t('settings.strictRoute', {}, 'Strict routing') }}</b>
+            <span>{{ t('settings.strictRouteDesc', {}, 'Do not fall back to another provider or mock when the selected provider is unavailable.') }}</span>
+          </div>
+          <button class="switch" :class="{ on: strictRoute }" @click="strictRoute = !strictRoute; toggleRuntime('strict_route', strictRoute)"><span /></button>
+        </div>
       </section>
 
       <section class="settings-card wide">
@@ -676,6 +689,9 @@ onMounted(async () => {
           </div>
           <div class="editor-flags">
             <label class="check"><input v-model="modelDraft.supports_thinking" type="checkbox" /> {{ t('settings.supportsThinking') }}</label>
+            <label class="check" :title="t('settings.supportsVisionHint', {}, 'Enable native image input only for a model that actually supports vision.')">
+              <input v-model="modelDraft.supports_vision" type="checkbox" /> {{ t('settings.supportsVision', {}, 'Vision (image input)') }}
+            </label>
             <label v-if="modelDraft.has_key" class="check"><input v-model="modelDraft.clear_key" type="checkbox" /> {{ t('settings.clearKey') }}</label>
           </div>
           <div class="row">

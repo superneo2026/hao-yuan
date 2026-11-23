@@ -96,6 +96,8 @@ class ProviderConfig:
     tiers: dict[str, str] = field(default_factory=dict)
     max_output_tokens: int = 0  # 0 = 不指定，交给模型使用默认上限
     supports_thinking: bool = True
+    supports_tools: bool = True
+    supports_vision: bool = False
     builtin: bool = False
     key_source: str = "default"
 
@@ -214,6 +216,14 @@ def _apply_nested(conf: ProviderConfig, raw: dict[str, Any]) -> ProviderConfig:
     if "supports_thinking" in raw or "supportsThinking" in raw:
         conf.supports_thinking = _truthy(
             raw.get("supports_thinking", raw.get("supportsThinking")), conf.supports_thinking
+        )
+    if "supports_tools" in raw or "supportsTools" in raw:
+        conf.supports_tools = _truthy(
+            raw.get("supports_tools", raw.get("supportsTools")), conf.supports_tools
+        )
+    if "supports_vision" in raw or "supportsVision" in raw:
+        conf.supports_vision = _truthy(
+            raw.get("supports_vision", raw.get("supportsVision")), conf.supports_vision
         )
     if "max_output_tokens" in raw or "maxOutputTokens" in raw:
         max_output = raw.get("max_output_tokens", raw.get("maxOutputTokens"))
@@ -391,6 +401,8 @@ def provider_presets() -> list[dict]:
                 "models": list(models),
                 "default_model": default_model,
                 "supports_thinking": supports_thinking,
+                "supports_tools": True,
+                "supports_vision": False,
                 "builtin": True,
                 "docs": _PRESET_DOCS.get(name, ""),
             }
@@ -405,6 +417,8 @@ def provider_presets() -> list[dict]:
                 "models": models,
                 "default_model": models[0] if models else "",
                 "supports_thinking": bool(spec.get("supports_thinking", True)),
+                "supports_tools": True,
+                "supports_vision": False,
                 "builtin": False,
                 "docs": _PRESET_DOCS.get(name, ""),
             }
@@ -455,6 +469,8 @@ def describe_config() -> dict:
                 "api_key": secrets.mask_secret(conf.api_key),
                 "key_source": conf.key_source,
                 "supports_thinking": conf.supports_thinking,
+                "supports_tools": conf.supports_tools,
+                "supports_vision": conf.supports_vision,
                 "thinking_models": sorted(conf.thinking_models),
                 "max_output_tokens": conf.max_output_tokens,
                 "tiers": conf.tiers,
@@ -484,6 +500,12 @@ def _normalize_payload(item: dict[str, Any]) -> dict[str, Any]:
         "default_model": str(item.get("default_model") or item.get("defaultModel") or "").strip(),
         "supports_thinking": _truthy(
             item.get("supports_thinking", item.get("supportsThinking")), True
+        ),
+        "supports_tools": _truthy(
+            item.get("supports_tools", item.get("supportsTools")), True
+        ),
+        "supports_vision": _truthy(
+            item.get("supports_vision", item.get("supportsVision")), False
         ),
         "thinking_models": _as_list(item.get("thinking_models") or item.get("thinkingModels")),
         "max_output_tokens": item.get("max_output_tokens", item.get("maxOutputTokens")),
@@ -589,6 +611,8 @@ def update_config(
             entry["enabled_models"] = enabled_models
         entry["default_model"] = default_model_name
         entry["supports_thinking"] = item["supports_thinking"]
+        entry["supports_tools"] = item["supports_tools"]
+        entry["supports_vision"] = item["supports_vision"]
         entry["thinking_models"] = item["thinking_models"]
         if item["max_output_tokens"] is not None:
             try:

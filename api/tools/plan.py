@@ -3,11 +3,13 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any
 
 from configs.configs import ARTIFACTS_DIR
 from core.contracts import ToolContext, ToolSpec
+from harness.sandbox import SafeWorkspace
 
 
 def _emit(ctx: ToolContext, event: str, payload: dict[str, Any]) -> None:
@@ -120,6 +122,27 @@ async def _register(ctx: ToolContext, artifact: dict[str, Any]) -> None:
     _emit(ctx, "artifact.created", record)
 
 
+def _reference_css(ctx: ToolContext, reference: str) -> str:
+    value = (reference or "").strip()
+    if not value:
+        return ""
+    try:
+        if os.path.isabs(value) and os.path.isfile(value):
+            path = value
+        else:
+            path = str(SafeWorkspace(ctx.workspace).resolve(value))
+        if not os.path.isfile(path):
+            return ""
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            raw = handle.read()
+    except Exception:
+        return ""
+    match = re.search(r"<style\b[^>]*>(.*?)</style>", raw, re.I | re.S)
+    if not match or not match.group(1).strip():
+        return ""
+    return "\n/* reference CSS appended: overrides earlier rules */\n" + match.group(1).strip()
+
+
 async def make_plan(ctx: ToolContext, args: dict[str, Any]) -> str:
     title = str(args.get("title") or "方案计划书")
     summary = str(args.get("summary") or args.get("subtitle") or "")
@@ -149,10 +172,30 @@ async def make_plan(ctx: ToolContext, args: dict[str, Any]) -> str:
     if not section_html:
         body += '<section class="sec"><div class="box">内容由 HaoYuan 生成。</div></section>'
     content = _doc_html(title, summary, body)
-    artifact = _artifact(ctx, f"plan-{datetime.now().strftime('%Y%m%d-%H%M%S')}.html", content, "plan")
+    extra_css = _reference_css(ctx, str(args.get("reference") or ""))
+    if extra_css:
+        # Append after the built-in style so the reference tokens win.
+        content = content.replace("</style>", extra_css + "\n</style>", 1)
+    output_path = str(args.get("output_path") or "").strip()
+    if output_path:
+        try:
+            target = SafeWorkspace(ctx.workspace).resolve(output_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            artifact = {"path": str(target), "kind": "plan", "size": target.stat().st_size}
+        except Exception as exc:
+            raise ValueError(f"invalid output_path (must stay inside the workspace): {exc}") from exc
+    else:
+        artifact = _artifact(ctx, f"plan-{datetime.now().strftime('%Y%m%d-%H%M%S')}.html", content, "plan")
     await _register(ctx, artifact)
     return json.dumps(
-        {"ok": True, "title": title, "path": artifact["path"], "artifact_kind": "plan"},
+        {
+            "ok": True,
+            "title": title,
+            "path": artifact["path"],
+            "artifact_kind": "plan",
+            "reference_css": bool(extra_css),
+        },
         ensure_ascii=False,
     )
 
@@ -211,6 +254,8 @@ def tool_specs(source: str = "plans") -> list[ToolSpec]:
                     "summary": {"type": "string"},
                     "kpis": {"type": "array", "items": {"type": "object"}},
                     "sections": {"type": "array", "items": {"type": "object"}},
+                    "reference": {"type": "string", "description": "Optional reference HTML file; its <style> block is appended after the built-in CSS."},
+                    "output_path": {"type": "string", "description": "Optional workspace-relative output path. When set, write the HTML there instead of the artifacts dir."},
                 },
                 "required": ["title", "sections"],
             },

@@ -20,6 +20,29 @@ class ProviderHTTPError(RuntimeError):
         super().__init__(f"model gateway HTTP {status}: {body[:600]}")
 
 
+def _content_text(value: Any) -> str:
+    """OpenAI-compatible content may be a string or a list of text parts.
+
+    Qwen and some gateways return content arrays; the rest of the runtime expects
+    a string, so normalize here instead of failing the whole stream.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for part in value:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                elif isinstance(part.get("content"), str):
+                    parts.append(part["content"])
+        return "".join(parts)
+    return ""
+
+
 # 复用一个长连接客户端：每一次模型调用都重新建 TLS 连接会明显拖慢多步任务。
 
 class DeepSeekProvider:
@@ -55,10 +78,26 @@ class DeepSeekProvider:
             ):
                 yield event
         except ProviderHTTPError as exc:
+            body = (exc.body or "").lower()
             # 部分模型（如 Kimi K3、OpenAI o 系列）只接受 temperature=1，去掉该参数重试。
-            if exc.status == 400 and "temperature" in (exc.body or "").lower():
+            if exc.status == 400 and "temperature" in body:
                 async for event in self._stream_once(
                     messages, tools, profile, model, thinking, use_temperature=False
+                ):
+                    yield event
+            # Some OpenAI-compatible models reject thinking/reasoning or tools.
+            # Retry once without those optional fields instead of falling back.
+            elif exc.status == 400 and any(
+                token in body for token in ("thinking", "reasoning", "tool", "function")
+            ):
+                async for event in self._stream_once(
+                    messages,
+                    tools,
+                    profile,
+                    model,
+                    thinking,
+                    use_thinking=False,
+                    use_tools=False,
                 ):
                     yield event
             else:
@@ -72,6 +111,8 @@ class DeepSeekProvider:
         model: str,
         thinking: str = "",
         use_temperature: bool = True,
+        use_thinking: bool = True,
+        use_tools: bool = True,
     ) -> AsyncGenerator[dict[str, Any], None]:
         if not profile.api_key:
             raise RuntimeError(f"{profile.name} API key is not configured")
@@ -87,11 +128,11 @@ class DeepSeekProvider:
         if profile.max_output_tokens > 0:
             # 0 表示不指定，交给模型使用自身默认的最大输出。
             payload["max_tokens"] = profile.max_output_tokens
-        if tools:
+        if tools and use_tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        if not profile.supports_thinking:
+        if not profile.supports_thinking or not use_thinking:
             pass
         elif thinking == "off":
             payload["thinking"] = {"type": "disabled"}
@@ -157,7 +198,7 @@ class DeepSeekProvider:
                 if reasoning:
                     reasoning_parts.append(reasoning)
                     yield {"type": "reasoning", "text": reasoning}
-                content = delta.get("content")
+                content = _content_text(delta.get("content"))
                 if content:
                     text_parts.append(content)
                     yield {"type": "delta", "text": content}

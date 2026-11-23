@@ -274,6 +274,9 @@ async def create_session(body: SessionCreate):
     if body.workspace and not os.path.isdir(body.workspace):
         return fail(f"workspace does not exist: {body.workspace}")
     provider, model = resolve(body.provider, body.model)
+    meta = dict(body.meta or {})
+    meta.setdefault("requested_provider", (body.provider or "").strip())
+    meta.setdefault("requested_model", (body.model or "").strip())
     title = body.title or {
         "auto": "New task",
         "dev": "New coding task",
@@ -293,7 +296,7 @@ async def create_session(body: SessionCreate):
         gate_mode=body.gate_mode if body.gate_mode in ("", "ask", "allow_list", "allow_all") else "",
         gate_allow=body.gate_allow,
         skills=body.skills,
-        meta=body.meta,
+        meta=meta,
     )
     await harness.events.emit(session["id"], "session.created", {"session": session})
     return ok(session)

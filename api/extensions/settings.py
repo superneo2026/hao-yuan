@@ -44,6 +44,7 @@ async def read_settings():
             "theme": all_values.get("theme", "light"),
             "checkpoints": all_values.get("checkpoints", "1"),
             "auto_resume": all_values.get("auto_resume", "1"),
+            "strict_route": all_values.get("strict_route", "0"),
             "raw": all_values,
         }
     )
@@ -72,7 +73,7 @@ async def write_workspace(body: WorkspaceBody):
 
 @router.put("/settings/{key}")
 async def write_setting(key: str, body: ValueBody):
-    allowed = {"theme", "default_agent", "checkpoints", "auto_resume"}
+    allowed = {"theme", "default_agent", "checkpoints", "auto_resume", "strict_route"}
     if key not in allowed:
         return fail(f"setting key must be one of {sorted(allowed)}", 400)
     harness = await get_harness()

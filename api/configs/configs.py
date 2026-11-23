@@ -141,12 +141,14 @@ LITE_MULTIPHASE_HINTS = (
     "重构", "整个项目", "全量", "批量", "架构", "部署", "上线", "迁移", "端到端",
     "多个文件", "多文件", "完整系统", "平台", "并行", "工作流", "流水线", "全套",
     "微服务", "网页", "站点", "文档站", "可视化", "架构图", "大屏", "落地页",
-    "设计系统", "响应式", "多页",
+    "设计系统", "响应式", "多页", "HTML", "页面", "报告", "方案", "预训练",
+    "训练计划", "训练方案", "评估", "调研", "对比", "复盘", "审计",
 )
 LITE_TOOL_SET = (
     "read_file", "read_range", "search_symbol", "apply_patch", "edit_file", "write_file",
     "grep", "glob", "list_dir", "run_shell", "project_scan", "web_audit", "web_scaffold",
-    "reference_digest", "reference_compare", "ask_user",
+    "reference_digest", "reference_compare", "baseline_audit", "doc_consistency",
+    "web_screenshot", "describe_image", "ask_user", "task",
 )
 TOOL_SCHEMA_TRIM = os.getenv("HAOYUAN_TOOL_SCHEMA_TRIM", "1").strip() not in {"0", "false"}
 TWO_PHASE_PLAN = True
