@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from configs.configs import (
     AGENT_MAX_STEPS,
@@ -454,11 +455,24 @@ def needs_write(text: str, qa: bool, kind: str, workspace: bool) -> bool:
 _OUTPUT_HINT_RE = re.compile(
     # The path must sit in the same clause as the hint keyword: "输出…方案，开发项目的代码目录路径：D:\x"
     # used to register the code directory as a second deliverable.
+    # ``gap`` is kept separately so a reference/previous-plan link can be
+    # distinguished from a real destination.
     r"(?:输出|保存|写到|写入|生成|交付|放到|存到|放在|导出|output|save|write|deliver)"
-    r"[^\n，,。；;]{0,40}?"
-    r"((?:[A-Za-z]:[\\/]|/)[^\s\"'<>|，。；、）】]+)",
+    r"(?P<gap>[^\n，,。；;]{0,40}?)"
+    r"(?P<path>(?:[A-Za-z]:[\\/]|/)[^\s\"'<>|，。；、）】]+)",
     re.I,
 )
+
+# A ``file:///`` URI in the same clause as an output verb is often a reference
+# or a previous plan, not a destination. Bare local paths are treated less
+# aggressively: "输出训练计划：D:\x" is a real output even though it says 计划.
+_URI_REFERENCE_GAP_RE = re.compile(r"(参考|参照|仿照|沿用|风格|模板|已完成|已经完成|计划书|计划)", re.I)
+_LOCAL_REFERENCE_GAP_RE = re.compile(r"(参考|参照|仿照|沿用|风格|模板|已完成|已经完成|计划书)", re.I)
+_DESTINATION_GAP_RE = re.compile(
+    r"(到|至|为|是|保存|输出|写入|写到|生成|交付|放到|存到|放在|导出|output|save|write|deliver)",
+    re.I,
+)
+_DUPLICATE_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]+([A-Za-z]:[\\/].*)$")
 
 _BUDGET_RE = re.compile(
     r"(?:总训练时间|总时间|合计|总共|total)[^\n。；;]{0,24}?"
@@ -494,22 +508,41 @@ def budget_contract(text: str) -> str:
 _DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
-def _absolute_output_target(raw: str) -> str | None:
-    # Windows 盘符路径在 POSIX 上不会被 os.path.isabs 识别，需显式判断，
-    # 否则会把 D:/x 拼到工作区后面。
-    if _DRIVE_PATH_RE.match(raw):
-        return raw.replace("/", "\\")
-    return raw if os.path.isabs(raw) else None
+def _normalize_output_target(raw: str) -> str | None:
+    """Turn a matched path/URI into an absolute local path.
+
+    Handles ``file:///D:/...`` and the ``e:///D:/...`` corruption produced when
+    the ``e`` of ``file`` is mistaken for a drive letter. Windows drive paths
+    are recognised explicitly because ``os.path.isabs`` does not treat them as
+    absolute on POSIX.
+    """
+    value = (raw or "").strip().strip("'\"<>()[]{}，。；;、）】")
+    if not value:
+        return None
+    if value.lower().startswith("file:///"):
+        value = unquote(value[8:])
+    duplicate = _DUPLICATE_DRIVE_RE.match(value)
+    if duplicate:
+        value = duplicate.group(1)
+    if _DRIVE_PATH_RE.match(value):
+        return os.path.normpath(value.replace("/", "\\"))
+    return os.path.normpath(value) if os.path.isabs(value) else None
 
 
 def extract_output_targets(text: str, workspace: str) -> list[str]:
     targets: list[str] = []
     for match in _OUTPUT_HINT_RE.finditer(text or ""):
-        raw = match.group(1).strip().rstrip(".,;:!?)]}\"'")
-        if not raw:
+        gap = match.group("gap") or ""
+        raw = (match.group("path") or "").strip()
+        is_uri = raw.lower().startswith(("file:///", "e:///"))
+        reference_re = _URI_REFERENCE_GAP_RE if is_uri else _LOCAL_REFERENCE_GAP_RE
+        if reference_re.search(gap) and not _DESTINATION_GAP_RE.search(gap):
+            # "参考/已完成/计划：" links point at prior artifacts, not outputs.
             continue
-        absolute = _absolute_output_target(raw)
-        full = os.path.normpath(absolute if absolute is not None else os.path.join(workspace, raw))
+        normalized = _normalize_output_target(raw)
+        if normalized is None:
+            continue
+        full = os.path.normpath(normalized)
         if full not in targets:
             targets.append(full)
     return targets
@@ -694,6 +727,118 @@ def missing_deliverables(state: dict[str, Any]) -> list[str]:
     return [target for target in (state.get("output_targets") or []) if not output_target_ready(target, since)]
 
 
+def _describe_deliverable(path: str, since: float) -> tuple[str, bool]:
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    try:
+        fresh = os.path.getmtime(path) >= since if since else True
+    except OSError:
+        fresh = False
+    if os.path.splitext(path)[1].lower() in deliverable_check.HTML_EXTS:
+        report = deliverable_check.html_report(path)
+        parts = [
+            f"{size:,} B",
+            f"{report.get('line_count', 0)} 行",
+            f"{report.get('visible_chars', 0)} 可见字符",
+            f"{report.get('resolved_anchors', 0)}/{report.get('nav_anchors', 0)} 锚点",
+            "已闭合" if report.get("closed") else "未闭合",
+        ]
+        if report.get("dead_anchors"):
+            parts.append("坏锚点 " + ", ".join(f"#{item}" for item in report["dead_anchors"][:5]))
+        if report.get("broken_local_links"):
+            parts.append("坏链接 " + ", ".join(report["broken_local_links"][:5]))
+        return " · ".join(parts), fresh
+    return f"{size:,} B", fresh
+
+
+def task_summary_text(
+    session: dict[str, Any],
+    state: dict[str, Any],
+    status: str,
+    error: str = "",
+) -> str:
+    """Deterministic closing summary shown even when the model never wrote one."""
+    labels = {"done": "已完成", "error": "失败", "cancelled": "已取消"}
+    lines = ["## 任务收尾总结", "", f"**状态**：{labels.get(status, status or '未知')}"]
+    goal = re.sub(r"\s+", " ", str(session.get("first_question") or "")).strip()
+    if goal:
+        lines.append(f"**目标**：{goal[:220]}{'…' if len(goal) > 220 else ''}")
+    if state.get("started_at"):
+        seconds = max(0, int(time.time() - float(state["started_at"])))
+        suffix = f" · {state.get('total_steps')} 步" if state.get("total_steps") else ""
+        lines.append(f"**用时**：{seconds}s{suffix}")
+    elif session.get("elapsed_s"):
+        lines.append(f"**用时**：{int(session['elapsed_s'])}s")
+
+    since = float(state.get("delivery_since") or 0.0)
+    targets = [str(item) for item in (state.get("output_targets") or []) if item]
+    produced: list[str] = []
+    produced_keys: set[str] = set()
+    missing: list[str] = []
+    for target in targets:
+        if os.path.isdir(target):
+            newest = deliverable_check.main_document(deliverable_check.deliverable_files(target))
+            if newest:
+                newest_path = newest[0]
+                desc, fresh = _describe_deliverable(newest_path, since)
+                if fresh:
+                    produced.append(f"- `{newest_path}` — {desc}")
+                    produced_keys.add(os.path.normcase(os.path.normpath(newest_path)))
+                else:
+                    missing.append(f"- `{target}` — 目录内没有本轮新生成的文件（最新：`{newest_path}`）")
+            else:
+                missing.append(f"- `{target}` — 目录为空或未生成文件")
+        elif os.path.isfile(target):
+            desc, fresh = _describe_deliverable(target, since)
+            if fresh:
+                produced.append(f"- `{target}` — {desc}")
+                produced_keys.add(os.path.normcase(os.path.normpath(target)))
+            else:
+                missing.append(f"- `{target}` — 文件已存在，但不是本轮生成/修改的")
+        else:
+            missing.append(f"- `{target}` — 不存在或未生成")
+
+    written: list[str] = []
+    for item in (state.get("written_paths") or [])[-8:]:
+        key = os.path.normcase(os.path.normpath(str(item)))
+        if key in produced_keys or deliverable_check.is_temp_file(str(item)):
+            continue
+        try:
+            size = os.path.getsize(item)
+        except OSError:
+            size = 0
+        written.append(f"- `{item}` — {size:,} B")
+        produced_keys.add(key)
+
+    if produced:
+        lines.append("**已生成**：")
+        lines.extend(produced)
+    if written:
+        lines.append("**本轮写入**：")
+        lines.extend(written)
+    if missing:
+        lines.append("**未完成**：")
+        lines.extend(missing)
+    if not produced and not written and not missing:
+        lines.append("**产出**：本轮没有生成可交付文件。")
+
+    error = (error or str(session.get("error") or "")).strip()
+    if error:
+        lines.append(f"**原因**：{error[:600]}")
+    if missing:
+        lines.append(
+            "**下一步**：请确认上面未完成的路径；如果该目录只是参考/输入目录，"
+            "请在需求里注明“仅参考”，下一轮会跳过它。"
+        )
+    elif status == "error":
+        lines.append("**下一步**：可以在本会话直接追加“继续”，或给出新的目标文件名；我会从现有产出继续，不重复已完成的工作。")
+    else:
+        lines.append("**下一步**：如需继续迭代，直接在本会话追加要求即可。")
+    return "\n".join(lines)
+
+
 
 def _workspace_diff(workspace: str, limit: int = 24000) -> str:
     if not workspace:
@@ -833,8 +978,9 @@ class AgentRuntime:
             run_id,
         )
 
+        state: dict[str, Any] = {}
         try:
-            await self._drive(
+            state = await self._drive(
                 session,
                 agent,
                 requested,
@@ -853,10 +999,14 @@ class AgentRuntime:
                 casual,
                 strict,
             )
+            await self._ensure_task_summary(session_id, run_id, session, state)
         except asyncio.CancelledError:
             await self.storage.update_session(session_id, status="error", error="用户取消")
             await self.emit(session_id, "session.status", {"status": "error", "error": "用户取消"}, run_id)
             await self.storage.finish_run(run_id, "cancelled", error="用户取消")
+            await self._ensure_task_summary(
+                session_id, run_id, session, state, status="cancelled", error="用户取消"
+            )
             raise
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
@@ -864,6 +1014,9 @@ class AgentRuntime:
             await self.emit(session_id, "error", {"message": message}, run_id)
             await self.emit(session_id, "session.status", {"status": "error", "error": message[:500]}, run_id)
             await self.storage.finish_run(run_id, "error", error=message)
+            await self._ensure_task_summary(
+                session_id, run_id, session, state, status="error", error=message
+            )
         finally:
             await self.events.flush()
 
@@ -1003,7 +1156,7 @@ class AgentRuntime:
         write_required: bool = False,
         casual: bool = False,
         strict: bool = False,
-    ) -> None:
+    ) -> dict[str, Any]:
         session_id = session["id"]
         workspace = session.get("workspace") or ""
         host_info = ""
@@ -1146,7 +1299,7 @@ class AgentRuntime:
                 await self.emit(session_id, "error", {"message": message}, run_id)
                 await self.storage.update_session(session_id, status="error", error=message)
                 await self.storage.finish_run(run_id, "error", error=message, step_count=state["total_steps"])
-                return
+                return state
             if state["step"] >= AGENT_MAX_STEPS:
                 if state["total_steps"] < max_total:
                     state["rollovers"] += 1
@@ -1171,7 +1324,7 @@ class AgentRuntime:
                 await self.emit(session_id, "error", {"message": f"reached max steps ({state['total_steps']})"}, run_id)
                 await self.storage.update_session(session_id, status="error", error="max steps reached")
                 await self.storage.finish_run(run_id, "error", error="max steps reached", step_count=state["total_steps"])
-                return
+                return state
             state["step"] += 1
             state["total_steps"] += 1
 
@@ -1182,7 +1335,7 @@ class AgentRuntime:
                 await self.emit(session_id, "error", {"message": message}, run_id)
                 await self.storage.update_session(session_id, status="error", error=message[:500])
                 await self.storage.finish_run(run_id, "error", error=message, step_count=state["total_steps"])
-                return
+                return state
             if (
                 NO_PROGRESS_GUARD
                 and write_required
@@ -1485,7 +1638,7 @@ class AgentRuntime:
                     await self.emit(session_id, "error", {"message": reason}, run_id)
                     await self.storage.update_session(session_id, status="error", error=reason[:500])
                     await self.storage.finish_run(run_id, "error", error=reason, step_count=state["total_steps"])
-                    return
+                    return state
                 if state["output_targets"]:
                     # Exists is not complete: a page with dead anchors or a
                     # fraction of the reference's length goes back for fixes.
@@ -1506,7 +1659,7 @@ class AgentRuntime:
                         await self.emit(session_id, "error", {"message": reason}, run_id)
                         await self.storage.update_session(session_id, status="error", error=reason[:500])
                         await self.storage.finish_run(run_id, "error", error=reason, step_count=state["total_steps"])
-                        return
+                        return state
                 if (
                     audit
                     and not state["spec_audit"]
@@ -1696,7 +1849,7 @@ class AgentRuntime:
                                 await self.storage.finish_run(
                                     run_id, "error", error=reason, step_count=state["total_steps"]
                                 )
-                                return
+                                return state
                             summary = "deliverable created: " + delivered_hint
                             if CHECKPOINT_ENABLED:
                                 await durability.clear_checkpoints(self.storage, session_id)
@@ -1706,7 +1859,7 @@ class AgentRuntime:
                             )
                             await self.emit(session_id, "done", {"summary": summary, "text": summary}, run_id)
                             await self.emit(session_id, "session.status", {"status": "done"}, run_id)
-                            return
+                            return state
                         guard_text = (
                             "[system no-progress guard] The requested deliverable already exists at: "
                             + delivered_hint + ". Stop calling tools now; do not rerun the same command. "
@@ -1774,7 +1927,7 @@ class AgentRuntime:
                         await self.storage.finish_run(
                             run_id, "error", error=reason, step_count=state["total_steps"]
                         )
-                        return
+                        return state
 
             if state["reference_paths"] and state["reference_outputs"]:
                 state["reference_drift"] = self._reference_drift(
@@ -1817,6 +1970,7 @@ class AgentRuntime:
         await self.emit(session_id, "session.status", {"status": "done"}, run_id)
         await self.events.flush()
         await self.storage.update_session(session_id, status="done", error="")
+        return state
 
     async def _execute_calls(
         self,
@@ -2068,6 +2222,66 @@ class AgentRuntime:
                 )
                 issues.extend(f"{Path(path).name}: {item}" for item in found)
         return issues[:8]
+
+    async def _ensure_task_summary(
+        self,
+        session_id: str,
+        run_id: str,
+        session: dict[str, Any],
+        state: dict[str, Any] | None = None,
+        status: str = "",
+        error: str = "",
+    ) -> None:
+        """Persist a closing summary so an error never ends with an empty bubble.
+
+        The model normally writes the final summary. This fallback covers the
+        error/cancel paths (and a done run whose final text is empty), where the
+        last assistant message otherwise has no content.
+        """
+        try:
+            fresh = await self.storage.get_session(session_id)
+            if not fresh:
+                # The session was purged/deleted while the run was finishing;
+                # do not resurrect it with a summary message.
+                return
+            session = fresh
+            state = state or {}
+            status = (status or session.get("status") or "error").strip()
+            error = (error or session.get("error") or "").strip()
+            if status == "done" and str(state.get("final_text") or "").strip():
+                return
+            if status not in TERMINAL_STATUSES:
+                status = "error" if error else status
+            rows = await self.storage.list_messages_tail(session_id, limit=8)
+            last_assistant = next(
+                (row for row in reversed(rows) if row.get("role") == "assistant"), None
+            )
+            if last_assistant and str(last_assistant.get("content") or "").strip().startswith(
+                "## 任务收尾总结"
+            ):
+                return
+            text = task_summary_text(session, state, status, error)
+            row = await self.storage.add_message(session_id, run_id, "assistant", text)
+            try:
+                await self.storage.finish_run(
+                    run_id,
+                    status,
+                    output=text,
+                    error=error,
+                    step_count=int(state.get("total_steps") or 0),
+                )
+            except Exception:
+                pass
+            await self.emit(
+                session_id,
+                "message.saved",
+                {"msg_id": row["id"], "role": "assistant", "content": text, "has_tools": False},
+                run_id,
+            )
+            await self.emit(session_id, "task.summary", {"status": status, "text": text}, run_id)
+        except Exception:
+            # A closing summary must never become the only failure the user sees.
+            return
 
     @staticmethod
     def _audit_nudge_text(issues: list[str]) -> str:

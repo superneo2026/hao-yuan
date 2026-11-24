@@ -58,6 +58,26 @@ COMPLETE = """<!DOCTYPE html>
 """
 
 
+def test_html_report_flags_broken_local_links(tmp_path):
+    (tmp_path / "exists.html").write_text("<html></html>", encoding="utf-8")
+    path = _write(
+        tmp_path,
+        "page.html",
+        '<html><body><a href="exists.html">ok</a><a href="missing.html">bad</a>'
+        '<a href="https://example.com">web</a><a href="#s1">anchor</a></body></html>',
+    )
+    report = deliverable.html_report(path)
+    assert report["broken_local_links"] == ["missing.html"]
+
+
+def test_html_report_resolves_file_uri_links(tmp_path):
+    target = tmp_path / "other.html"
+    target.write_text("<html></html>", encoding="utf-8")
+    path = _write(tmp_path, "page.html", f'<html><body><a href="{target.as_uri()}">ok</a></body></html>')
+    report = deliverable.html_report(path)
+    assert report["broken_local_links"] == []
+
+
 def test_complete_page_has_no_issues(tmp_path):
     reference = _write(tmp_path, "ref.html", COMPLETE.format(body="<p>" + "内容 " * 1200 + "</p>"))
     target = _write(tmp_path, "out.html", COMPLETE.format(body="<p>" + "内容 " * 1200 + "</p>"))

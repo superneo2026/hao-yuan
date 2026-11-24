@@ -13,6 +13,43 @@ def test_extract_output_targets_reads_output_hint():
     assert all(not item.lower().endswith("page.html") for item in normalized)
 
 
+def test_extract_output_targets_normalizes_file_uri():
+    prompt = "输出方案到：file:///C:/Users/Administrator/Downloads/plan"
+    targets = extract_output_targets(prompt, r"D:\Env")
+    normalized = [os.path.normpath(item) for item in targets]
+    assert os.path.normpath(r"C:\Users\Administrator\Downloads\plan") in normalized
+    assert all(not item.lower().startswith("e:") for item in normalized)
+
+
+def test_extract_output_targets_skips_reference_and_previous_plan_links():
+    prompt = (
+        "输出对比报告 参考：file:///D:/Env/git/html/ref.html\n"
+        "输出对比报告 已完成预训练计划：file:///D:/Env/git/neo-tts/v2/test/plan/neo-tts-v2-pretrain-plan.html\n"
+        "输出评测报告到：D:\\Env\\git\\neo-tts\\v2\\test\\testing\n"
+    )
+    targets = extract_output_targets(prompt, r"D:\Env")
+    normalized = [os.path.normpath(item) for item in targets]
+    assert os.path.normpath(r"D:\Env\git\neo-tts\v2\test\testing") in normalized
+    assert not any(item.lower().endswith("ref.html") for item in normalized)
+    assert not any(item.lower().endswith("neo-tts-v2-pretrain-plan.html") for item in normalized)
+
+
+def test_extract_output_targets_keeps_local_plan_output():
+    prompt = "输出训练计划：D:\\Env\\out\\plan.html"
+    targets = extract_output_targets(prompt, r"D:\Env")
+    assert [os.path.normpath(item) for item in targets] == [
+        os.path.normpath(r"D:\Env\out\plan.html")
+    ]
+
+
+def test_extract_output_targets_repairs_duplicate_drive_prefix():
+    prompt = "输出到：e:\\D:\\Env\\git\\neo-tts\\v2\\test\\plan"
+    targets = extract_output_targets(prompt, r"D:\Env")
+    assert [os.path.normpath(item) for item in targets] == [
+        os.path.normpath(r"D:\Env\git\neo-tts\v2\test\plan")
+    ]
+
+
 def test_output_target_ready_requires_new_file(tmp_path):
     out = tmp_path / "out"
     out.mkdir()

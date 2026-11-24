@@ -140,6 +140,15 @@ class SessionManager:
 
     async def purge(self, session_id: str) -> None:
         await self.cancel(session_id)
+        # ``cancel`` only asks the task to stop. Wait for it to unwind before
+        # deleting the session, otherwise a late assistant/tool message can be
+        # inserted after the purge and resurrect a deleted session id.
+        task = self.tasks.get(session_id)
+        if task and not task.done():
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                pass
         self.pending.pop(session_id, None)
         import shutil
 

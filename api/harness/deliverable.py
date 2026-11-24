@@ -11,6 +11,7 @@ import os
 import re
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 HTML_EXTS = (".html", ".htm")
 MD_EXTS = (".md", ".markdown")
@@ -36,6 +37,7 @@ class _PageParser(HTMLParser):
         self.errors: list[str] = []
         self.ids: dict[str, int] = {}
         self.anchors: list[str] = []
+        self.links: list[str] = []
         self.visible: list[str] = []
         self._skip = 0
 
@@ -45,6 +47,10 @@ class _PageParser(HTMLParser):
             self.ids[data["id"]] = self.ids.get(data["id"], 0) + 1
         if tag == "a" and data.get("href", "").startswith("#") and len(data["href"]) > 1:
             self.anchors.append(data["href"][1:])
+        if tag in ("a", "link") and data.get("href"):
+            href = data["href"].strip()
+            if href and not href.startswith("#"):
+                self.links.append(href)
         if tag in _SKIP_TAGS:
             self._skip += 1
         if tag not in _VOID_TAGS and tag not in _SKIP_TAGS:
@@ -89,6 +95,28 @@ class _PageParser(HTMLParser):
             self.visible.append(data.strip())
 
 
+def _local_link_target(base_dir: str, href: str) -> str | None:
+    """Resolve a document link to a local path; None for external/anchors."""
+    value = (href or "").strip()
+    if not value or value.startswith("#"):
+        return None
+    if value.lower().startswith("file:///"):
+        parsed = urlparse(value)
+        if parsed.netloc:
+            return None
+        path = unquote(parsed.path or "")
+        if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
+            path = path[1:]
+        return os.path.normpath(path) if path else None
+    if value.startswith("//") or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", value):
+        return None
+    value = value.split("#", 1)[0].split("?", 1)[0]
+    if not value:
+        return None
+    rel = unquote(value).replace("/", os.sep).replace("\\", os.sep)
+    return os.path.normpath(os.path.join(base_dir, rel))
+
+
 def html_report(path: str) -> dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
@@ -104,6 +132,13 @@ def html_report(path: str) -> dict[str, Any]:
     unclosed = [f"<{name}> opened at line {line} never closed" for name, line in parser.stack if name != "html"]
     anchors = list(dict.fromkeys(parser.anchors))
     dead = [anchor for anchor in anchors if anchor not in parser.ids]
+    base_dir = os.path.dirname(os.path.abspath(path))
+    links = list(dict.fromkeys(parser.links))
+    broken_links: list[str] = []
+    for href in links:
+        target = _local_link_target(base_dir, href)
+        if target is not None and not os.path.exists(target):
+            broken_links.append(href)
     return {
         "bytes": len(raw.encode("utf-8", errors="replace")),
         "line_count": raw.count("\n") + 1,
@@ -111,6 +146,8 @@ def html_report(path: str) -> dict[str, Any]:
         "nav_anchors": len(anchors),
         "resolved_anchors": len(anchors) - len(dead),
         "dead_anchors": dead,
+        "links": len(links),
+        "broken_local_links": broken_links,
         "duplicate_ids": sorted(key for key, count in parser.ids.items() if count > 1),
         "mismatches": (parser.errors + unclosed)[:12],
         "mismatch_count": len(parser.errors) + len(unclosed),
@@ -233,6 +270,14 @@ def completeness_issues(
             listed = ", ".join(f"#{anchor}" for anchor in report["dead_anchors"][:10])
             more = f" (+{len(report['dead_anchors']) - 10} more)" if len(report["dead_anchors"]) > 10 else ""
             issues.append(f"{len(report['dead_anchors'])} navigation anchor(s) point at sections that do not exist: {listed}{more}")
+        if report.get("broken_local_links"):
+            listed = ", ".join(report["broken_local_links"][:8])
+            more = (
+                f" (+{len(report['broken_local_links']) - 8} more)"
+                if len(report["broken_local_links"]) > 8
+                else ""
+            )
+            issues.append(f"{len(report['broken_local_links'])} local link(s) point at missing files: {listed}{more}")
         if report["mismatches"]:
             issues.append(f"{report['mismatch_count']} tag mismatch(es): " + "; ".join(report["mismatches"][:3]))
         if report["duplicate_ids"]:
