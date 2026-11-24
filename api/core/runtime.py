@@ -48,6 +48,8 @@ from configs.configs import (
     TEXT_PREFIX_CHARS,
     TEXT_PREFIX_REPEAT_LIMIT,
     TEXT_PREFIX_WINDOW,
+    TOOL_COMPRESS_MIN_CHARS,
+    TOOL_LOGS_DIR,
     TOOL_RESULT_CONTEXT_CHARS,
     TOOL_RESULT_CONTEXT_MARK,
     TOOL_SCHEMA_TRIM,
@@ -58,6 +60,7 @@ from configs.configs import (
     VERIFY_MAX_NUDGE,
 )
 from configs.models import PROVIDERS, THINKING_OFF_PROVIDERS, effective_default_model, resolve
+from core.context import compress_tool_output
 from core.contracts import ToolCall, ToolContext, ToolResult
 from core.instructions import addition_message, classify_instruction, interrupt_message, interrupt_notice
 from harness import deliverable as deliverable_check
@@ -1591,7 +1594,7 @@ class AgentRuntime:
                         "re-send the saved lines."
                     )
                     result.summary = f"truncated write salvaged: {salvaged.get('lines')} lines saved"
-                content_for_context = self._tool_context_text(result)
+                content_for_context = self._tool_context_text(result, call, state, session_id)
                 await self.storage.add_message(
                     session_id,
                     run_id,
@@ -1949,13 +1952,60 @@ class AgentRuntime:
             await durability.record_effect(self.storage, session["id"], state["total_steps"], call.name, call.arguments, str(result.result), workspace)
         return result
 
-    def _tool_context_text(self, result: ToolResult) -> str:
+    @staticmethod
+    def _safe_component(value: str, fallback: str) -> str:
+        clean = re.sub(r"[^A-Za-z0-9_.-]", "_", str(value or "")).strip("._")
+        return (clean or fallback)[:80]
+
+    def _save_tool_log(self, session_id: str, call_id: str, text: str) -> str:
+        try:
+            directory = TOOL_LOGS_DIR / self._safe_component(session_id, "session")
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{self._safe_component(call_id, uuid.uuid4().hex[:12])}.log"
+            path.write_text(text, encoding="utf-8", errors="replace")
+            return str(path)
+        except OSError:
+            return ""
+
+    def _tool_context_text(
+        self,
+        result: ToolResult,
+        call: ToolCall | None = None,
+        state: dict[str, Any] | None = None,
+        session_id: str = "",
+    ) -> str:
         payload = {
             "ok": result.ok,
             "result": result.result,
             "error": result.error,
             "artifact_id": result.artifact_id,
         }
+        full_result = result.result
+        if call is not None and call.name == "run_shell" and isinstance(full_result, str):
+            key = ""
+            previous = None
+            if state is not None:
+                key = "run_shell:" + str(
+                    call.arguments.get("command")
+                    or json.dumps(call.arguments, ensure_ascii=False, sort_keys=True, default=str)
+                )
+                previous = (state.get("_tool_failures") or {}).get(key)
+            compressed, fingerprint = compress_tool_output(full_result, ok=result.ok, previous=previous)
+            if state is not None:
+                bucket = state.setdefault("_tool_failures", {})
+                if result.ok:
+                    bucket.pop(key, None)
+                else:
+                    bucket[key] = fingerprint
+            if (
+                compressed != full_result
+                and len(full_result) > TOOL_COMPRESS_MIN_CHARS
+                and "same failure as previous call" not in compressed
+            ):
+                log_path = self._save_tool_log(session_id, call.call_id, full_result)
+                if log_path:
+                    compressed += f"\n[full output: {log_path}]"
+            payload["result"] = compressed
         text = json.dumps(payload, ensure_ascii=False, default=str)
         if len(text) > TOOL_RESULT_CONTEXT_CHARS:
             # Cut at a line boundary when possible so the model never sees half a line.
@@ -2218,6 +2268,8 @@ class AgentRuntime:
                     ctx = ToolContext(runtime=self, session=session, workspace=session.get("workspace") or "", call=call, emit=self.emit)
                     result = await self.tools.execute(call, ctx)
                     body = str(result.result if result.ok else result.error)
+                    if call.name == "run_shell":
+                        body, _fingerprint = compress_tool_output(body, ok=result.ok)
                     messages.append(
                         {
                             "role": "tool",
@@ -2395,7 +2447,7 @@ class AgentRuntime:
         if research or kind == "plan" or doc_mode:
             parts.append("\n" + RESEARCH_RULES)
         if matched:
-            parts.append(SkillLibrary.render(matched, skill_how, 8000))
+            parts.append(SkillLibrary.render(matched, skill_how, 4000 if lite else 8000))
         if reference_text:
             parts.append(
                 "\n\n# Reference source contract\n"

@@ -397,7 +397,9 @@ function applyEvent(event) {
           ...state.session,
           context_tokens: payload.session_total.context_tokens,
           total_prompt: payload.session_total.prompt,
-          total_completion: payload.session_total.completion
+          total_completion: payload.session_total.completion,
+          cached_tokens: payload.session_total.cached_tokens || 0,
+          reasoning_tokens: payload.session_total.reasoning_tokens || 0
         }
       }
       break

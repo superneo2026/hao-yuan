@@ -306,7 +306,11 @@ async def create_session(body: SessionCreate):
 async def list_sessions(include_hidden: bool = True):
     harness = await get_harness()
     sessions = await harness.manager.list_sessions(include_hidden=include_hidden)
+    totals = await harness.storage.usage_totals_by_sessions([session["id"] for session in sessions])
     for session in sessions:
+        usage = totals.get(session["id"]) or {}
+        session["cached_tokens"] = usage.get("cached_tokens", 0)
+        session["reasoning_tokens"] = usage.get("reasoning_tokens", 0)
         session["pending"] = _pending(harness, session["id"])
     return ok(sessions)
 
@@ -319,6 +323,9 @@ async def get_session(session_id: str):
         return fail("session not found", 404)
     first = await harness.storage.first_user_message(session_id)
     session["first_question"] = (first or {}).get("content", "")[:200] if first else ""
+    usage_totals = await harness.storage.session_usage_totals(session_id)
+    session["cached_tokens"] = usage_totals["cached_tokens"]
+    session["reasoning_tokens"] = usage_totals["reasoning_tokens"]
     session["pending"] = _pending(harness, session_id)
     last_event = await harness.storage.last_event(session_id)
     session["last_event_id"] = int(last_event["id"]) if last_event else 0

@@ -36,3 +36,22 @@ def test_tech_eval_contract_requires_benchmarks_and_fidelity():
     body = _library().get("tech-eval").body
     for token in ("ARC-e", "CIDEr", "reference_compare", "Batch independent tool calls"):
         assert token in body
+
+
+def test_sqlite_migration_skill_matches_migration_request():
+    names = [skill.name for skill in _library().match("dev", "把 JSON 导出迁移到 SQLite，要求唯一邮箱、外键和幂等")[0]]
+    assert "sqlite-migration" in names
+
+
+def test_file_api_security_skill_matches_hardening_request():
+    names = [skill.name for skill in _library().match("dev", "给文件 HTTP API 增加 Bearer 鉴权，阻止路径穿越和符号链接逃逸")[0]]
+    assert "file-api-security" in names
+
+
+def test_new_skills_contain_verification_checklists():
+    sqlite = _library().get("sqlite-migration").body
+    for token in ("unique", "foreign", "rollback", "idempotent", "PRAGMA integrity_check"):
+        assert token.lower() in sqlite.lower()
+    files = _library().get("file-api-security").body
+    for token in ("Bearer", "realpath", "traversal", "symlink", "401"):
+        assert token.lower() in files.lower()

@@ -143,9 +143,10 @@ class SessionManager:
         self.pending.pop(session_id, None)
         import shutil
 
-        from configs.configs import ARTIFACTS_DIR
+        from configs.configs import ARTIFACTS_DIR, TOOL_LOGS_DIR
 
         shutil.rmtree(ARTIFACTS_DIR / session_id, ignore_errors=True)
+        shutil.rmtree(TOOL_LOGS_DIR / session_id, ignore_errors=True)
         await self.storage.delete_session(session_id)
 
     def mark_resume(self, session_id: str) -> None:

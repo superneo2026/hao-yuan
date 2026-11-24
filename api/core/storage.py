@@ -669,15 +669,60 @@ class Storage:
             "SELECT context_tokens, total_prompt, total_completion FROM sessions WHERE id=?",
             (session_id,),
         )
+        totals = await self.session_usage_totals(session_id)
         return {
             "prompt": p,
             "completion": c,
+            "cached_tokens": cached,
+            "reasoning_tokens": reasoning,
             "session_total": {
                 "context_tokens": (row or {}).get("context_tokens", 0),
                 "prompt": (row or {}).get("total_prompt", 0),
                 "completion": (row or {}).get("total_completion", 0),
+                "cached_tokens": totals["cached_tokens"],
+                "reasoning_tokens": totals["reasoning_tokens"],
             },
         }
+
+    async def session_usage_totals(self, session_id: str) -> dict[str, int]:
+        """Recompute cached/reasoning totals from message rows (no new columns)."""
+        row = await self._one(
+            "SELECT COALESCE(SUM(prompt_tokens),0) AS prompt_tokens,"
+            " COALESCE(SUM(completion_tokens),0) AS completion_tokens,"
+            " COALESCE(SUM(cached_tokens),0) AS cached_tokens,"
+            " COALESCE(SUM(reasoning_tokens),0) AS reasoning_tokens"
+            " FROM messages WHERE session_id=?",
+            (session_id,),
+        ) or {}
+        return {
+            "prompt_tokens": int(row.get("prompt_tokens") or 0),
+            "completion_tokens": int(row.get("completion_tokens") or 0),
+            "cached_tokens": int(row.get("cached_tokens") or 0),
+            "reasoning_tokens": int(row.get("reasoning_tokens") or 0),
+        }
+
+    async def usage_totals_by_sessions(self, session_ids: list[str]) -> dict[str, dict[str, int]]:
+        ids = [str(item) for item in session_ids if item]
+        result: dict[str, dict[str, int]] = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = await self._fetch(
+                "SELECT session_id, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens,"
+                " COALESCE(SUM(completion_tokens),0) AS completion_tokens,"
+                " COALESCE(SUM(cached_tokens),0) AS cached_tokens,"
+                " COALESCE(SUM(reasoning_tokens),0) AS reasoning_tokens"
+                f" FROM messages WHERE session_id IN ({placeholders}) GROUP BY session_id",
+                tuple(chunk),
+            )
+            for row in rows:
+                result[str(row.get("session_id") or "")] = {
+                    "prompt_tokens": int(row.get("prompt_tokens") or 0),
+                    "completion_tokens": int(row.get("completion_tokens") or 0),
+                    "cached_tokens": int(row.get("cached_tokens") or 0),
+                    "reasoning_tokens": int(row.get("reasoning_tokens") or 0),
+                }
+        return result
 
     async def usage_daily(self, days: int = 14) -> list[dict[str, Any]]:
         return await self._fetch(
@@ -691,6 +736,8 @@ class Storage:
             "day": day,
             "prompt_tokens": sum(int(r.get("prompt_tokens") or 0) for r in rows),
             "completion_tokens": sum(int(r.get("completion_tokens") or 0) for r in rows),
+            "cached_tokens": sum(int(r.get("cached_tokens") or 0) for r in rows),
+            "reasoning_tokens": sum(int(r.get("reasoning_tokens") or 0) for r in rows),
             "models": rows,
         }
 

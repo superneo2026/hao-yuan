@@ -25,7 +25,8 @@ async def usage_today():
 async def usage_daily(days: int = 14):
     harness = await get_harness()
     rows = await harness.storage._fetch(
-        "SELECT day, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens"
+        "SELECT day, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens,"
+        " SUM(cached_tokens) AS cached_tokens, SUM(reasoning_tokens) AS reasoning_tokens"
         " FROM usage_daily GROUP BY day ORDER BY day DESC LIMIT ?",
         (max(1, min(days, 120)),),
     )
@@ -36,7 +37,8 @@ async def usage_daily(days: int = 14):
 async def usage_by_model():
     harness = await get_harness()
     rows = await harness.storage._fetch(
-        "SELECT provider, model, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens"
+        "SELECT provider, model, SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens,"
+        " SUM(cached_tokens) AS cached_tokens, SUM(reasoning_tokens) AS reasoning_tokens"
         " FROM usage_daily GROUP BY provider, model ORDER BY prompt_tokens DESC"
     )
     return ok(rows)

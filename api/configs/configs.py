@@ -81,6 +81,16 @@ TOOL_RESULT_MAX_BYTES = int(os.getenv("HAOYUAN_TOOL_RESULT_MAX_BYTES", str(64 * 
 # history growth; the full result stays in session history for re-reading.
 TOOL_RESULT_CONTEXT_CHARS = int(os.getenv("HAOYUAN_TOOL_RESULT_CONTEXT_CHARS", "16000"))
 TOOL_RESULT_CONTEXT_MARK = "\n...[result truncated; re-read the precise range if needed]"
+# Shell output is compressed structurally before it enters the model context:
+# keep the first/last N lines plus every failure-looking line, summarize clean
+# runs to one line, and diff repeated failures. The full result is written to
+# TOOL_LOGS_DIR for audit instead of being re-injected into the prompt.
+TOOL_COMPRESS_ENABLED = os.getenv("HAOYUAN_TOOL_COMPRESS", "1").strip() not in {"0", "false"}
+TOOL_COMPRESS_MIN_CHARS = int(os.getenv("HAOYUAN_TOOL_COMPRESS_MIN_CHARS", "4000"))
+TOOL_COMPRESS_HEAD_LINES = int(os.getenv("HAOYUAN_TOOL_COMPRESS_HEAD_LINES", "40"))
+TOOL_COMPRESS_TAIL_LINES = int(os.getenv("HAOYUAN_TOOL_COMPRESS_TAIL_LINES", "40"))
+TOOL_COMPRESS_MAX_ERROR_LINES = int(os.getenv("HAOYUAN_TOOL_COMPRESS_MAX_ERROR_LINES", "120"))
+TOOL_LOGS_DIR = DATA_DIR / "tool_logs"
 # Tool results shorter than this are never compacted away (keeps small reads intact).
 # When the provider-specific MAX_OUTPUT is 0 (unspecified), request this many output
 # tokens explicitly. Relying on the provider default silently capped writes at 8192.
@@ -113,6 +123,10 @@ COMPACT_HYSTERESIS_STEPS = int(os.getenv("HAOYUAN_COMPACT_HYSTERESIS_STEPS", "6"
 COMPACT_HYSTERESIS_RATIO = float(os.getenv("HAOYUAN_COMPACT_HYSTERESIS_RATIO", "1.3"))
 TOOL_AGING_KEEP = int(os.getenv("HAOYUAN_TOOL_AGING_KEEP", "16"))
 TOOL_AGING_CHARS = int(os.getenv("HAOYUAN_TOOL_AGING_CHARS", "300"))
+# Off by default: re-aging tool results mid-turn rewrites messages that were
+# already sent, which invalidates the provider prefix cache for the rest of the
+# turn. Results are compressed once at insertion instead.
+MIDTURN_TOOL_AGING = os.getenv("HAOYUAN_MIDTURN_TOOL_AGING", "0").strip() not in {"0", "false"}
 CONTEXT_HARD_LIMIT = int(os.getenv("HAOYUAN_CONTEXT_HARD_LIMIT", "48000"))
 CONTEXT_HARD_TRUNCATE_CHARS = int(os.getenv("HAOYUAN_CONTEXT_HARD_TRUNCATE_CHARS", "800"))
 STRUCTURED_DIGEST_ENABLED = os.getenv("HAOYUAN_STRUCTURED_DIGEST", "1").strip() not in {"0", "false"}

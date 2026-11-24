@@ -9,6 +9,10 @@ const today = computed(() => state.usageToday || { prompt_tokens: 0, completion_
 const maxTokens = computed(() => Math.max(1, ...daily.value.map((row) => Number(row.prompt_tokens || 0) + Number(row.completion_tokens || 0))))
 const totalPrompt = computed(() => daily.value.reduce((sum, row) => sum + Number(row.prompt_tokens || 0), 0))
 const totalCompletion = computed(() => daily.value.reduce((sum, row) => sum + Number(row.completion_tokens || 0), 0))
+const totalCached = computed(() => daily.value.reduce((sum, row) => sum + Number(row.cached_tokens || 0), 0))
+const totalReasoning = computed(() => daily.value.reduce((sum, row) => sum + Number(row.reasoning_tokens || 0), 0))
+const todayCached = computed(() => Number(today.value.cached_tokens || 0))
+const todayReasoning = computed(() => Number(today.value.reasoning_tokens || 0))
 
 function barHeight(row) {
   const value = Number(row.prompt_tokens || 0) + Number(row.completion_tokens || 0)
@@ -45,6 +49,8 @@ onMounted(async () => {
       <div class="stat-card"><span class="stat-icon"><Icon name="zap" :size="18" /></span><div><b>{{ fmt(Number(today.prompt_tokens || 0) + Number(today.completion_tokens || 0)) }}</b><span>{{ t('usage.tokensToday') }}</span></div></div>
       <div class="stat-card"><span class="stat-icon" style="color: var(--brand-2)"><Icon name="arrow-right" :size="18" /></span><div><b>{{ fmt(today.prompt_tokens) }}</b><span>{{ t('usage.promptToday') }}</span></div></div>
       <div class="stat-card"><span class="stat-icon" style="color: var(--good)"><Icon name="sparkles" :size="18" /></span><div><b>{{ fmt(today.completion_tokens) }}</b><span>{{ t('usage.completionToday') }}</span></div></div>
+      <div class="stat-card"><span class="stat-icon" style="color: var(--brand)"><Icon name="database" :size="18" /></span><div><b>{{ fmt(todayCached) }}</b><span>{{ t('usage.cachedToday') }}</span></div></div>
+      <div class="stat-card"><span class="stat-icon" style="color: var(--brand-2)"><Icon name="brain" :size="18" /></span><div><b>{{ fmt(todayReasoning) }}</b><span>{{ t('usage.reasoningToday') }}</span></div></div>
     </div>
 
     <div class="usage-grid">
@@ -75,6 +81,8 @@ onMounted(async () => {
           </div>
           <div class="comp-row"><span class="dot prompt" /> {{ t('usage.prompt') }} <b>{{ fmt(totalPrompt) }}</b></div>
           <div class="comp-row"><span class="dot completion" /> {{ t('usage.completion') }} <b>{{ fmt(totalCompletion) }}</b></div>
+          <div class="comp-row"><span class="dot cached" /> {{ t('usage.cached') }} <b>{{ fmt(totalCached) }}</b></div>
+          <div class="comp-row"><span class="dot reasoning" /> {{ t('usage.reasoning') }} <b>{{ fmt(totalReasoning) }}</b></div>
         </div>
       </section>
 
@@ -84,15 +92,17 @@ onMounted(async () => {
         </div>
         <div class="table-wrap">
           <table class="tw">
-            <thead><tr><th>{{ t('usage.provider') }}</th><th>{{ t('usage.model') }}</th><th>{{ t('usage.prompt') }}</th><th>{{ t('usage.completion') }}</th></tr></thead>
+            <thead><tr><th>{{ t('usage.provider') }}</th><th>{{ t('usage.model') }}</th><th>{{ t('usage.prompt') }}</th><th>{{ t('usage.completion') }}</th><th>{{ t('usage.cached') }}</th><th>{{ t('usage.reasoning') }}</th></tr></thead>
             <tbody>
               <tr v-for="row in state.usageByModel" :key="`${row.provider}-${row.model}`">
                 <td>{{ row.provider }}</td>
                 <td class="mono" style="font-size: 11px">{{ row.model }}</td>
                 <td>{{ fmt(row.prompt_tokens) }}</td>
                 <td>{{ fmt(row.completion_tokens) }}</td>
+                <td>{{ fmt(row.cached_tokens) }}</td>
+                <td>{{ fmt(row.reasoning_tokens) }}</td>
               </tr>
-              <tr v-if="!state.usageByModel.length"><td colspan="4" class="muted" style="text-align: center; padding: 24px">{{ t('usage.noModel') }}</td></tr>
+              <tr v-if="!state.usageByModel.length"><td colspan="6" class="muted" style="text-align: center; padding: 24px">{{ t('usage.noModel') }}</td></tr>
             </tbody>
           </table>
         </div>
@@ -102,7 +112,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+.stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
 .stat-card { display: flex; gap: 11px; align-items: center; padding: 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-card); }
 .stat-icon { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; color: var(--brand); flex: 0 0 36px; }
 .stat-card b { display: block; font-size: 21px; letter-spacing: -.03em; line-height: 1.15; }
@@ -130,6 +140,8 @@ onMounted(async () => {
 .dot { width: 7px; height: 7px; border-radius: 50%; }
 .dot.prompt { background: var(--brand); }
 .dot.completion { background: var(--brand-2); }
+.dot.cached { background: color-mix(in srgb, var(--brand) 50%, var(--faint)); }
+.dot.reasoning { background: color-mix(in srgb, var(--brand-2) 50%, var(--faint)); }
 .table-wrap { overflow-x: auto; }
 @media (max-width: 900px) { .stat-grid { grid-template-columns: 1fr 1fr; } .usage-grid { grid-template-columns: 1fr; } }
 </style>

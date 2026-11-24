@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -21,16 +22,23 @@ from configs.configs import (
     MID_COMPACT_EVERY,
     MID_COMPACT_MIN_MSGS,
     MID_COMPACT_TOKENS,
+    MIDTURN_TOOL_AGING,
     STRUCTURED_DIGEST_ENABLED,
     TOKEN_ESTIMATE_FACTOR,
     TOOL_AGING_CHARS,
     TOOL_AGING_KEEP,
+    TOOL_COMPRESS_ENABLED,
+    TOOL_COMPRESS_HEAD_LINES,
+    TOOL_COMPRESS_MAX_ERROR_LINES,
+    TOOL_COMPRESS_MIN_CHARS,
+    TOOL_COMPRESS_TAIL_LINES,
 )
 from core.gateway import ModelGateway
 from core.storage import Storage
 
 AGED_MARK = "\n...[aged: full result remains in session history; re-read the target if needed]"
 TRUNC_MARK = "\n...[truncated by hard context budget; use a precise tool call to fetch details]"
+TOOL_COMPRESS_MARK = "\n...[structured tool digest; full output retained for audit]"
 MID_SUMMARY_MARK = "--- Progress summary (earlier steps compacted) ---"
 LEDGER_MARK = "--- Delivery ledger (harness-managed, authoritative; do not re-verify by re-reading) ---"
 # Mid-turn compaction fires somewhat before the turn-level threshold so a single
@@ -44,6 +52,13 @@ _DIGEST_KEEP_RE = re.compile(
     r"^(?:FAILED|ERROR|Traceback|AssertionError|\w*(?:Error|Exception):).*$|"
     r"^\$\s.*$",
     re.M,
+)
+
+_SHELL_FAIL_RE = re.compile(
+    r"^\s*E\s{1,3}\S.*$|"
+    r"\b(?:FAIL(?:ED|URES?)?|ERROR|FATAL|PANIC|Traceback|AssertionError|"
+    r"assertion failed|\w+(?:Error|Exception))\b",
+    re.M | re.I,
 )
 
 SUMMARIZE_PROMPT = (
@@ -121,6 +136,100 @@ def structured_digest(text: str, head: int | None = None, tail: int | None = Non
         return text[: head + tail]
 
 
+def _line_fingerprint(line: str) -> str:
+    return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()
+
+
+def shell_output_state(text: str) -> dict[str, Any]:
+    """Fingerprint a shell result so identical failures can be collapsed."""
+    return {
+        "sha": hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest(),
+        "lines": {_line_fingerprint(line) for line in text.splitlines()},
+    }
+
+
+def compress_tool_output(
+    text: str,
+    *,
+    ok: bool = True,
+    previous: dict[str, Any] | None = None,
+    head_lines: int | None = None,
+    tail_lines: int | None = None,
+    min_chars: int | None = None,
+    max_error_lines: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Compress shell output by structure instead of chopping at a char offset.
+
+    Keeps the command header, the last lines, and every line that looks like a
+    failure. Clean runs become a one-line summary. When the same command fails
+    again, only new lines are returned; identical output is collapsed entirely.
+    """
+    text = text if isinstance(text, str) else str(text or "")
+    state = shell_output_state(text)
+    if not TOOL_COMPRESS_ENABLED:
+        return text, state
+    head = TOOL_COMPRESS_HEAD_LINES if head_lines is None else head_lines
+    tail = TOOL_COMPRESS_TAIL_LINES if tail_lines is None else tail_lines
+    minimum = TOOL_COMPRESS_MIN_CHARS if min_chars is None else min_chars
+    error_cap = TOOL_COMPRESS_MAX_ERROR_LINES if max_error_lines is None else max_error_lines
+    lines = text.splitlines()
+    if len(text) <= minimum or len(lines) <= head + tail + 10:
+        return text, state
+    has_failure = any(_SHELL_FAIL_RE.search(line) for line in lines)
+    header_failed = False
+    for line in lines[:3]:
+        match = re.search(r"\[exit\s+(-?\d+)\]", line)
+        if match and int(match.group(1)) != 0:
+            header_failed = True
+            break
+        if "[timeout" in line.lower():
+            header_failed = True
+            break
+    if ok and not has_failure and not header_failed:
+        header = (lines[0] if lines else "")[:500]
+        return (
+            f"{header}\n[compressed shell output: {len(lines)} lines / {len(text)} chars, no failures]"
+            + TOOL_COMPRESS_MARK,
+            state,
+        )
+    if previous:
+        if previous.get("sha") == state["sha"]:
+            last = lines[-1][:200] if lines else ""
+            return f"[same failure as previous call; no new output] {last}".rstrip(), state
+        prev_lines = previous.get("lines") or set()
+        if isinstance(prev_lines, (list, tuple)):
+            prev_lines = set(prev_lines)
+        new_lines = [line for line in lines if _line_fingerprint(line) not in prev_lines]
+        if new_lines and len(new_lines) < len(lines) and len(new_lines) <= error_cap:
+            return (
+                "[new lines since previous failure]\n"
+                + "\n".join(line[:500] for line in new_lines)
+                + TOOL_COMPRESS_MARK
+            ), state
+    keep: set[int] = set(range(min(head, len(lines))))
+    keep |= set(range(max(0, len(lines) - tail), len(lines)))
+    error_count = 0
+    for index, line in enumerate(lines):
+        if _SHELL_FAIL_RE.search(line):
+            if error_count >= error_cap:
+                break
+            keep.add(index)
+            error_count += 1
+    ordered = sorted(keep)
+    body: list[str] = []
+    previous_index = -1
+    for index in ordered:
+        if previous_index >= 0 and index > previous_index + 1:
+            body.append(f"...[{index - previous_index - 1} lines omitted]...")
+        body.append(lines[index][:500])
+        previous_index = index
+    summary = (
+        f"\n[compressed shell output: kept {len(ordered)}/{len(lines)} lines, "
+        f"{error_count} failure lines]" + TOOL_COMPRESS_MARK
+    )
+    return "\n".join(body) + summary, state
+
+
 def _row_to_message(row: dict[str, Any]) -> dict[str, Any]:
     role = row["role"]
     content = row.get("content") or ""
@@ -180,6 +289,11 @@ def age_tool_results(messages: list[dict[str, Any]], keep: int | None = None, ch
     aged = 0
     for index in targets:
         content = messages[index].get("content") or ""
+        if TOOL_COMPRESS_MARK in content:
+            # Already compressed at insertion time. Re-aging it mutates history
+            # that was sent in an earlier step and invalidates the provider's
+            # prefix cache for the rest of the turn.
+            continue
         if len(content) > chars:
             body = (
                 structured_digest(content, head=max(chars, DIGEST_HEAD_CHARS), tail=DIGEST_TAIL_CHARS)
@@ -327,7 +441,10 @@ class ContextManager:
         # Tool-result aging only kicks in once the body is comfortably large; with
         # a small fixed budget it used to shrink every read older than 6 steps,
         # which threw away the reference material the agent was still using.
-        if body_tokens >= int(trigger * 0.6):
+        # It is off by default during a turn because rewriting messages that were
+        # already sent breaks the provider's prefix cache; results are compressed
+        # once at insertion instead. Set HAOYUAN_MIDTURN_TOOL_AGING=1 to restore.
+        if MIDTURN_TOOL_AGING and body_tokens >= int(trigger * 0.6):
             result["aged"] = age_tool_results(messages)
         if step % MID_COMPACT_EVERY != 0:
             return result
