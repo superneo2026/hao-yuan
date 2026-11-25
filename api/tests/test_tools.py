@@ -93,12 +93,80 @@ def test_run_shell_blocks_catastrophic_commands(tmp_path):
         dev.run_shell(ctx_for(tmp_path), {"command": "rm -rf /"})
 
 
+def test_blocked_commands_cover_critical_dirs_but_allow_subpaths():
+    assert dev._is_blocked_command("rm -rf /etc")
+    assert dev._is_blocked_command("rm -rf /root")
+    assert dev._is_blocked_command("echo x > /etc/passwd")
+    assert not dev._is_blocked_command("rm -rf /root/hao-yuan/tmp")
+    assert not dev._is_blocked_command("rm -rf ./dist")
+
+
+def test_web_audit_flags_unreadable_pages(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX permissions")
+    page = tmp_path / "index.html"
+    page.write_text(
+        '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+        "<title>t</title></head><body><nav></nav><h1>Title</h1><section>body</section></body></html>",
+        encoding="utf-8",
+    )
+    os.chmod(page, 0o600)
+    audit = dev.web_audit(ctx_for(tmp_path), {"path": "."})
+    assert "world-readable" in audit
+    os.chmod(page, 0o644)
+    audit = dev.web_audit(ctx_for(tmp_path), {"path": "."})
+    assert "world-readable" not in audit
+
+
+def test_shell_timeout_defaults_and_caps():
+    from configs.configs import SHELL_TIMEOUT, SHELL_TIMEOUT_MAX
+
+    assert dev._shell_timeout({}) == SHELL_TIMEOUT
+    assert dev._shell_timeout({"timeout": 600}) == 600
+    assert dev._shell_timeout({"timeout": 1}) == 5.0
+    assert dev._shell_timeout({"timeout": 10**9}) == SHELL_TIMEOUT_MAX
+    assert dev._shell_timeout({"timeout": "bad"}) == SHELL_TIMEOUT
+
+
+def test_run_shell_call_timeout_extends_wrapper():
+    from configs.configs import SHELL_TIMEOUT_MAX
+    from core.runtime import AgentRuntime
+
+    assert AgentRuntime._call_timeout(ToolCall(call_id="x", name="read_file", arguments={})) is None
+    assert AgentRuntime._call_timeout(ToolCall(call_id="x", name="run_shell", arguments={"command": "ls"})) is None
+    assert (
+        AgentRuntime._call_timeout(
+            ToolCall(call_id="x", name="run_shell", arguments={"command": "ls", "timeout": 600})
+        )
+        == 630
+    )
+    assert (
+        AgentRuntime._call_timeout(
+            ToolCall(call_id="x", name="run_shell", arguments={"command": "ls", "timeout": 10**9})
+        )
+        == SHELL_TIMEOUT_MAX + 30
+    )
+
+
 def test_shell_popen_isolates_process_group():
     kwargs = dev._shell_popen_kwargs()
     if os.name == "nt":
         assert kwargs == {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
     else:
-        assert kwargs == {"start_new_session": True}
+        assert kwargs["start_new_session"] is True
+        assert callable(kwargs["preexec_fn"])
+
+
+def test_run_shell_applies_resource_limits(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX rlimits")
+    import re
+
+    from configs.configs import SHELL_LIMIT_NOFILE
+
+    result = dev.run_shell(ctx_for(tmp_path), {"command": "ulimit -n"})
+    numbers = [int(n) for n in re.findall(r"\b(\d{2,})\b", result)]
+    assert numbers and max(numbers) <= SHELL_LIMIT_NOFILE
 
 
 def test_run_shell_timeout_kills_child_group_not_parent(tmp_path):

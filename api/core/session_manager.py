@@ -174,6 +174,10 @@ class SessionManager:
         self.pending.pop(session_id, None)
 
     async def resume_interrupted(self) -> None:
+        # A hard crash/restart leaves the previous run row stuck at "running" even
+        # though the process that owned it is gone. Close those out first so the UI
+        # and supervisor do not treat a dead run as active.
+        await self.storage.fail_stale_runs("interrupted by service restart")
         rows = await self.storage._fetch(
             "SELECT * FROM sessions WHERE status IN ('queued','running','waiting_input')"
         )

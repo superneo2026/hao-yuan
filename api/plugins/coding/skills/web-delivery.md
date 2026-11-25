@@ -12,7 +12,7 @@ If the request says "参考 / 参照 / 仿照 / 保持这个格式 / 同样的�
 
 1. Never build from memory. Call `reference_digest` on the reference file before writing anything.
 2. Treat the digest as a contract: reuse its palette, font stack, max-width, breakpoints, component vocabulary, nav pattern, section order, and interactions (sticky nav, scroll spy, login gate, animated SVG, etc.).
-3. If the reference styles are inline in one huge file, the digest now includes a copy-ready CSS block; reuse it verbatim instead of paraphrasing class names. Use `read_range` only for a specific block the digest does not cover.
+3. If reference styles are inline, reuse the digest's copy-ready CSS block verbatim instead of paraphrasing class names.
 4. The reference wins over the built-in scaffold. Do not call `web_scaffold` when the user asked to follow a reference.
 5. When porting large blocks, copy the structure in small chunks (`write_file` skeleton, then `apply_patch`), never paraphrase the design into a different theme.
 
@@ -37,6 +37,9 @@ Define breakpoints at 900px and 560px. Avoid fixed heights. Tables must scroll h
 
 ## Accessibility
 Every image needs alt text. Do not use color alone to convey meaning. Keep contrast strong.
+
+## Web root
+Output must be `0644` (nginx returns 403 on `600`). Verify the public URL returns 200 after the final edit.
 
 ## Audit and fidelity check
 Call `web_audit` after writing and fix every structural issue. When a reference exists, call `web_audit` with the `reference` path (or `reference_compare`) and fix palette, mode, breakpoint, and component drift before finishing. If the page contains factual claims or benchmark numbers, run `doc_consistency` (with the baseline project when available) and fix every contradiction. Check 1440 / 1000 / 900 widths for horizontal overflow. For visual delivery, call `web_screenshot` at 1440x900 and 430x900 (use `full_page` or height>=6000 for long reports); open the PNG artifacts in the UI. If a vision model or Qwen-VL sidecar is configured, call `describe_image` on the screenshot for a text description; if it returns the "multimodal not configured" notice, fall back to the static `web_audit` checks and human review.

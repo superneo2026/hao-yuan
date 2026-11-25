@@ -42,6 +42,7 @@ from configs.configs import (
     REPAIR_LOOP_ENABLED,
     REPO_MAP_ENABLED,
     RUN_MAX_PROMPT_TOKENS,
+    SHELL_TIMEOUT_MAX,
     SUBAGENT_ENABLED,
     SUBAGENT_MAX_STEPS,
     SUBAGENT_SUMMARY_CHARS,
@@ -2117,6 +2118,23 @@ class AgentRuntime:
         )
         return result
 
+    @staticmethod
+    def _call_timeout(call: ToolCall) -> float | None:
+        """Let run_shell's optional ``timeout`` argument extend the wrapper timeout.
+
+        Without this the registry would still cut the call at the spec default
+        (150s) even when the model explicitly asked for a longer build/download.
+        """
+        if call.name != "run_shell":
+            return None
+        try:
+            requested = float(call.arguments.get("timeout") or 0)
+        except (TypeError, ValueError):
+            requested = 0.0
+        if requested <= 0:
+            return None
+        return min(requested, SHELL_TIMEOUT_MAX) + 30
+
     async def _run_tool(self, session: dict[str, Any], call: ToolCall, state: dict[str, Any]) -> ToolResult:
         workspace = session.get("workspace") or ""
         effects = state.get("effects") or {}
@@ -2130,7 +2148,7 @@ class AgentRuntime:
             emit=self.emit,
             run_id=state.get("run_id") or "",
         )
-        result = await self.tools.execute(call, ctx)
+        result = await self.tools.execute(call, ctx, timeout_s=self._call_timeout(call))
         if result.ok and call.name in IDEMPOTENT_TOOLS:
             await durability.record_effect(self.storage, session["id"], state["total_steps"], call.name, call.arguments, str(result.result), workspace)
         return result
@@ -2509,7 +2527,7 @@ class AgentRuntime:
                         continue
                     call = ToolCall(call_id=raw.get("id") or uuid.uuid4().hex[:12], name=function.get("name") or "", arguments=call_args)
                     ctx = ToolContext(runtime=self, session=session, workspace=session.get("workspace") or "", call=call, emit=self.emit)
-                    result = await self.tools.execute(call, ctx)
+                    result = await self.tools.execute(call, ctx, timeout_s=self._call_timeout(call))
                     body = str(result.result if result.ok else result.error)
                     if call.name == "run_shell":
                         body, _fingerprint = compress_tool_output(body, ok=result.ok)

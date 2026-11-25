@@ -27,7 +27,13 @@ from configs.configs import (
     SEARCH_MAX_FILE_BYTES,
     SEARCH_SKIP_DIRS,
     SEARCH_TIME_BUDGET,
+    SHELL_LIMIT_CPU_SEC,
+    SHELL_LIMIT_FSIZE_MB,
+    SHELL_LIMIT_MEM_MB,
+    SHELL_LIMIT_NOFILE,
+    SHELL_LIMIT_NPROC,
     SHELL_TIMEOUT,
+    SHELL_TIMEOUT_MAX,
     TOOL_RESULT_MAX_BYTES,
     VERIFY_CMD_HINTS,
     WEB_FETCH_ENABLED,
@@ -552,8 +558,6 @@ def is_test_command(command: str) -> bool:
 
 
 _BLOCKED_COMMANDS = (
-    "rm -rf /",
-    "rm -fr /",
     "del /f /s /q c:\\",
     "rd /s /q c:\\",
     "remove-item -recurse -force c:\\",
@@ -565,8 +569,27 @@ _BLOCKED_COMMANDS = (
     ":(){",
     "fork()",
     "> /dev/sda",
-    "chmod -r 777 /",
+    "dd of=/dev/",
+    "> /etc/passwd",
+    "> /etc/shadow",
+    ">> /etc/passwd",
+    ">> /etc/shadow",
+    "> /etc/sudoers",
 )
+
+# Destructive commands aimed at a critical top-level directory itself. Subpaths
+# (e.g. /root/some/project/tmp) stay allowed so normal cleanup keeps working.
+_CRITICAL_DELETE_RE = re.compile(
+    r"(?i)\b(?:rm\s+(?:-[a-z]*[rf][a-z]*\s+)+|rmdir\s+)(/etc|/usr|/var|/boot|/bin|/sbin|/lib|/lib64|/dev|/proc|/sys|/root|/home)\s*(?:$|[\"'`;|&])"
+)
+_ROOT_WIPE_RE = re.compile(r"(?i)\b(?:rm\s+(?:-[a-z]*[rf][a-z]*\s+)+|chmod\s+(?:-[a-z]+\s+)*777\s+)/\s*(?:$|[\"'`;|&])")
+
+
+def _is_blocked_command(command: str) -> bool:
+    lowered = command.lower()
+    if any(pattern in lowered for pattern in _BLOCKED_COMMANDS):
+        return True
+    return bool(_CRITICAL_DELETE_RE.search(command) or _ROOT_WIPE_RE.search(command))
 
 _TAIL_PIPE_RE = re.compile(r"(?is)^(.*?)\|\s*tail\s+(?:-n\s*|-)?(\d+)\s*$")
 _HEAD_PIPE_RE = re.compile(r"(?is)^(.*?)\|\s*head\s+(?:-n\s*|-)?(\d+)\s*$")
@@ -594,24 +617,69 @@ def normalize_shell_command(command: str) -> str:
     return command
 
 
+def _shell_timeout(args: dict[str, Any]) -> float:
+    try:
+        requested = float(args.get("timeout") or 0)
+    except (TypeError, ValueError):
+        requested = 0.0
+    if requested <= 0:
+        return SHELL_TIMEOUT
+    return max(5.0, min(requested, SHELL_TIMEOUT_MAX))
+
+
+def _apply_child_limits() -> None:
+    """Clamp resource limits for a shell child (POSIX).
+
+    Runs in the forked child before exec. Only simple setrlimit syscalls are
+    used so it is safe under threads. ``0`` disables a limit.
+    """
+    if os.name == "nt":
+        return
+    try:
+        import resource
+    except ImportError:
+        return
+
+    def clamp(name: str, value: int) -> None:
+        if value <= 0:
+            return
+        which = getattr(resource, name, None)
+        if which is None:
+            return
+        try:
+            _soft, hard = resource.getrlimit(which)
+            if hard != resource.RLIM_INFINITY:
+                value = min(value, hard)
+            new_hard = resource.RLIM_INFINITY if hard == resource.RLIM_INFINITY else min(value, hard)
+            resource.setrlimit(which, (value, new_hard))
+        except (ValueError, OSError):
+            pass
+
+    clamp("RLIMIT_NOFILE", SHELL_LIMIT_NOFILE)
+    clamp("RLIMIT_NPROC", SHELL_LIMIT_NPROC)
+    clamp("RLIMIT_FSIZE", SHELL_LIMIT_FSIZE_MB * 1024 * 1024)
+    clamp("RLIMIT_AS", SHELL_LIMIT_MEM_MB * 1024 * 1024)
+    clamp("RLIMIT_CPU", SHELL_LIMIT_CPU_SEC)
+
+
 def _shell_popen_kwargs() -> dict[str, Any]:
     """Run the shell in its own process group so timeout handling can never
     signal the API server's process group (which would kill the service)."""
     if os.name == "nt":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    return {"start_new_session": True}
+    return {"start_new_session": True, "preexec_fn": _apply_child_limits}
 
 
 def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
     command = args.get("command", "")
     if not command.strip():
         raise ValueError("command is empty")
-    lowered = command.lower()
-    if any(pattern in lowered for pattern in _BLOCKED_COMMANDS):
+    if _is_blocked_command(command):
         raise ValueError("command blocked by safety policy: catastrophic pattern detected")
     workspace = _workspace(ctx)
     env = os.environ.copy()
     env.update(_CHILD_IO_ENV)
+    timeout = _shell_timeout(args)
     adapted = normalize_shell_command(command)
     process = subprocess.Popen(
         adapted,
@@ -623,7 +691,7 @@ def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
         **_shell_popen_kwargs(),
     )
     try:
-        stdout_raw, stderr_raw = process.communicate(timeout=SHELL_TIMEOUT)
+        stdout_raw, stderr_raw = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         if os.name == "nt":
             subprocess.run(
@@ -643,7 +711,7 @@ def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
             stdout_raw, stderr_raw = b"", b""
         partial = _decode_child_output(stdout_raw)
         return _truncate(
-            f"$ {command}\n[timeout after {int(SHELL_TIMEOUT)}s; process tree terminated]"
+            f"$ {command}\n[timeout after {int(timeout)}s; process tree terminated]"
             + (("\n" + partial.strip()[-2000:]) if partial.strip() else "")
         )
     stdout = _decode_child_output(stdout_raw)
@@ -911,6 +979,15 @@ def web_audit(ctx: ToolContext, args: dict[str, Any]) -> str:
         no_alt = [img for img in re.findall(r"<img\b[^>]*>", text, re.I) if "alt=" not in img.lower()]
         if no_alt:
             page_issues.append(f"{len(no_alt)} <img> missing alt")
+        if os.name != "nt":
+            try:
+                mode = os.stat(path).st_mode & 0o777
+                if mode & 0o444 != 0o444:
+                    page_issues.append(
+                        f"not world-readable (mode {oct(mode)[2:]}); nginx/web servers may return 403"
+                    )
+            except OSError:
+                pass
         pages.append({"name": name, "issues": page_issues, "svg": 0, "table": 0, "inline": inline})
         issues.extend(f"{name}: {item}" for item in page_issues)
     if len(html_files) >= 2:
@@ -1265,8 +1342,9 @@ def tool_specs(source: str = "coding") -> list[ToolSpec]:
             "path": {"type": "string"},
         }, source=source, readonly=True),
         _spec("project_scan", "Detect project structure, stack markers, and suggested build/test commands.", {}, source=source, readonly=True),
-        _spec("run_shell", "Run a shell command in the workspace (120s timeout, dangerous commands blocked).", {
+        _spec("run_shell", "Run a shell command in the workspace (default 120s; dangerous commands blocked). Set timeout for legitimately slow commands such as git clone, downloads or builds (max 1800s).", {
             "command": {"type": "string"},
+            "timeout": {"type": "number", "description": "Optional per-command timeout in seconds (default 120, max 1800)."},
         }, ["command"], risk="high", side_effect="write", confirm=True, readonly=False, timeout_s=150, source=source),
         _spec("git", "Run a git read/write action (push is disabled).", {
             "action": {"type": "string"},

@@ -72,6 +72,18 @@ LLM_TOTAL_TIMEOUT = float(os.getenv("HAOYUAN_LLM_TOTAL_TIMEOUT", "1800"))
 TOOL_TIMEOUT_SEC = float(os.getenv("HAOYUAN_TOOL_TIMEOUT", "300"))
 TOOL_HEARTBEAT_SEC = float(os.getenv("HAOYUAN_TOOL_HEARTBEAT", "15"))
 SHELL_TIMEOUT = float(os.getenv("HAOYUAN_SHELL_TIMEOUT", "120"))
+# Upper bound for a single model-requested shell timeout (git clone/build/downloads).
+SHELL_TIMEOUT_MAX = float(os.getenv("HAOYUAN_SHELL_TIMEOUT_MAX", "1800"))
+# Per-command resource ceilings for run_shell children (0 disables a limit).
+SHELL_LIMIT_NOFILE = int(os.getenv("HAOYUAN_SHELL_NOFILE", "4096"))
+SHELL_LIMIT_FSIZE_MB = int(os.getenv("HAOYUAN_SHELL_FSIZE_MB", "4096"))
+SHELL_LIMIT_NPROC = int(os.getenv("HAOYUAN_SHELL_NPROC", "1024"))
+SHELL_LIMIT_MEM_MB = int(os.getenv("HAOYUAN_SHELL_MEM_MB", "0"))
+SHELL_LIMIT_CPU_SEC = int(os.getenv("HAOYUAN_SHELL_CPU_SEC", "0"))
+
+# Periodic SQLite maintenance: WAL checkpoint + PRAGMA optimize every 6h.
+MAINTENANCE_INTERVAL = float(os.getenv("HAOYUAN_MAINTENANCE_INTERVAL", "21600"))
+MAINTENANCE_VACUUM = os.getenv("HAOYUAN_MAINTENANCE_VACUUM", "0").strip() not in {"0", "false"}
 
 TOOL_RESULT_MAX_BYTES = int(os.getenv("HAOYUAN_TOOL_RESULT_MAX_BYTES", str(64 * 1024)))
 # Tool output kept in the model context. The old 2000-char cap starved the model:
@@ -172,7 +184,10 @@ SUBAGENT_TIMEOUT_SEC = float(os.getenv("HAOYUAN_SUBAGENT_TIMEOUT", "900"))
 SUBAGENT_SUMMARY_CHARS = int(os.getenv("HAOYUAN_SUBAGENT_SUMMARY_CHARS", "6000"))
 
 CHECKPOINT_ENABLED = os.getenv("HAOYUAN_CHECKPOINT", "1").strip() not in {"0", "false"}
-CHECKPOINT_EVERY_STEPS = int(os.getenv("HAOYUAN_CHECKPOINT_EVERY", "5"))
+# Save after every step by default: a service restart during a long task must not
+# lose the last few minutes of work. Checkpoints replace the previous row, so the
+# write cost is one small UPSERT per step.
+CHECKPOINT_EVERY_STEPS = int(os.getenv("HAOYUAN_CHECKPOINT_EVERY", "1"))
 AUTO_RESUME_ON_BOOT = os.getenv("HAOYUAN_AUTO_RESUME", "1").strip() not in {"0", "false"}
 IDEMPOTENT_TOOLS = ("write_file", "edit_file", "apply_patch", "multi_edit", "delete_path", "move_path")
 TOOL_ZOMBIE_GRACE_SEC = float(os.getenv("HAOYUAN_TOOL_ZOMBIE_GRACE", "5"))

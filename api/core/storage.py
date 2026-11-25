@@ -9,6 +9,8 @@ from typing import Any
 
 import aiosqlite
 
+from core.pricing import estimate_cost
+
 
 def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -388,6 +390,20 @@ class Storage:
             (status, output, error, step_count, now(), run_id),
         )
 
+    async def fail_stale_runs(self, reason: str = "interrupted") -> int:
+        """Mark runs left in ``running`` (e.g. after a hard restart) as failed.
+
+        Returns the number of rows updated so callers can log/emit it.
+        """
+        row = await self._one("SELECT COUNT(*) AS n FROM runs WHERE status='running'")
+        count = int((row or {}).get("n") or 0)
+        if count:
+            await self._write(
+                "UPDATE runs SET status='error', error=?, updated_at=? WHERE status='running'",
+                (reason, now()),
+            )
+        return count
+
     async def update_run_progress(self, run_id: str, step_count: int) -> None:
         """Keep runs.step_count/updated_at fresh while a run is still executing.
 
@@ -423,15 +439,18 @@ class Storage:
         row = await self._one("SELECT rowid AS seq, * FROM messages WHERE id=?", (mid,))
         return row or {}
 
-    async def update_message_usage(self, message_id: str, usage: dict[str, Any]) -> None:
+    async def update_message_usage(
+        self, message_id: str, usage: dict[str, Any], cost_est: float = 0.0
+    ) -> None:
         await self._write(
-            "UPDATE messages SET prompt_tokens=?, completion_tokens=?, cached_tokens=?, reasoning_tokens=?"
-            " WHERE id=?",
+            "UPDATE messages SET prompt_tokens=?, completion_tokens=?, cached_tokens=?, reasoning_tokens=?,"
+            " cost_est=? WHERE id=?",
             (
                 int(usage.get("prompt_tokens") or 0),
                 int(usage.get("completion_tokens") or 0),
                 int(usage.get("cached_tokens") or 0),
                 int(usage.get("reasoning_tokens") or 0),
+                float(cost_est or 0.0),
                 message_id,
             ),
         )
@@ -648,25 +667,27 @@ class Storage:
         c = int(usage.get("completion_tokens") or 0)
         cached = int(usage.get("cached_tokens") or 0)
         reasoning = int(usage.get("reasoning_tokens") or 0)
-        await self.update_message_usage(message_id, usage)
+        cost = estimate_cost(provider, model, p, c, cached, reasoning)
+        await self.update_message_usage(message_id, usage, cost)
         day = now()[:10]
         await self._write(
             "INSERT INTO usage_daily(day, provider, model, prompt_tokens, completion_tokens, cached_tokens,"
-            " reasoning_tokens) VALUES (?,?,?,?,?,?,?)"
+            " reasoning_tokens, cost_est) VALUES (?,?,?,?,?,?,?,?)"
             " ON CONFLICT(day, provider, model) DO UPDATE SET"
             " prompt_tokens=prompt_tokens+excluded.prompt_tokens,"
             " completion_tokens=completion_tokens+excluded.completion_tokens,"
             " cached_tokens=cached_tokens+excluded.cached_tokens,"
-            " reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens",
-            (day, provider, model, p, c, cached, reasoning),
+            " reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens,"
+            " cost_est=cost_est+excluded.cost_est",
+            (day, provider, model, p, c, cached, reasoning, cost),
         )
         await self._write(
             "UPDATE sessions SET context_tokens=?, total_prompt=total_prompt+?,"
-            " total_completion=total_completion+?, updated_at=? WHERE id=?",
-            (p + c, p, c, now(), session_id),
+            " total_completion=total_completion+?, cost_est=cost_est+?, updated_at=? WHERE id=?",
+            (p + c, p, c, cost, now(), session_id),
         )
         row = await self._one(
-            "SELECT context_tokens, total_prompt, total_completion FROM sessions WHERE id=?",
+            "SELECT context_tokens, total_prompt, total_completion, cost_est FROM sessions WHERE id=?",
             (session_id,),
         )
         totals = await self.session_usage_totals(session_id)
@@ -675,12 +696,14 @@ class Storage:
             "completion": c,
             "cached_tokens": cached,
             "reasoning_tokens": reasoning,
+            "cost": cost,
             "session_total": {
                 "context_tokens": (row or {}).get("context_tokens", 0),
                 "prompt": (row or {}).get("total_prompt", 0),
                 "completion": (row or {}).get("total_completion", 0),
                 "cached_tokens": totals["cached_tokens"],
                 "reasoning_tokens": totals["reasoning_tokens"],
+                "cost": (row or {}).get("cost_est", 0.0),
             },
         }
 
@@ -867,3 +890,16 @@ class Storage:
                 cur = await db.execute(statement)
                 await cur.close()
             await db.commit()
+
+    async def maintenance(self, vacuum: bool = False) -> dict[str, Any]:
+        """Cheap periodic upkeep: fold the WAL back into the DB and refresh
+        SQLite's query planner. ``VACUUM`` is opt-in because it takes an
+        exclusive lock and is slow on large databases (ours is 100s of MB)."""
+        async with self.connect() as db:
+            for statement in ("PRAGMA wal_checkpoint(TRUNCATE)", "PRAGMA optimize"):
+                cur = await db.execute(statement)
+                await cur.close()
+            await db.commit()
+        if vacuum:
+            await self.vacuum()
+        return {"vacuum": bool(vacuum)}

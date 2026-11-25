@@ -3,7 +3,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from configs.configs import DB_PATH, GITIGNORE_PLUGINS_DIR, PLUGINS_DIR, SKILLS_DIR, WORKSPACE_DIR
+from configs.configs import (
+    DB_PATH,
+    GITIGNORE_PLUGINS_DIR,
+    MAINTENANCE_INTERVAL,
+    MAINTENANCE_VACUUM,
+    PLUGINS_DIR,
+    SKILLS_DIR,
+    WORKSPACE_DIR,
+)
 from core.agents import AgentRegistry
 from core.context import ContextManager
 from core.events import EventBus
@@ -42,6 +50,7 @@ class Harness:
         self.runtime.manager = self.manager
         # AI supervisor is a built-in capability, not an installable plugin.
         self.supervisor_task: asyncio.Task | None = None
+        self.maintenance_task: asyncio.Task | None = None
         self._booted = False
 
     async def boot(self) -> None:
@@ -57,9 +66,35 @@ class Harness:
             print(f"[harness] resume scan failed: {exc}")
         if self.supervisor_task is None or self.supervisor_task.done():
             self.supervisor_task = asyncio.create_task(supervisor_watch_loop(self))
+        if self.maintenance_task is None or self.maintenance_task.done():
+            self.maintenance_task = asyncio.create_task(self._maintenance_loop())
         self._booted = True
 
+    async def _maintenance_loop(self) -> None:
+        """Fold the WAL back and optimize SQLite on a schedule.
+
+        A crashed/restarted long task can leave a large WAL; compacting it
+        keeps the 48h workload from bloating the database indefinitely.
+        """
+        await asyncio.sleep(min(300.0, max(30.0, MAINTENANCE_INTERVAL)))
+        while True:
+            try:
+                await self.storage.maintenance(vacuum=MAINTENANCE_VACUUM)
+                await self.events.emit("*", "maintenance.compacted", {"vacuum": MAINTENANCE_VACUUM})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[harness] maintenance failed: {exc}")
+            await asyncio.sleep(MAINTENANCE_INTERVAL)
+
     async def shutdown(self) -> None:
+        if self.maintenance_task:
+            self.maintenance_task.cancel()
+            try:
+                await self.maintenance_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self.maintenance_task = None
         if self.supervisor_task:
             self.supervisor_task.cancel()
             try:
