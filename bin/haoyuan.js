@@ -1070,6 +1070,77 @@ function printVersion() {
   process.stdout.write(`${VERSION}\n`);
 }
 
+function npmRegistryArgs() {
+  const registry = (process.env.HAOYUAN_NPM_REGISTRY || "").trim();
+  return registry ? ["--registry", registry] : [];
+}
+
+function parseVersion(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^v/i, "")
+    .split("-")[0]
+    .split(".")
+    .map((part) => {
+      const n = Number.parseInt(part, 10);
+      return Number.isFinite(n) ? n : 0;
+    });
+}
+
+function compareVersions(a, b) {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+function npmCapture(args) {
+  const full = [...args, ...npmRegistryArgs()];
+  const useShell = IS_WIN && /\.(cmd|bat)$/i.test(NPM);
+  const r = spawnSync(NPM, useShell ? full.map(shellQuote) : full, {
+    cwd: ROOT,
+    encoding: "utf8",
+    shell: useShell,
+  });
+  if (r.error) return { ok: false, error: r.error.message };
+  if (r.status !== 0) {
+    const detail = (r.stderr || r.stdout || "").trim();
+    return { ok: false, error: detail || `npm 退出码 ${r.status}` };
+  }
+  return { ok: true, out: (r.stdout || "").trim() };
+}
+
+async function upgradeCommand() {
+  log(`当前版本 v${VERSION}`);
+  log("检查 npm 最新版本 ...");
+  const result = npmCapture(["view", "haoyuan", "version"]);
+  if (!result.ok) {
+    fail(`检查最新版本失败: ${result.error}（可用 HAOYUAN_NPM_REGISTRY 指定 npm 源）`);
+  }
+  const latest = (result.out || "").split(/\s+/).filter(Boolean).pop() || "";
+  if (!/^\d+\.\d+\.\d+/.test(latest)) {
+    fail(`无法解析最新版本号: ${result.out || "(空)"}`);
+  }
+  log(`最新版本 v${latest}`);
+  if (compareVersions(VERSION, latest) >= 0) {
+    log("已是最新版本，无需升级。");
+    return;
+  }
+
+  log(`开始升级 v${VERSION} → v${latest} ...`);
+  const ok = run(NPM, ["install", "-g", `haoyuan@${latest}`, ...npmRegistryArgs()], { lenient: true });
+  if (!ok) {
+    fail("升级失败。若提示权限不足，请用管理员权限运行，或手动执行: npm install -g haoyuan@latest");
+  }
+  log(`升级完成：v${VERSION} → v${latest}`);
+  log("请重新运行 haoyuan 以使用新版本。");
+}
+
 function printHelp() {
   process.stdout.write(
     [
@@ -1086,6 +1157,7 @@ function printHelp() {
       "  haoyuan logout   清除本地登录令牌",
       "  haoyuan setup    安装后端/前端依赖",
       "  haoyuan build    仅构建前端",
+      "  haoyuan upgrade  升级到 npm 最新版本",
       "  haoyuan help     显示帮助",
       "",
       "选项:",
@@ -1150,6 +1222,10 @@ async function main() {
   }
   if (command === "build") {
     buildFrontend();
+    return;
+  }
+  if (command === "upgrade" || command === "update") {
+    await upgradeCommand();
     return;
   }
   if (command === "postinstall") {
