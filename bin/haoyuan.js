@@ -26,6 +26,7 @@ const API = path.join(ROOT, "api");
 const RUNTIME_FILE = path.join(API, "data", "runtime.json");
 const DIST_INDEX = path.join(WEB, "dist", "index.html");
 const TOKEN_FILE = path.join(API, "data", "cli-token");
+const CLI_SECRET_FILE = path.join(API, "data", "cli-secret");
 let TOKEN = (process.env.HAOYUAN_TOKEN || "").trim();
 if (!TOKEN) {
   try {
@@ -52,6 +53,14 @@ function clearToken() {
     fs.unlinkSync(TOKEN_FILE);
   } catch {
     /* ignore */
+  }
+}
+
+function cliSecret() {
+  try {
+    return fs.readFileSync(CLI_SECRET_FILE, "utf8").trim();
+  } catch {
+    return "";
   }
 }
 
@@ -90,11 +99,9 @@ function run(cmd, args, opts = {}) {
   const lenient = opts.lenient === true;
   const useShell = IS_WIN && /\.(cmd|bat)$/i.test(cmd);
   log(`${cmd} ${args.join(" ")}`);
-  const r = spawnSync(
-    cmd,
-    useShell ? args.map(shellQuote) : args,
-    { stdio: "inherit", cwd: ROOT, shell: useShell }
-  );
+  const r = useShell
+    ? spawnSync([cmd, ...args.map(shellQuote)].join(" "), { stdio: "inherit", cwd: ROOT, shell: true })
+    : spawnSync(cmd, args, { stdio: "inherit", cwd: ROOT });
   if (r.error) {
     if (lenient) {
       warn(`跳过（${r.error.message}）`);
@@ -369,6 +376,8 @@ async function ensureServer() {
 
 function apiHeaders() {
   const headers = { "content-type": "application/json" };
+  const secret = cliSecret();
+  if (secret) headers["x-haoyuan-cli-secret"] = secret;
   if (TOKEN) {
     headers["authorization"] = `Bearer ${TOKEN}`;
     headers["x-haoyuan-token"] = TOKEN;
@@ -626,6 +635,8 @@ async function chat(options = {}) {
     if (state.streamReq || state.closing) return;
     const qs = `after_id=${state.lastEventId}${TOKEN ? `&token=${encodeURIComponent(TOKEN)}` : ""}`;
     const headers = { Accept: "text/event-stream" };
+    const secret = cliSecret();
+    if (secret) headers["x-haoyuan-cli-secret"] = secret;
     if (TOKEN) headers["x-haoyuan-token"] = TOKEN;
     const req = http.get(
       {
@@ -704,7 +715,7 @@ async function chat(options = {}) {
         state.inReasoning = false;
       }
       if (!state.inText) {
-        process.stdout.write(`${C.bold}[AI]${C.reset} `);
+        process.stdout.write(`${C.bold}[HaoYuan]${C.reset} `);
         state.inText = true;
       }
       if (payload.text) process.stdout.write(payload.text);
@@ -763,7 +774,7 @@ async function chat(options = {}) {
 
     if (type === "done") {
       if (!state.inText && payload.text) {
-        process.stdout.write(`${C.bold}[AI]${C.reset} ${payload.text}\n`);
+        process.stdout.write(`${C.bold}[HaoYuan]${C.reset} ${payload.text}\n`);
       }
       endLine();
       if (state.busy) {
@@ -1102,11 +1113,9 @@ function compareVersions(a, b) {
 function npmCapture(args) {
   const full = [...args, ...npmRegistryArgs()];
   const useShell = IS_WIN && /\.(cmd|bat)$/i.test(NPM);
-  const r = spawnSync(NPM, useShell ? full.map(shellQuote) : full, {
-    cwd: ROOT,
-    encoding: "utf8",
-    shell: useShell,
-  });
+  const r = useShell
+    ? spawnSync([NPM, ...full.map(shellQuote)].join(" "), { cwd: ROOT, encoding: "utf8", shell: true })
+    : spawnSync(NPM, full, { cwd: ROOT, encoding: "utf8" });
   if (r.error) return { ok: false, error: r.error.message };
   if (r.status !== 0) {
     const detail = (r.stderr || r.stdout || "").trim();

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import threading
 import time
@@ -25,6 +26,38 @@ DEFAULT_MAX_FAILURES = 5
 MAX_FAILURES_LIMIT = 20
 LOCK_SECONDS = 5 * 60
 STATE_PATH = DATA_DIR / "user_account.json"
+CLI_SECRET_PATH = DATA_DIR / "cli-secret"
+
+_cli_secret_value: str | None = None
+_cli_secret_lock = threading.Lock()
+
+
+def cli_secret() -> str:
+    """本机 CLI 的免登录密钥：只写入本地数据目录，由同机 `haoyuan` 读取后随请求发送。"""
+    global _cli_secret_value
+    if _cli_secret_value is not None:
+        return _cli_secret_value
+    with _cli_secret_lock:
+        if _cli_secret_value is not None:
+            return _cli_secret_value
+        try:
+            value = ""
+            if CLI_SECRET_PATH.is_file():
+                value = CLI_SECRET_PATH.read_text(encoding="utf-8").strip()
+            if not value:
+                value = secrets.token_hex(32)
+                CLI_SECRET_PATH.parent.mkdir(parents=True, exist_ok=True)
+                temp = CLI_SECRET_PATH.with_suffix(".tmp")
+                temp.write_text(value, encoding="utf-8")
+                temp.replace(CLI_SECRET_PATH)
+            try:
+                os.chmod(CLI_SECRET_PATH, 0o600)
+            except OSError:
+                pass
+            _cli_secret_value = value
+        except OSError:
+            _cli_secret_value = ""
+        return _cli_secret_value
 
 
 def _now() -> str:
@@ -261,6 +294,8 @@ class AuthGateMiddleware:
     def __init__(self, app, state_path: str):
         self.app = app
         self.store = AuthStore(Path(state_path))
+        # 启动时即生成本机 CLI 免登录密钥，避免 CLI 首个请求早于文件生成
+        cli_secret()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in {"http", "websocket"}:
@@ -278,6 +313,10 @@ class AuthGateMiddleware:
             for key, value in scope.get("headers", [])
         }
         query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+        cli = headers.get("x-haoyuan-cli-secret", "").strip()
+        expected = cli_secret()
+        if cli and expected and hmac.compare_digest(cli, expected):
+            return await self.app(scope, receive, send)
         token = _token_from_headers(headers, query)
         if token and self.store.verify_token(token):
             return await self.app(scope, receive, send)
@@ -533,6 +572,7 @@ def build_router(store: AuthStore) -> APIRouter:
 def register(ctx) -> None:
     store = AuthStore(STATE_PATH)
     store.ensure()
+    cli_secret()
     ctx.add_router(build_router(store))
     ctx.add_middleware(AuthGateMiddleware, state_path=str(STATE_PATH))
 
