@@ -9,6 +9,7 @@ import locale
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -593,6 +594,14 @@ def normalize_shell_command(command: str) -> str:
     return command
 
 
+def _shell_popen_kwargs() -> dict[str, Any]:
+    """Run the shell in its own process group so timeout handling can never
+    signal the API server's process group (which would kill the service)."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
 def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
     command = args.get("command", "")
     if not command.strip():
@@ -604,7 +613,6 @@ def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
     env = os.environ.copy()
     env.update(_CHILD_IO_ENV)
     adapted = normalize_shell_command(command)
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     process = subprocess.Popen(
         adapted,
         shell=True,
@@ -612,7 +620,7 @@ def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
-        creationflags=creationflags,
+        **_shell_popen_kwargs(),
     )
     try:
         stdout_raw, stderr_raw = process.communicate(timeout=SHELL_TIMEOUT)
@@ -624,7 +632,9 @@ def run_shell(ctx: ToolContext, args: dict[str, Any]) -> str:
             )
         else:
             try:
-                os.killpg(os.getpgid(process.pid), 9)
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             except Exception:
                 process.kill()
         try:

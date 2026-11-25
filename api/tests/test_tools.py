@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -78,6 +80,36 @@ def test_glob_grep_symbols_and_scan(tmp_path):
 def test_run_shell_blocks_catastrophic_commands(tmp_path):
     with pytest.raises(ValueError, match="blocked"):
         dev.run_shell(ctx_for(tmp_path), {"command": "rm -rf /"})
+
+
+def test_shell_popen_isolates_process_group():
+    kwargs = dev._shell_popen_kwargs()
+    if os.name == "nt":
+        assert kwargs == {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        assert kwargs == {"start_new_session": True}
+
+
+def test_run_shell_timeout_kills_child_group_not_parent(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX process-group regression")
+    script = (
+        "from core.contracts import ToolContext\n"
+        "from tools import dev\n"
+        "dev.SHELL_TIMEOUT = 1.0\n"
+        f"ctx = ToolContext(runtime=None, session={{'id': 't'}}, workspace={str(tmp_path)!r})\n"
+        "print(dev.run_shell(ctx, {'command': 'sleep 30'}))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(Path(dev.__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        start_new_session=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "timeout after 1s" in proc.stdout
 
 
 def test_run_shell_and_delete_move(tmp_path):
