@@ -849,7 +849,7 @@ async function chat(options = {}) {
         "  /new           新建会话",
         "  /web           在浏览器打开当前会话",
         "  /cancel        取消当前任务",
-        "  /exit          退出（也可 Ctrl+C）",
+        "  /exit          退出（输入 exit/quit 或 Ctrl+C 也可退出）",
         "",
       ].join("\n")
     );
@@ -941,6 +941,12 @@ async function chat(options = {}) {
       return;
     }
 
+    // Windows cmd 等终端里直接输入 exit/quit 也退出对话（无需加 /）
+    if (/^(exit|quit)$/i.test(text)) {
+      shutdown(0);
+      return;
+    }
+
     if (state.approval) {
       if (/^y(es)?$/i.test(text)) await resolveApproval(true);
       else await resolveApproval(false);
@@ -1029,7 +1035,7 @@ async function chat(options = {}) {
       "",
       `${C.bold}豪源 HaoYuan v${VERSION}${C.reset} · 终端对话`,
       `${C.dim}模型 ${state.model} · 工作区 ${process.cwd()}${C.reset}`,
-      `${C.dim}会话 ${session.id} · /models 选模型 · /web 网页 · /help 帮助 · /exit 退出${C.reset}`,
+      `${C.dim}会话 ${session.id} · /models 选模型 · /web 网页 · /help 帮助 · /exit 或 exit 退出${C.reset}`,
       mockHint,
       "",
     ]
