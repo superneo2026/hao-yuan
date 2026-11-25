@@ -23,7 +23,8 @@ import httpx
 from configs.configs import APP_VERSION, DATA_DIR, PLUGIN_CENTER_APP_KEY, PLUGIN_CENTER_URL
 
 HEARTBEAT_PATH = "/api/plugin-center/telemetry/heartbeat"
-INTERVAL_SEC = 300
+OFFLINE_PATH = "/api/plugin-center/telemetry/offline"
+INTERVAL_SEC = 60
 STARTUP_DELAY_SEC = 2
 TIMEOUT_SEC = 6.0
 STATE_PATH = DATA_DIR / "telemetry.json"
@@ -138,6 +139,7 @@ def _payload() -> bytes:
     body = {
         "install_id": _load_install_id(),
         "device_id": _device_id(),
+        "interval": INTERVAL_SEC,
         "version": APP_VERSION,
         "platform": f"{platform.system()} {platform.release()}",
     }
@@ -178,6 +180,23 @@ def start() -> None:
     )
 
 
+async def _send_offline() -> None:
+    """正常退出时上报下线，让统计端立即把该实例从在线列表移除。"""
+    if not enabled():
+        return
+    try:
+        body = json.dumps(
+            {"install_id": _load_install_id(), "device_id": _device_id()},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        sign = hmac.new(PLUGIN_CENTER_APP_KEY.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
+            await client.post(f"{center_url()}{OFFLINE_PATH}", content=body, headers={"X-Haoyuan-Sign": sign})
+    except Exception:
+        pass  # 下线上报失败不影响退出
+
+
 async def stop() -> None:
     global _task
     if _task is not None:
@@ -187,6 +206,7 @@ async def stop() -> None:
         except asyncio.CancelledError:
             pass
         _task = None
+    await _send_offline()
 
 
 class _Telemetry:
