@@ -47,12 +47,19 @@ class SafeWorkspace:
     def write_text(self, relative_path: str, content: str) -> Path:
         target = self.resolve(relative_path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            mode = target.stat().st_mode & 0o777
+        except FileNotFoundError:
+            mode = 0o644
         fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=".tmp_", suffix=".swp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
+            # mkstemp creates 0600 files, which web servers (nginx/web-data)
+            # cannot read. Keep the original mode, or default to 0644.
+            os.chmod(tmp, mode)
             os.replace(tmp, target)
         except BaseException:
             try:

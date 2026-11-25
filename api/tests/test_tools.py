@@ -33,6 +33,17 @@ def test_sandbox_blocks_traversal(tmp_path):
         workspace.resolve(str(tmp_path.parent / "absolute.txt"))
 
 
+def test_write_text_creates_web_readable_files(tmp_path):
+    workspace = SafeWorkspace(tmp_path)
+    target = workspace.write_text("web/index.html", "<html></html>")
+    if os.name == "nt":
+        return
+    assert target.stat().st_mode & 0o777 == 0o644
+    os.chmod(target, 0o755)
+    workspace.write_text("web/index.html", "<html>v2</html>")
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
 def test_read_write_edit_patch_multi(tmp_path):
     context = ctx_for(tmp_path)
     assert "created" in dev.write_file(context, {"path": "src/app.py", "content": "def add(a, b):\n    return a + b\n"})
