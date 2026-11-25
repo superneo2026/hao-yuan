@@ -704,7 +704,7 @@ async function chat(options = {}) {
         state.inReasoning = false;
       }
       if (!state.inText) {
-        process.stdout.write(`${C.bold}[助手]${C.reset} `);
+        process.stdout.write(`${C.bold}[AI]${C.reset} `);
         state.inText = true;
       }
       if (payload.text) process.stdout.write(payload.text);
@@ -763,7 +763,7 @@ async function chat(options = {}) {
 
     if (type === "done") {
       if (!state.inText && payload.text) {
-        process.stdout.write(`${C.bold}[助手]${C.reset} ${payload.text}\n`);
+        process.stdout.write(`${C.bold}[AI]${C.reset} ${payload.text}\n`);
       }
       endLine();
       if (state.busy) {
