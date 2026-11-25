@@ -98,10 +98,11 @@ function shellQuote(s) {
 function run(cmd, args, opts = {}) {
   const lenient = opts.lenient === true;
   const useShell = IS_WIN && /\.(cmd|bat)$/i.test(cmd);
+  const cwd = opts.cwd || ROOT;
   log(`${cmd} ${args.join(" ")}`);
   const r = useShell
-    ? spawnSync([cmd, ...args.map(shellQuote)].join(" "), { stdio: "inherit", cwd: ROOT, shell: true })
-    : spawnSync(cmd, args, { stdio: "inherit", cwd: ROOT });
+    ? spawnSync([cmd, ...args.map(shellQuote)].join(" "), { stdio: "inherit", cwd, shell: true })
+    : spawnSync(cmd, args, { stdio: "inherit", cwd });
   if (r.error) {
     if (lenient) {
       warn(`跳过（${r.error.message}）`);
@@ -255,6 +256,37 @@ async function healthyPort(port) {
     return res.ok ? port : 0;
   } catch {
     return 0;
+  }
+}
+
+function stopLocalServer(port) {
+  if (!port) return false;
+  try {
+    if (IS_WIN) {
+      const r = spawnSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8" });
+      const pids = new Set();
+      for (const line of (r.stdout || "").split(/\r?\n/)) {
+        if (!/LISTENING/i.test(line)) continue;
+        const cols = line.trim().split(/\s+/);
+        if (!cols[1] || !cols[1].endsWith(`:${port}`)) continue;
+        const pid = cols[cols.length - 1];
+        if (/^\d+$/.test(pid) && pid !== "0") pids.add(pid);
+      }
+      for (const pid of pids) {
+        log(`停止正在运行的豪源服务（端口 ${port}，PID ${pid}）...`);
+        spawnSync("taskkill", ["/PID", pid, "/F"], { stdio: "ignore" });
+      }
+      return pids.size > 0;
+    }
+    const r = spawnSync("lsof", ["-ti", `tcp:${port}`], { encoding: "utf8" });
+    const pids = (r.stdout || "").split(/\s+/).filter((pid) => /^\d+$/.test(pid));
+    for (const pid of pids) {
+      log(`停止正在运行的豪源服务（端口 ${port}，PID ${pid}）...`);
+      spawnSync("kill", ["-TERM", pid], { stdio: "ignore" });
+    }
+    return pids.length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -1141,10 +1173,24 @@ async function upgradeCommand() {
     return;
   }
 
+  // Windows 下 npm 会重命名当前包目录；若服务正在运行或 cwd 在包内会 EBUSY，先停服务并在用户目录执行
+  const port = readApiPort();
+  if (port && (await healthyPort(port))) {
+    stopLocalServer(port);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+
   log(`开始升级 v${VERSION} → v${latest} ...`);
-  const ok = run(NPM, ["install", "-g", `haoyuan@${latest}`, ...npmRegistryArgs()], { lenient: true });
+  const installArgs = ["install", "-g", `haoyuan@${latest}`, ...npmRegistryArgs()];
+  let ok = run(NPM, installArgs, { lenient: true, cwd: os.homedir() });
+  if (!ok && IS_WIN) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    ok = run(NPM, installArgs, { lenient: true, cwd: os.homedir() });
+  }
   if (!ok) {
-    fail("升级失败。若提示权限不足，请用管理员权限运行，或手动执行: npm install -g haoyuan@latest");
+    fail(
+      "升级失败：请完全退出正在运行的豪源（关闭所有 haoyuan 窗口/服务），在用户目录（如 C:\\Users\\你的用户名）下执行 npm install -g haoyuan@latest；权限不足请用管理员终端。"
+    );
   }
   log(`升级完成：v${VERSION} → v${latest}`);
   log("请重新运行 haoyuan 以使用新版本。");
