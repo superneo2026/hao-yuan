@@ -126,6 +126,21 @@ _SMALLTALK_RE = re.compile(
 )
 _QA_START_RE = re.compile(r"^(?:请问|可以|能不能|能否|可不可以|是否|如何|怎么|怎样|为什么|为啥|什么|哪些|哪个|多少|多久|会不会|有没有|要不要|该不该|是不是|how|what|why|which|who|when|where|can|could|is|are|do|does|should|would)", re.I)
 _REQUEST_MARK_RE = re.compile(r"(?:帮我|帮忙|请你|麻烦你|给我|替我|代为|执行一下|开始做|直接做|help\s+(?:me|us))", re.I)
+# Data / finance / quantitative questions look like short "general questions" but
+# are real work: they need live data (web_fetch / run_shell) and arithmetic, not
+# a chat reply. Treat them as tasks so intent routing cannot switch the tools off.
+_DATA_QUERY_RE = re.compile(
+    r"计算|算一下|算算|测算|估算|统计|回测|"
+    r"盈利|亏损|盈亏|收益|利润|回报|赚了|亏了|涨了|跌了|"
+    r"股价|行情|报价|市值|汇率|利率|收益率|估值|市盈率|净值|"
+    r"买入|卖出|持仓|仓位|投资|定投|复利|年化|"
+    r"交易日|交易情况|成交|开盘价|收盘价|走势|涨跌|涨停|跌停|"
+    r"股票|基金|债券|期货|港股|美股|比特币|加密货币|币价|"
+    r"数据集|百分比|占比|平均值|中位数|增长率|同比|环比|"
+    r"\b(?:stock|share\s+price|cagr|revenue|profit|loss|drawdown|backtest|portfolio|"
+    r"calculate|compute|statistics|percentage|benchmark)\b",
+    re.I,
+)
 
 CHAT_ACTION_HINTS = (
     "帮我", "帮忙", "请你", "麻烦你", "给我", "替我", "代为",
@@ -394,6 +409,11 @@ def is_question(text: str) -> bool:
     return bool(_QA_START_RE.match(value)) and not _PATH_RE.search(value)
 
 
+def is_data_query(text: str) -> bool:
+    """True for finance/data/compute questions that need real tools, not chat."""
+    return bool(_DATA_QUERY_RE.search(text or ""))
+
+
 def is_casual_chat(text: str) -> bool:
     """Detect greetings, social chat and general questions that need no workspace work."""
     value = (text or "").strip()
@@ -401,6 +421,8 @@ def is_casual_chat(text: str) -> bool:
         return False
     if is_smalltalk(value):
         return True
+    if is_data_query(value):
+        return False
     if len(value) > 80:
         return False
     if _PATH_RE.search(value) or _CODE_RE.search(value):
@@ -449,6 +471,10 @@ def needs_write(text: str, qa: bool, kind: str, workspace: bool) -> bool:
     if not workspace or qa or kind not in ("dev", "coding") or is_casual_chat(text):
         return False
     value = (text or "").lower()
+    # A pure data/compute question is research, not a code change. Only require a
+    # deliverable when the user names an explicit output path.
+    if is_data_query(text) and not _OUTPUT_HINT_RE.search(text or ""):
+        return False
     return not any(hint in value for hint in READ_ONLY_HINTS)
 
 
@@ -945,7 +971,9 @@ class AgentRuntime:
         level = estimate_complexity(text, any(s.get("s") in ("pending", "doing") for s in _plan_steps(session)))
         lite = self._should_lite(session, level, text)
         task_type = detect_task_type(text)
-        qa = is_question(text)
+        # A data/compute question is answered by using tools, so it must not take
+        # the "question mode" path that discourages a task loop.
+        qa = is_question(text) and not is_data_query(text)
         audit = needs_spec_audit(text, level, bool(session.get("workspace")), requested, qa)
         write_required = level != "simple" and needs_write(text, qa, requested, bool(session.get("workspace")))
         thinking = self._thinking(session, provider, lite, level, qa or casual)
@@ -1108,14 +1136,15 @@ class AgentRuntime:
         if not agent.tools:
             return []
         if not workspace and getattr(agent, "kind", "") not in ("plan", "robot"):
-            chat_safe = {"system_info", "calculator", "now", "echo"}
+            chat_safe = {"system_info", "calculator", "now", "echo", "web_fetch"}
             return [name for name in agent.tools if name in chat_safe and self.tools.get(name)]
         names = [name for name in agent.tools if self.tools.get(name)]
         if not names:
             return []
-        # Plan agents already expose a tiny purpose-built toolset; trimming it
-        # would remove their primary deliverable tool (make_plan).
-        if lite and TOOL_SCHEMA_TRIM and getattr(agent, "kind", "") != "plan":
+        # Plan agents already expose a tiny purpose-built toolset; the general
+        # assistant only has chat-safe tools. Trimming either with LITE_TOOL_SET
+        # would strip their entire toolset, so keep them intact.
+        if lite and TOOL_SCHEMA_TRIM and getattr(agent, "kind", "") not in ("plan", "general"):
             allowed = set(LITE_TOOL_SET) | {"plan_task", "update_plan"}
             # Web/reference tool schemas are large and irrelevant to ordinary repo
             # work. Only advertise them when the request is actually about a web
@@ -2618,7 +2647,8 @@ class AgentRuntime:
             parts.append(
                 "\n# Conversation mode\nThis is casual conversation or a general question, not a workspace task. "
                 "Answer directly and naturally. Do not inspect the workspace or start a task loop. "
-                "Exception: for questions about this machine's OS, CPU, memory, disk or uptime, use system_info or the live host information below.\n"
+                "Exception: for questions about this machine's OS, CPU, memory, disk or uptime, use system_info or the live host information below. "
+                "For questions that need current or external facts (prices, quotes, news, docs, versions, licenses), use web_fetch on the relevant public URL instead of claiming you have no internet access; if a fetch fails, say so and label the fact unverified.\n"
             )
         if kind == "plan":
             parts.append(

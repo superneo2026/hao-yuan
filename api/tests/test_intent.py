@@ -6,6 +6,7 @@ from core.runtime import (
     AgentRuntime,
     detect_kind,
     is_casual_chat,
+    is_data_query,
     is_question,
     is_smalltalk,
     needs_write,
@@ -14,6 +15,20 @@ from core.runtime import (
 
 class _DummyAgent:
     instructions = ""
+
+
+class _GeneralAgent:
+    instructions = ""
+    kind = "general"
+    tools = ["system_info", "calculator", "now", "echo", "web_fetch"]
+
+
+class _Tools:
+    def __init__(self, names):
+        self._names = set(names)
+
+    def get(self, name):
+        return object() if name in self._names else None
 
 
 
@@ -66,6 +81,41 @@ def test_work_requests_are_not_casual():
         "做个页面",
     ):
         assert not is_casual_chat(text), text
+
+
+def test_data_queries_are_tasks_not_chat():
+    for text in (
+        "假设投入资金是10万港币，对于港股，如果没有早上10点卖出，下午4点买入小米，过去2026的交易日，盈利多少还是亏损多少",
+        "那对于2026年11月的交易情况呢",
+        "小米现在股价多少",
+        "帮我计算这个月的收益率",
+        "回测一下这个策略的年化收益",
+        "what is the current share price of Xiaomi",
+    ):
+        assert is_data_query(text), text
+        assert not is_casual_chat(text), text
+        assert not needs_write(text, False, "dev", True), text
+
+
+def test_data_query_still_requires_explicit_deliverable():
+    text = "计算这个月的收益率并输出到 /tmp/report.csv"
+    assert is_data_query(text)
+    assert needs_write(text, False, "dev", True)
+
+
+def test_general_agent_keeps_chat_tools_in_lite_mode():
+    runtime = AgentRuntime.__new__(AgentRuntime)
+    runtime.tools = _Tools(_GeneralAgent.tools)
+    names = runtime._tools_for(_GeneralAgent(), "general", True, True, "你好")
+    for name in ("system_info", "calculator", "now", "echo", "web_fetch"):
+        assert name in names, name
+
+
+def test_general_agent_has_web_fetch_without_workspace():
+    runtime = AgentRuntime.__new__(AgentRuntime)
+    runtime.tools = _Tools(_GeneralAgent.tools)
+    names = runtime._tools_for(_GeneralAgent(), "general", True, False, "现在股价多少")
+    assert "web_fetch" in names
 
 
 def test_html_document_with_video_mentions_routes_to_coding():

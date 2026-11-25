@@ -30,13 +30,15 @@ def register(ctx) -> None:
         AgentSpec(
             name="general",
             title="HaoYuan General Assistant",
-            description="Chat-only assistant when no workspace is bound.",
+            description="Chat and research assistant; read-only web access, no file edits or shell.",
             instructions=(
                 "Answer clearly and concisely. Use system_info for questions about this machine's OS, CPU, memory, "
-                "disk or uptime. If no workspace is bound and the user needs file or command access, explain that a "
-                "workspace must be bound first."
+                "disk or uptime. Use web_fetch to check current or external facts (prices, quotes, docs, versions, "
+                "licenses) on a public http(s) URL before citing them; never claim you have no internet access. If a "
+                "fetch fails, say so and label the fact unverified. If no workspace is bound and the user needs file "
+                "or command access, explain that a workspace must be bound first."
             ),
-            tools=["system_info", "calculator", "now", "echo"],
+            tools=["system_info", "calculator", "now", "echo", "web_fetch"],
             auto_skills=True,
             kind="general",
         )
