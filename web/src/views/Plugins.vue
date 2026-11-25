@@ -391,7 +391,7 @@ onMounted(() => {
         <div class="center-config">
           <label class="label" for="center-url" style="text-align: left">{{ t('plugins.centerUrlLabel') }}</label>
           <div class="center-url-row">
-            <input id="center-url" v-model="centerInput" class="field mono" placeholder="http://127.0.0.1:8180" @keyup.enter="retryCenter" />
+            <input id="center-url" v-model="centerInput" class="field mono" placeholder="https://hao-yuan.conductorer.com" @keyup.enter="retryCenter" />
             <button class="btn primary" :disabled="state.market.loading" @click="retryCenter">
               <span v-if="state.market.loading" class="spinner" style="width: 12px; height: 12px" />
               <Icon v-else name="refresh" :size="15" /> {{ t('plugins.retry') }}

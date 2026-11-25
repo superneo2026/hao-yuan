@@ -7,7 +7,7 @@
 - Frontend dev: `cd web && npm run dev` (base port 8130, env `HAOYUAN_WEB_PORT`; auto +1 when busy, proxies `/api`, `/docs` and `/ws` to `HAOYUAN_API_PORT` or `runtime.json` `api_port`)
 - Frontend build: `cd web && npm run build`
 - Production: build the frontend, then run the API; the API serves `web/dist` at `/`.
-- Plugin center (separate repo `../hao-yuan-plugin-center`): `cd ../hao-yuan-plugin-center && python main.py` (base port 8180, env `PLUGIN_CENTER_PORT`). The API connects to it via `HAOYUAN_PLUGIN_CENTER_URL` (default `http://127.0.0.1:8180`).
+- Plugin center (separate repo `../hao-yuan-plugin-center`): `cd ../hao-yuan-plugin-center && python main.py` (base port 8180, env `PLUGIN_CENTER_PORT`). The API connects to it via `HAOYUAN_PLUGIN_CENTER_URL` (default `https://hao-yuan.conductorer.com`).
 - `desktop.exe` (source `desktop/desktop.cs`, build `desktop\build.bat`): can override base ports via `api_port_config` / `web_port_config` in `api/data/runtime.json` and restart services.
 
 ## Architecture invariants

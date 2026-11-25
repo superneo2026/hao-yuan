@@ -34,7 +34,8 @@ GITIGNORE_PLUGINS_DIR = Path(
     os.getenv("HAOYUAN_GITIGNORE_PLUGINS_DIR", API_DIR / "gitignore_plugins")
 ).expanduser().resolve()
 PLUGIN_DIRS = (PLUGINS_DIR, GITIGNORE_PLUGINS_DIR)
-PLUGIN_CENTER_URL = os.getenv("HAOYUAN_PLUGIN_CENTER_URL", "http://127.0.0.1:8180").rstrip("/")
+# 插件中心地址：默认指向豪源统计云端站点；自建部署可用 HAOYUAN_PLUGIN_CENTER_URL 覆盖
+PLUGIN_CENTER_URL = os.getenv("HAOYUAN_PLUGIN_CENTER_URL", "https://hao-yuan.conductorer.com").rstrip("/")
 PLUGIN_PACKAGE_MAX_BYTES = int(os.getenv("HAOYUAN_PLUGIN_PACKAGE_MAX_BYTES", str(20 * 1024 * 1024)))
 PLUGIN_PACKAGE_MAX_UNCOMPRESSED_BYTES = int(
     os.getenv("HAOYUAN_PLUGIN_PACKAGE_MAX_UNCOMPRESSED_BYTES", str(64 * 1024 * 1024))

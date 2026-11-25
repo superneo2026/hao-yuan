@@ -25,6 +25,7 @@ from configs.configs import (
     prefix,
 )
 from core.harness import get_harness
+from core.telemetry import remember_center_url
 from extensions.common import fail, ok
 
 router = APIRouter(prefix=prefix, tags=["marketplace"])
@@ -282,13 +283,15 @@ async def marketplace_plugins(center: str = ""):
     try:
         url = _center_url(center)
         url, catalog = await _resolve_catalog(url)
+        if center:
+            remember_center_url(url)
     except Exception as exc:
         return ok(
             {
                 "center_url": target,
                 "online": False,
                 "error": f"{type(exc).__name__}: {exc}",
-                "hint": "请确认插件中心已启动（默认 http://127.0.0.1:8180），并重启豪源后端以加载最新 API。",
+                "hint": "请确认插件中心已启动（默认 https://hao-yuan.conductorer.com），并重启豪源后端以加载最新 API。",
                 "plugins": [],
             }
         )
@@ -319,6 +322,8 @@ async def install_plugin(body: InstallBody):
     title = body.name
     try:
         url = _center_url(body.center_url)
+        if body.center_url:
+            remember_center_url(url)
         if not download_url:
             if not NAME_RE.match(body.name or ""):
                 return fail("插件名称不合法", 400)
