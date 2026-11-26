@@ -418,15 +418,16 @@ function timeLabel(value) {
                 <span class="role-badge bot">H</span>
                 <span v-if="timeLabel(group.created_at)" class="log-time">{{ timeLabel(group.created_at) }}</span>
                 <span v-if="group.stepCount" class="log-stat mono">{{ t('run.steps') }} {{ group.stepCount }}</span>
-                <span class="spacer" />
-                <button v-if="group.lastSegment" class="ghost-icon" :title="t('common.copy')" @click="copy(group.lastSegment.content, group.lastSegment.id)">
-                  <Icon :name="copiedKey === group.lastSegment.id ? 'check' : 'copy'" :size="12" />
-                </button>
               </div>
 
               <template v-for="segment in group.segments" :key="segment.id">
                 <div v-if="segment.content" class="assistant-text">
                   <Markdown :content="segment.content" />
+                  <div class="assistant-foot">
+                    <button class="ghost-icon" :title="t('common.copy')" @click="copy(segment.content, segment.id)">
+                      <Icon :name="copiedKey === segment.id ? 'check' : 'copy'" :size="12" />
+                    </button>
+                  </div>
                 </div>
                 <div v-if="segment.tools.length" class="tool-group">
                   <button class="tool-group-head" type="button" @click="toggleActivity(segment.id, activityVisible(segment.id))">
@@ -571,6 +572,7 @@ function timeLabel(value) {
   box-shadow: 0 2px 10px color-mix(in srgb, var(--user-brand) 7%, transparent);
 }
 .assistant-text { min-width: 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.76; }
+.assistant-foot { display: flex; justify-content: flex-end; margin-top: -4px; }
 .assistant-text.streaming .markdown > :last-child::after {
   content: '';
   display: inline-block;
@@ -584,6 +586,7 @@ function timeLabel(value) {
 }
 @keyframes caret { 50% { opacity: 0 } }
 .ghost-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; flex: 0 0 auto; transition: opacity .15s var(--ease), color .15s var(--ease), background .15s var(--ease); }
+.log-entry.turn .ghost-icon { opacity: .5; }
 .log-row:hover .ghost-icon { opacity: .8; }
 .ghost-icon:hover { color: var(--ink); background: var(--surface-3); opacity: 1; }
 

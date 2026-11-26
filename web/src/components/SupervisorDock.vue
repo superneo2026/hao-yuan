@@ -26,8 +26,10 @@ const snapshot = ref(null)
 const scroller = ref(null)
 const copied = ref(false)
 const linkCopied = ref(false)
+const copiedMessage = ref(-1)
 const historyLoading = ref(false)
 let timer = null
+let copyTimer = null
 
 const summary = computed(() => snapshot.value?.summary || {})
 const alerts = computed(() => Number(summary.value.alerts || 0))
@@ -172,6 +174,46 @@ async function copyId() {
     setTimeout(() => (copied.value = false), 1600)
   } catch {
     toast(chatId.value, 'info', 6000)
+  }
+}
+
+function fallbackCopy(value) {
+  const area = document.createElement('textarea')
+  area.value = value
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.top = '-9999px'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(area)
+  if (!ok) throw new Error('copy failed')
+}
+
+async function copyMessage(message, index) {
+  const value = message?.content || ''
+  if (!value) return
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(value)
+    } else {
+      fallbackCopy(value)
+    }
+    copiedMessage.value = index
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { copiedMessage.value = -1 }, 1600)
+    toast(t('common.copied'), 'good', 1600)
+  } catch {
+    try {
+      fallbackCopy(value)
+      copiedMessage.value = index
+      if (copyTimer) clearTimeout(copyTimer)
+      copyTimer = setTimeout(() => { copiedMessage.value = -1 }, 1600)
+      toast(t('common.copied'), 'good', 1600)
+    } catch {
+      toast(t('common.copyFailed'), 'bad', 2200)
+    }
   }
 }
 
@@ -338,7 +380,10 @@ onMounted(() => {
   applyShareParams()
   timer = setInterval(loadSnapshot, 30000)
 })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  clearInterval(timer)
+  if (copyTimer) clearTimeout(copyTimer)
+})
 </script>
 
 <template>
@@ -446,6 +491,11 @@ onBeforeUnmount(() => clearInterval(timer))
                 <span v-if="message.model">{{ message.model }}</span>
                 <span v-if="usageLabel(message)">{{ usageLabel(message) }}</span>
                 <span v-if="message.created_at">{{ message.created_at.slice(11, 16) }}</span>
+                <span class="spacer" />
+                <button class="msg-copy" :class="{ done: copiedMessage === index }" :title="t('common.copy')" @click="copyMessage(message, index)">
+                  <Icon :name="copiedMessage === index ? 'check' : 'copy'" :size="11" />
+                  <span>{{ copiedMessage === index ? t('common.copied') : t('common.copy') }}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -680,7 +730,22 @@ onBeforeUnmount(() => clearInterval(timer))
 .sup-msg.assistant .bubble :deep(td) { border: 1px solid var(--line); padding: 4px 6px; text-align: left; }
 .sup-msg.assistant .bubble :deep(th) { background: var(--surface-3); font-weight: 600; }
 .sup-msg.assistant .bubble :deep(img) { max-width: 100%; border-radius: 8px; }
-.msg-foot { display: flex; gap: 8px; font-size: 9.5px; color: var(--faint); padding: 0 3px; }
+.msg-foot { display: flex; align-items: center; gap: 8px; font-size: 9.5px; color: var(--faint); padding: 0 3px; }
+.msg-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 9.5px;
+  cursor: pointer;
+  transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease);
+}
+.msg-copy:hover { color: var(--ink); background: var(--surface-3); border-color: var(--line); }
+.msg-copy.done { color: var(--good); }
 .caret { display: inline-block; width: 2px; height: 13px; margin-left: 2px; vertical-align: -2px; background: var(--brand); animation: sup-blink 1s steps(2) infinite; }
 @keyframes sup-blink { 50% { opacity: 0; } }
 .sup-typing { display: flex; align-items: center; gap: 7px; color: var(--muted); }
