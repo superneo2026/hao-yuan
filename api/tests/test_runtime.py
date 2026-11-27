@@ -37,3 +37,42 @@ def test_update_runtime_roundtrip(tmp_path, monkeypatch):
     update_runtime(api_port=8031)
     update_runtime(web_port=8131, api_port_config=8030)
     assert read_runtime() == {"api_port": 8031, "web_port": 8131, "api_port_config": 8030}
+
+
+def test_port_probe_uses_exclusive_addr_on_windows(monkeypatch):
+    calls = []
+
+    class FakeSocket:
+        def setsockopt(self, level, opt, value):
+            calls.append((level, opt, value))
+
+        def bind(self, address):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runtime, "IS_WINDOWS", True)
+    monkeypatch.setattr(runtime.socket, "socket", lambda *args, **kwargs: FakeSocket())
+    monkeypatch.setattr(runtime.socket, "SO_EXCLUSIVEADDRUSE", 12345, raising=False)
+    assert runtime.port_in_use("127.0.0.1", 8030) is False
+    assert calls == [(runtime.socket.SOL_SOCKET, 12345, 1)]
+
+
+def test_port_probe_uses_reuseaddr_on_unix(monkeypatch):
+    calls = []
+
+    class FakeSocket:
+        def setsockopt(self, level, opt, value):
+            calls.append((level, opt, value))
+
+        def bind(self, address):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runtime, "IS_WINDOWS", False)
+    monkeypatch.setattr(runtime.socket, "socket", lambda *args, **kwargs: FakeSocket())
+    assert runtime.port_in_use("127.0.0.1", 8030) is False
+    assert calls == [(runtime.socket.SOL_SOCKET, runtime.socket.SO_REUSEADDR, 1)]

@@ -11,6 +11,7 @@ RUNTIME_FILE = Path(os.getenv("HAOYUAN_RUNTIME_FILE", DATA_DIR / "runtime.json")
 DEFAULT_API_PORT = 8030
 DEFAULT_WEB_PORT = 8130
 PORT_MAX_TRIES = 100
+IS_WINDOWS = os.name == "nt"
 
 
 def read_runtime() -> dict:
@@ -40,9 +41,16 @@ def runtime_port(key: str, fallback: int) -> int:
 
 def port_in_use(host: str, port: int) -> bool:
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # 与 uvicorn 监听行为一致：允许复用 TIME_WAIT 端口，避免重启后误判端口占用而漂移
-    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
+        if IS_WINDOWS:
+            # Windows 的 SO_REUSEADDR 允许绑定已在监听的端口，会把占用误判为空闲，
+            # 随后 uvicorn 绑定时报 10048。用独占地址探测才能识别真实占用。
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                probe.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        else:
+            # Unix 下与 uvicorn 一致：允许复用 TIME_WAIT 端口，避免重启后误判端口占用而漂移。
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind((host or "127.0.0.1", int(port)))
         return False
     except OSError:
