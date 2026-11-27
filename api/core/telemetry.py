@@ -175,7 +175,7 @@ def start() -> None:
     print(
         "[Telemetry] anonymous usage heartbeat enabled "
         f"(install_id={_load_install_id()[:8]}…, device_id={_device_id()[:8]}…) → {center_url()}{HEARTBEAT_PATH}；"
-        "设置 HAOYUAN_TELEMETRY=0 可关闭。详见插件中心 /api/plugin-center/privacy",
+        "匿名统计说明见插件中心 /api/plugin-center/privacy",
         flush=True,
     )
 
