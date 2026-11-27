@@ -33,7 +33,24 @@ const showConfigText = ref(true)
 const presets = computed(() => modelConfig.value.presets || [])
 
 const configuredProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => provider.has_key))
-const pendingProviders = computed(() => (modelConfig.value.providers || []).filter((provider) => !provider.has_key))
+const pendingProviders = computed(() => {
+  const providers = modelConfig.value.providers || []
+  const presets = modelConfig.value.presets || []
+  const configured = new Set(providers.filter((provider) => provider.has_key).map((provider) => provider.name))
+  const seen = new Set()
+  const out = []
+  for (const provider of providers) {
+    if (provider.has_key || seen.has(provider.name)) continue
+    seen.add(provider.name)
+    out.push(provider)
+  }
+  for (const preset of presets) {
+    if (configured.has(preset.name) || seen.has(preset.name)) continue
+    seen.add(preset.name)
+    out.push(preset)
+  }
+  return out
+})
 function enabledModelsOf(provider) {
   const enabled = provider?.enabled_models || []
   return enabled.length ? enabled : provider?.models || []
@@ -599,7 +616,7 @@ onMounted(async () => {
         <div v-if="pendingProviders.length" class="preset-row">
           <span class="tiny faint">{{ t('settings.pending') }}</span>
           <button v-for="provider in pendingProviders" :key="provider.name" class="btn sm" @click="startAddProvider(provider)">
-            <Icon name="plus" :size="12" /> {{ provider.name }}
+            <Icon name="plus" :size="12" /> {{ provider.label || provider.name }}
           </button>
         </div>
         <div v-if="presets.length" class="preset-add">
