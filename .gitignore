@@ -22,7 +22,39 @@ api/data/*
 
 # Secrets
 api/configs/secrets_local.py
+api/configs/.db_secret
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Model weights / checkpoints (never commit to the public repo)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.gguf
+*.h5
+*.tflite
+models/
+weights/
+checkpoints/
+
+# Training data / datasets
+datasets/
+data/raw/
+data/processed/
+*.parquet
+*.arrow
+*.tfrecord
+*.npy
+*.npz
 
 # Node / web
 web/node_modules/
