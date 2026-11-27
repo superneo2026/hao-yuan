@@ -1,6 +1,6 @@
 {
   "name": "haoyuan",
-  "version": "0.1.20261127-1",
+  "version": "0.1.20261127-2",
   "description": "豪源 · HaoYuan — 个人指挥 AI 实现多个 AI 员工异步并行工作的 AI 工作室",
   "bin": {
     "haoyuan": "bin/haoyuan.js"

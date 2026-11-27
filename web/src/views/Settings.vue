@@ -126,6 +126,10 @@ function startPreset(preset) {
 function onPresetChange(event) {
   const name = event.target.value
   event.target.value = ''
+  if (name === '__custom__') {
+    startAddProvider()
+    return
+  }
   startPreset(presets.value.find((preset) => preset.name === name))
 }
 
@@ -613,8 +617,11 @@ onMounted(async () => {
             </div>
           </div>
         </div>
-        <div v-if="pendingProviders.length" class="preset-row">
+        <div class="preset-row">
           <span class="tiny faint">{{ t('settings.pending') }}</span>
+          <button class="btn sm" @click="startAddProvider()">
+            <Icon name="plus" :size="12" /> {{ t('settings.customProvider') }}
+          </button>
           <button v-for="provider in pendingProviders" :key="provider.name" class="btn sm" @click="startAddProvider(provider)">
             <Icon name="plus" :size="12" /> {{ provider.label || provider.name }}
           </button>
@@ -623,6 +630,7 @@ onMounted(async () => {
           <label class="label">{{ t('settings.addFromPreset') }}</label>
           <select class="select" :value="''" @change="onPresetChange">
             <option value="">{{ t('settings.presetPlaceholder') }}</option>
+            <option value="__custom__">{{ t('settings.customProvider') }}</option>
             <option v-for="preset in presets" :key="preset.name" :value="preset.name">{{ preset.label }} · {{ preset.name }}</option>
           </select>
         </div>
