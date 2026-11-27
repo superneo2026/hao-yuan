@@ -438,7 +438,7 @@ async function signOut() {
 .auth-error { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--bad); background: var(--bad-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--bad) 25%, transparent); }
 .auth-ok { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--good); background: var(--good-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--good) 25%, transparent); }
 .smtp-hint { margin: 4px 0 9px; line-height: 1.5; }
-.mail-grid { display: grid; grid-template-columns: 1fr 88px; gap: 6px; }
+.mail-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 6px; }
 .mail-grid .field { height: 34px; }
 .mail-actions { display: flex; gap: 8px; margin-top: 10px; }
 </style>
