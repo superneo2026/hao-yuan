@@ -16,7 +16,7 @@ const summary = computed(() => snapshot.value.summary || {})
 const items = computed(() => {
   const all = snapshot.value.items || []
   if (filter.value === 'active') return all.filter((item) => ['running', 'queued', 'waiting_input'].includes(item.status))
-  if (filter.value === 'alerts') return all.filter((item) => ['stale', 'error'].includes(item.health))
+  if (filter.value === 'alerts') return all.filter((item) => ['stale', 'error'].includes(item.health) && !item.acknowledged)
   if (filter.value === 'done') return all.filter((item) => item.status === 'done')
   return all
 })
@@ -91,6 +91,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <button class="btn sm" @click="open(item)">{{ t('console.open') }}</button>
         <button v-if="item.status === 'error'" class="btn sm" @click="act(item, 'resume')"><Icon name="refresh" :size="12" /> {{ t('common.resume') }}</button>
         <button v-else class="btn sm danger" @click="act(item, 'cancel')"><Icon name="square" :size="12" /> {{ t('common.stop') }}</button>
+        <button class="btn sm" :title="t('console.dismissAlert')" @click="act(item, 'ack')"><Icon name="close" :size="12" /> {{ t('console.dismissAlert') }}</button>
       </div>
     </div>
 

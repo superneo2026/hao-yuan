@@ -222,6 +222,12 @@ CREATE TABLE IF NOT EXISTS supervisor_messages (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sup_messages ON supervisor_messages(chat_id, created_at);
+
+CREATE TABLE IF NOT EXISTS supervisor_acks (
+    session_id TEXT PRIMARY KEY,
+    signature TEXT NOT NULL,
+    acked_at TEXT NOT NULL
+);
 """
 
 
@@ -362,6 +368,7 @@ class Storage:
                 ("runs", "session_id"),
                 ("tool_effects", "session_id"),
                 ("checkpoints", "session_id"),
+                ("supervisor_acks", "session_id"),
             ):
                 await db.execute(f"DELETE FROM {table} WHERE {column}=?", (session_id,))
             await db.execute("DELETE FROM sessions WHERE id=?", (session_id,))

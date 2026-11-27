@@ -185,6 +185,23 @@ async def session_health(storage, session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def alert_signature(item: dict[str, Any]) -> str:
+    """用来判断“同一个告警”的指纹；情况变化后会重新提醒。
+
+    不要包含 last_event：忽略告警本身会追加 supervisor.action 事件，
+    若把最后事件放进指纹，忽略后快照会对不上而反复出现。
+    """
+    return "|".join(str(item.get(key) or "") for key in ("health", "status", "error", "updated_at"))
+
+
+async def _load_acks(storage) -> dict[str, str]:
+    try:
+        rows = await storage._fetch("SELECT session_id, signature FROM supervisor_acks")
+    except Exception:
+        return {}
+    return {row["session_id"]: row["signature"] for row in rows}
+
+
 async def snapshot(storage) -> dict[str, Any]:
     rows = await storage._fetch(
         "SELECT * FROM sessions WHERE status != 'archived' AND (hidden=0 OR status IN ('running','queued','waiting_input'))"
@@ -196,7 +213,11 @@ async def snapshot(storage) -> dict[str, Any]:
             items.append(await session_health(storage, row))
         except Exception as exc:
             logging.getLogger(__name__).warning("supervisor health failed for %s: %s", row.get("id"), exc)
-    alerts = [item for item in items if item["health"] in ("stale", "error")]
+    acks = await _load_acks(storage)
+    for item in items:
+        item["acknowledged"] = item["health"] in ("stale", "error") and acks.get(item["id"]) == alert_signature(item)
+    alerts = [item for item in items if item["health"] in ("stale", "error") and not item["acknowledged"]]
+    acknowledged = sum(1 for item in items if item.get("acknowledged"))
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "stale_sec": SUPERVISOR_STALE_SEC,
@@ -205,6 +226,7 @@ async def snapshot(storage) -> dict[str, Any]:
             "active": sum(1 for item in items if item["status"] in ("running", "queued")),
             "waiting": sum(1 for item in items if item["health"] == "waiting"),
             "alerts": len(alerts),
+            "acknowledged": acknowledged,
             "done": sum(1 for item in items if item["status"] == "done"),
         },
         "alerts": alerts,
@@ -227,7 +249,16 @@ async def act(harness, session_id: str, action: str) -> dict[str, Any]:
         ok = harness.manager.enqueue(session_id)
         message = "re-queued" if ok else "already active"
     elif action == "ack":
+        health = await session_health(harness.storage, session)
+        await harness.storage._write(
+            "INSERT INTO supervisor_acks(session_id, signature, acked_at) VALUES (?,?,?)"
+            " ON CONFLICT(session_id) DO UPDATE SET signature=excluded.signature, acked_at=excluded.acked_at",
+            (session_id, alert_signature(health), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
         ok, message = True, "acknowledged"
+    elif action == "unack":
+        await harness.storage._write("DELETE FROM supervisor_acks WHERE session_id=?", (session_id,))
+        ok, message = True, "unacknowledged"
     else:
         return {"ok": False, "message": f"unsupported action: {action}"}
     await harness.events.emit(session_id, "supervisor.action", {"action": action, "ok": bool(ok), "message": message})

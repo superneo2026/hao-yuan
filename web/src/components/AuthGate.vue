@@ -102,7 +102,7 @@ async function submit() {
     return
   }
   const mail = email.value.trim()
-  if (setup.value && !emailPattern.test(mail)) {
+  if (setup.value && mail && !emailPattern.test(mail)) {
     error.value = t('auth.recoveryEmailInvalid')
     return
   }
@@ -273,22 +273,6 @@ async function skip() {
             />
           </div>
 
-          <template v-if="setup">
-            <label class="label" for="auth-email">{{ t('auth.recoveryEmail') }}</label>
-            <div class="auth-field">
-              <Icon name="send" :size="15" class="field-icon" />
-              <input
-                id="auth-email"
-                v-model="email"
-                class="field auth-input"
-                type="email"
-                :placeholder="t('auth.recoveryEmailHint')"
-                autocomplete="email"
-                :disabled="submitting"
-              />
-            </div>
-          </template>
-
           <label class="label" for="auth-password">{{ t('auth.password') }}</label>
           <div class="auth-field">
             <Icon name="lock" :size="15" class="field-icon" />
@@ -320,6 +304,23 @@ async function skip() {
                 :disabled="submitting"
               />
             </div>
+          </template>
+
+          <template v-if="setup">
+            <label class="label" for="auth-email">{{ t('auth.recoveryEmailOptional') }}</label>
+            <div class="auth-field">
+              <Icon name="send" :size="15" class="field-icon" />
+              <input
+                id="auth-email"
+                v-model="email"
+                class="field auth-input"
+                type="email"
+                :placeholder="t('auth.recoveryEmailPlaceholder')"
+                autocomplete="email"
+                :disabled="submitting"
+              />
+            </div>
+            <p class="auth-email-hint tiny faint">{{ t('auth.recoveryEmailLater') }}</p>
           </template>
 
           <div v-if="!setup" class="auth-inline">
@@ -478,6 +479,7 @@ async function skip() {
 .eye-btn { position: absolute; right: 6px; width: 30px; height: 30px; display: grid; place-items: center; border: none; background: transparent; color: var(--faint); border-radius: 7px; }
 .eye-btn:hover { color: var(--ink); background: var(--surface-3); }
 .auth-inline { display: flex; justify-content: flex-end; margin-top: 2px; }
+.auth-email-hint { margin: -2px 0 4px; line-height: 1.5; }
 .auth-link { border: none; background: transparent; color: var(--brand); font-size: 11.5px; font-weight: 600; padding: 0; cursor: pointer; }
 .auth-link:hover { text-decoration: underline; }
 .auth-link:disabled { color: var(--faint); cursor: default; text-decoration: none; }

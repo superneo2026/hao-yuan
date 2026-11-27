@@ -223,3 +223,84 @@ def test_mail_config_endpoints_and_provider(tmp_path, monkeypatch):
     env_cfg = client.get("/api/auth/email", headers=headers).json()
     assert env_cfg["data"]["env_managed"] is True
     assert env_cfg["data"]["host"] == "smtp.qq.com"
+
+
+def test_email_test_uses_form_values_not_saved(tmp_path, monkeypatch):
+    module = _load_plugin()
+    _clear_mail_env(monkeypatch)
+    monkeypatch.setattr(module, "MAIL_PATH", Path(tmp_path) / "smtp.json")
+    client = _client(module, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "secret123"}).json()
+    headers = {"Authorization": f"Bearer {login['data']['token']}"}
+
+    captured = []
+    monkeypatch.setattr(module, "_send_mail", lambda settings, to_addr, subject, body: captured.append(dict(settings)))
+
+    # Nothing saved yet, but the form values should still be testable.
+    result = client.post(
+        "/api/auth/email/test",
+        headers=headers,
+        json={
+            "provider": "custom",
+            "host": "smtp.example.com",
+            "port": 587,
+            "username": "u@example.com",
+            "password": "typed-secret",
+            "sender": "u@example.com",
+            "security": "starttls",
+        },
+    ).json()
+    assert result["code"] == 200
+    assert captured[-1]["host"] == "smtp.example.com"
+    assert captured[-1]["port"] == 587
+    assert captured[-1]["password"] == "typed-secret"
+
+    # Save a config, then test with a mask/empty password: keep the saved password.
+    client.put(
+        "/api/auth/email",
+        headers=headers,
+        json={
+            "provider": "qq",
+            "host": "smtp.qq.com",
+            "port": 465,
+            "username": "me@qq.com",
+            "password": "saved-secret",
+            "sender": "me@qq.com",
+            "security": "ssl",
+        },
+    )
+    client.post(
+        "/api/auth/email/test",
+        headers=headers,
+        json={
+            "provider": "qq",
+            "host": "smtp.qq.com",
+            "port": 465,
+            "username": "me@qq.com",
+            "password": "",
+            "sender": "me@qq.com",
+            "security": "ssl",
+        },
+    )
+    assert captured[-1]["password"] == "saved-secret"
+
+
+def test_setup_without_recovery_email_is_allowed(tmp_path):
+    module = _load_plugin()
+    app = FastAPI()
+    store = module.AuthStore(Path(tmp_path) / "user_account.json")
+    store.ensure()
+    app.include_router(module.build_router(store))
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/auth/setup",
+        json={"username": "admin", "password": "secret123"},
+    ).json()
+    assert created["code"] == 200
+    assert created["data"]["has_recovery_email"] is False
+    assert created["data"]["recovery_email"] == ""
+    assert created["data"]["recovery_available"] is False
+
+    status = client.get("/api/auth/status").json()["data"]
+    assert status["has_recovery_email"] is False

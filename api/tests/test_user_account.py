@@ -21,8 +21,11 @@ def test_user_account_protection_flow(client):
         plugins = client.get("/api/plugins").json()["data"]
         assert any(item["name"] == "user-account" for item in plugins)
 
-        missing_email = client.post("/api/auth/setup", json={"username": "tester", "password": "secret123"}).json()
-        assert missing_email["code"] == 400
+        invalid_email = client.post(
+            "/api/auth/setup",
+            json={"username": "tester", "password": "secret123", "email": "not-an-email"},
+        ).json()
+        assert invalid_email["code"] == 400
 
         setup = client.post(
             "/api/auth/setup",

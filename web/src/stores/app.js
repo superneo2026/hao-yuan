@@ -729,8 +729,8 @@ export function saveMailSettings(body) {
   return api.authEmailSave(body)
 }
 
-export function sendTestMail(to) {
-  return api.authEmailTest({ to: to || '' })
+export function sendTestMail(body) {
+  return api.authEmailTest(body || {})
 }
 
 export async function logoutAccount() {
@@ -1462,9 +1462,34 @@ export async function loadSupervisor() {
 }
 
 export async function supervisorAct(sessionId, action) {
-  const result = await api.supervisorAct(sessionId, action)
-  toast(result.ok ? t('toast.actionDone') : t('toast.actionFailed'), result.ok ? 'good' : 'warn')
-  await loadSupervisor()
+  const before = state.supervisor
+  if (action === 'ack' && before) {
+    // Optimistic update: make the alert disappear immediately, then reconcile.
+    const wasAlert = (before.alerts || []).some((item) => item.id === sessionId)
+    const alerts = (before.alerts || []).filter((item) => item.id !== sessionId)
+    state.supervisor = {
+      ...before,
+      alerts,
+      items: (before.items || []).map((item) =>
+        item.id === sessionId ? { ...item, acknowledged: true } : item
+      ),
+      summary: {
+        ...(before.summary || {}),
+        alerts: alerts.length,
+        acknowledged: (Number(before.summary?.acknowledged) || 0) + (wasAlert ? 1 : 0)
+      }
+    }
+  }
+  try {
+    const result = await api.supervisorAct(sessionId, action)
+    const ok = !!result.ok
+    const key = ok ? (action === 'ack' ? 'console.alertDismissed' : 'toast.actionDone') : 'toast.actionFailed'
+    toast(t(key), ok ? 'good' : 'warn')
+  } catch (error) {
+    toast(error.message || t('toast.actionFailed'), 'warn')
+  } finally {
+    await loadSupervisor()
+  }
 }
 
 export async function supervisorChat(message, chatId = '') {

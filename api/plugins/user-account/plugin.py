@@ -96,7 +96,16 @@ def _clean_email(value: str) -> str:
 
 
 def _mail_defaults() -> dict[str, Any]:
-    return {"provider": "custom", "host": "", "port": 465, "username": "", "password": "", "sender": "", "security": "ssl"}
+    return {
+        "provider": "custom",
+        "host": "",
+        "port": 465,
+        "username": "",
+        "password": "",
+        "sender": "",
+        "security": "ssl",
+        "updated_at": "",
+    }
 
 
 def _read_mail_file() -> dict[str, Any]:
@@ -124,11 +133,13 @@ def _normalize_mail(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("host", "username", "sender"):
         base[key] = str(base.get(key) or "").strip()
     base["password"] = str(base.get("password") or "")
+    base["updated_at"] = str(base.get("updated_at") or "")
     return base
 
 
 def _write_mail_file(data: dict[str, Any]) -> dict[str, Any]:
     payload = _normalize_mail(data)
+    payload["updated_at"] = _now()
     MAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
     temp = MAIL_PATH.with_suffix(".tmp")
     temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -544,6 +555,13 @@ class MailConfigBody(BaseModel):
 
 
 class MailTestBody(BaseModel):
+    provider: str = ""
+    host: str = ""
+    port: int = 0
+    username: str = ""
+    password: str = ""
+    sender: str = ""
+    security: str = ""
     to: str = ""
 
 
@@ -657,7 +675,7 @@ def build_router(store: AuthStore) -> APIRouter:
         try:
             username = _clean_username(body.username)
             password = _clean_password(body.password)
-            email = _clean_email(body.email)
+            email = _clean_email(body.email) if (body.email or "").strip() else ""
         except ValueError as exc:
             return fail(str(exc), 400)
         data = store.setup(username, password, email)
@@ -773,6 +791,7 @@ def build_router(store: AuthStore) -> APIRouter:
             "has_password": bool(settings.get("password")),
             "configured": mail_ready(settings),
             "env_managed": env_managed,
+            "updated_at": settings.get("updated_at") or "",
         }
 
     @router.get("/auth/email")
@@ -786,14 +805,23 @@ def build_router(store: AuthStore) -> APIRouter:
     async def auth_email_put(body: MailConfigBody, request: Request):
         if not authed(request):
             return fail("需要登录", 401)
+        provider = (body.provider or "custom").strip().lower()
+        username = (body.username or "").strip()
+        sender = (body.sender or "").strip()
+        if provider in {"qq", "gmail"} and username and "@" not in username:
+            return fail("QQ/Gmail 的 SMTP 用户名需填写完整邮箱地址", 400)
+        if sender and "@" not in sender:
+            return fail("发件人邮箱需填写完整邮箱地址", 400)
+        if provider in {"qq", "gmail"} and not sender:
+            return fail("请填写发件人邮箱", 400)
         current = _normalize_mail(_read_mail_file())
         current.update(
             {
-                "provider": (body.provider or "custom").strip().lower(),
+                "provider": provider,
                 "host": (body.host or "").strip(),
                 "port": body.port or 465,
-                "username": (body.username or "").strip(),
-                "sender": (body.sender or "").strip(),
+                "username": username,
+                "sender": sender,
                 "security": (body.security or "ssl").strip().lower(),
             }
         )
@@ -807,10 +835,37 @@ def build_router(store: AuthStore) -> APIRouter:
     async def auth_email_test(body: MailTestBody, request: Request):
         if not authed(request):
             return fail("需要登录", 401)
-        settings, _ = mail_settings()
+        saved, _ = mail_settings()
+        # 优先使用前端传来的“当前表单值”测试；未传字段时回退到已保存配置。
+        provided = any(
+            [
+                (body.host or "").strip(),
+                (body.sender or "").strip(),
+                (body.username or "").strip(),
+                (body.provider or "").strip(),
+                (body.security or "").strip(),
+                body.port,
+            ]
+        )
+        if provided:
+            settings = {
+                "provider": (body.provider or saved.get("provider") or "custom").strip().lower(),
+                "host": (body.host or "").strip(),
+                "port": body.port or int(saved.get("port") or 465),
+                "username": (body.username or "").strip(),
+                "sender": (body.sender or "").strip(),
+                "security": (body.security or saved.get("security") or "ssl").strip().lower(),
+                "password": saved.get("password") or "",
+                "updated_at": saved.get("updated_at") or "",
+            }
+            if body.password and body.password != "********":
+                settings["password"] = body.password
+        else:
+            settings = saved
         if not mail_ready(settings):
-            return fail("请先填写并保存邮件服务设置", 400)
-        to_addr = (body.to or "").strip() or str(store.read().get("recovery_email") or "")
+            return fail("请先填写 SMTP 服务器、用户名和发件人邮箱", 400)
+        recovery_email = str(store.read().get("recovery_email") or "")
+        to_addr = (body.to or "").strip() or recovery_email or settings.get("sender") or settings.get("username") or ""
         try:
             to_addr = _clean_email(to_addr)
         except ValueError as exc:

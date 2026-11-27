@@ -24,10 +24,13 @@ const loading = ref(false)
 const error = ref('')
 const maxFailures = ref(Number(state.auth.maxFailures) || 5)
 const policySaving = ref(false)
+const tab = ref('account')
 
 const nameChanged = computed(() => username.value.trim() && username.value.trim() !== state.auth.username)
 const emailChanged = computed(() => Boolean(email.value.trim()))
 
+const PASSWORD_MASK = '********'
+const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const SMTP_PRESETS = {
   custom: { host: '', port: 465, security: 'ssl' },
   gmail: { host: 'smtp.gmail.com', port: 465, security: 'ssl' },
@@ -45,16 +48,37 @@ const mail = reactive({
   security: 'ssl',
   hasPassword: false,
   configured: false,
-  envManaged: false
+  envManaged: false,
+  updatedAt: ''
 })
 const mailSaving = ref(false)
 const mailTesting = ref(false)
 const mailNotice = ref('')
+const mailError = ref('')
+
+function switchTab(name) {
+  tab.value = name
+  error.value = ''
+  mailError.value = ''
+  mailNotice.value = ''
+}
 
 const providerHint = computed(() => {
   if (mail.provider === 'gmail') return t('auth.smtpGmailHint')
   if (mail.provider === 'qq') return t('auth.smtpQqHint')
   return t('auth.smtpCustomHint')
+})
+
+const providerLabel = computed(() => {
+  if (mail.provider === 'gmail') return t('auth.smtpProviderGmail')
+  if (mail.provider === 'qq') return t('auth.smtpProviderQq')
+  return t('auth.smtpProviderCustom')
+})
+
+const mailUpdatedLabel = computed(() => {
+  if (!mail.updatedAt) return ''
+  const date = new Date(mail.updatedAt)
+  return Number.isNaN(date.getTime()) ? mail.updatedAt : date.toLocaleString()
 })
 
 function detectProvider(host) {
@@ -84,12 +108,13 @@ async function loadMail() {
       host: data.host || '',
       port: data.port || 465,
       username: data.username || '',
-      password: '',
+      password: data.has_password ? PASSWORD_MASK : '',
       sender: data.sender || '',
       security: data.security || 'ssl',
       hasPassword: !!data.has_password,
       configured: !!data.configured,
-      envManaged: !!data.env_managed
+      envManaged: !!data.env_managed,
+      updatedAt: data.updated_at || ''
     })
   } catch {
     /* ignore mail config load errors */
@@ -97,10 +122,18 @@ async function loadMail() {
 }
 
 async function saveMail() {
-  error.value = ''
+  mailError.value = ''
   mailNotice.value = ''
   if (!mail.host.trim() || !mail.sender.trim()) {
-    error.value = t('auth.emailServiceRequired')
+    mailError.value = t('auth.emailServiceRequired')
+    return
+  }
+  if (!emailPattern.test(mail.sender.trim())) {
+    mailError.value = t('auth.recoveryEmailInvalid')
+    return
+  }
+  if ((mail.provider === 'qq' || mail.provider === 'gmail') && !emailPattern.test(mail.username.trim())) {
+    mailError.value = t('auth.smtpEmailRequired')
     return
   }
   mailSaving.value = true
@@ -110,7 +143,7 @@ async function saveMail() {
       host: mail.host.trim(),
       port: Number(mail.port) || 465,
       username: mail.username.trim(),
-      password: mail.password,
+      password: mail.password === PASSWORD_MASK ? '' : mail.password,
       sender: mail.sender.trim(),
       security: mail.security
     })
@@ -119,30 +152,51 @@ async function saveMail() {
       host: data.host || '',
       port: data.port || 465,
       username: data.username || '',
-      password: '',
+      password: data.has_password ? PASSWORD_MASK : '',
       sender: data.sender || '',
       security: data.security || 'ssl',
       hasPassword: !!data.has_password,
       configured: !!data.configured,
-      envManaged: !!data.env_managed
+      envManaged: !!data.env_managed,
+      updatedAt: data.updated_at || ''
     })
     mailNotice.value = t('auth.smtpSaved')
   } catch (err) {
-    error.value = err.message || t('common.error')
+    mailError.value = err.message || t('common.error')
   } finally {
     mailSaving.value = false
   }
 }
 
 async function testMail() {
-  error.value = ''
+  mailError.value = ''
   mailNotice.value = ''
+  if (!mail.host.trim() || !mail.sender.trim()) {
+    mailError.value = t('auth.emailServiceRequired')
+    return
+  }
+  if (!emailPattern.test(mail.sender.trim())) {
+    mailError.value = t('auth.recoveryEmailInvalid')
+    return
+  }
+  if ((mail.provider === 'qq' || mail.provider === 'gmail') && !emailPattern.test(mail.username.trim())) {
+    mailError.value = t('auth.smtpEmailRequired')
+    return
+  }
   mailTesting.value = true
   try {
-    await sendTestMail('')
+    await sendTestMail({
+      provider: mail.provider,
+      host: mail.host.trim(),
+      port: Number(mail.port) || 465,
+      username: mail.username.trim(),
+      password: mail.password === PASSWORD_MASK ? '' : mail.password,
+      sender: mail.sender.trim(),
+      security: mail.security
+    })
     mailNotice.value = t('auth.smtpTestSent')
   } catch (err) {
-    error.value = err.message || t('common.error')
+    mailError.value = err.message || t('common.error')
   } finally {
     mailTesting.value = false
   }
@@ -228,7 +282,18 @@ async function signOut() {
         <button class="icon-btn" @click="emit('close')"><Icon name="close" :size="15" /></button>
       </div>
 
+      <div class="account-tabs">
+        <button type="button" class="account-tab" :class="{ active: tab === 'account' }" @click="switchTab('account')">
+          <Icon name="shield" :size="14" /> {{ t('auth.tabAccount') }}
+        </button>
+        <button type="button" class="account-tab" :class="{ active: tab === 'mail' }" @click="switchTab('mail')">
+          <Icon name="send" :size="14" /> {{ t('auth.tabMail') }}
+          <span v-if="mail.configured" class="tab-dot" />
+        </button>
+      </div>
+
       <div class="modal-body account-body">
+        <template v-if="tab === 'account'">
         <div class="account-banner">
           <span class="banner-icon"><Icon name="lock" :size="16" /></span>
           <div>
@@ -343,6 +408,10 @@ async function signOut() {
           />
         </div>
 
+        <div v-if="error" class="auth-error"><Icon name="alert" :size="14" /> {{ error }}</div>
+        </template>
+
+        <template v-else>
         <div class="policy-card">
           <div class="policy-head">
             <span class="policy-icon"><Icon name="send" :size="16" /></span>
@@ -355,6 +424,18 @@ async function signOut() {
             </span>
           </div>
 
+          <div v-if="mail.configured" class="mail-summary">
+            <span class="badge good"><Icon name="check" :size="11" /> {{ t('auth.smtpSavedState') }}</span>
+            <span class="tiny muted">{{ providerLabel }} · {{ mail.host }}:{{ mail.port }}</span>
+            <span class="tiny faint">{{ t('auth.smtpSender') }}：{{ mail.sender }}</span>
+            <span class="badge" :class="mail.hasPassword ? 'good' : 'warn'">
+              {{ mail.hasPassword ? t('auth.smtpPasswordSaved') : t('auth.smtpPasswordMissing') }}
+            </span>
+            <span v-if="mail.updatedAt && !mail.envManaged" class="tiny faint">
+              {{ t('auth.smtpUpdatedAt', { time: mailUpdatedLabel }) }}
+            </span>
+          </div>
+
           <label class="label" for="mail-provider">{{ t('auth.smtpProvider') }}</label>
           <select id="mail-provider" v-model="mail.provider" class="field" @change="applyProvider(mail.provider)">
             <option value="custom">{{ t('auth.smtpProviderCustom') }}</option>
@@ -364,48 +445,89 @@ async function signOut() {
           <p class="tiny faint smtp-hint">{{ providerHint }}</p>
 
           <div class="mail-grid">
-            <input v-model="mail.host" class="field" :placeholder="t('auth.smtpHost')" />
-            <input v-model.number="mail.port" class="field" type="number" :placeholder="t('auth.smtpPort')" />
-            <input v-model="mail.sender" class="field" type="email" :placeholder="t('auth.smtpSender')" />
-            <select v-model="mail.security" class="field">
-              <option value="ssl">{{ t('auth.smtpSecuritySsl') }}</option>
-              <option value="starttls">{{ t('auth.smtpSecurityStarttls') }}</option>
-              <option value="none">{{ t('auth.smtpSecurityNone') }}</option>
-            </select>
-            <input v-model="mail.username" class="field" :placeholder="t('auth.smtpUser')" autocomplete="off" />
-            <input
-              v-model="mail.password"
-              class="field"
-              type="password"
-              :placeholder="mail.hasPassword ? t('auth.smtpPasswordKeep') : t('auth.smtpPassword')"
-              autocomplete="new-password"
-            />
+            <div class="mail-field">
+              <label class="label" for="mail-host">{{ t('auth.smtpHost') }}</label>
+              <input id="mail-host" v-model="mail.host" class="field" :placeholder="t('auth.smtpHostExample')" />
+            </div>
+            <div class="mail-field">
+              <label class="label" for="mail-port">{{ t('auth.smtpPort') }}</label>
+              <input id="mail-port" v-model.number="mail.port" class="field" type="number" placeholder="465" />
+            </div>
+            <div class="mail-field">
+              <label class="label" for="mail-sender">{{ t('auth.smtpSender') }}</label>
+              <input
+                id="mail-sender"
+                v-model="mail.sender"
+                name="hy-smtp-sender"
+                class="field"
+                type="email"
+                :placeholder="t('auth.smtpSenderExample')"
+                autocomplete="off"
+              />
+            </div>
+            <div class="mail-field">
+              <label class="label" for="mail-security">{{ t('auth.smtpSecurity') }}</label>
+              <select id="mail-security" v-model="mail.security" class="field">
+                <option value="ssl">{{ t('auth.smtpSecuritySsl') }}</option>
+                <option value="starttls">{{ t('auth.smtpSecurityStarttls') }}</option>
+                <option value="none">{{ t('auth.smtpSecurityNone') }}</option>
+              </select>
+            </div>
+            <div class="mail-field">
+              <label class="label" for="mail-user">{{ t('auth.smtpUser') }}</label>
+              <input
+                id="mail-user"
+                v-model="mail.username"
+                name="hy-smtp-user"
+                class="field"
+                :placeholder="t('auth.smtpUserPlaceholder')"
+                autocomplete="off"
+              />
+            </div>
+            <div class="mail-field">
+              <label class="label" for="mail-password">{{ t('auth.smtpPassword') }}</label>
+              <input
+                id="mail-password"
+                v-model="mail.password"
+                class="field"
+                type="password"
+                :placeholder="mail.hasPassword ? t('auth.smtpPasswordKeep') : t('auth.smtpPassword')"
+                autocomplete="new-password"
+                @focus="$event.target.select()"
+              />
+            </div>
           </div>
+          <p class="tiny" :class="mail.hasPassword ? 'mail-saved-hint' : 'faint'">
+            {{ mail.hasPassword ? t('auth.smtpPasswordSavedHint') : t('auth.smtpPasswordUnsetHint') }}
+          </p>
           <p v-if="mail.envManaged" class="tiny faint" style="margin: 8px 0 0">{{ t('auth.smtpEnvManaged') }}</p>
-          <div class="mail-actions">
-            <button class="btn sm primary" type="button" :disabled="mailSaving" @click="saveMail">
-              <span v-if="mailSaving" class="spinner" style="width: 11px; height: 11px" />
-              {{ t('auth.smtpSave') }}
-            </button>
-            <button class="btn sm" type="button" :disabled="mailTesting || !mail.configured" @click="testMail">
-              <span v-if="mailTesting" class="spinner" style="width: 11px; height: 11px" />
-              {{ t('auth.smtpTest') }}
-            </button>
-          </div>
         </div>
 
-        <div v-if="error" class="auth-error"><Icon name="alert" :size="14" /> {{ error }}</div>
+        <div v-if="mailError" class="auth-error"><Icon name="alert" :size="14" /> {{ mailError }}</div>
         <div v-else-if="mailNotice" class="auth-ok"><Icon name="check" :size="14" /> {{ mailNotice }}</div>
+        </template>
       </div>
 
       <div class="modal-foot">
         <button class="btn danger" :disabled="loading" @click="signOut"><Icon name="log-out" :size="14" /> {{ t('auth.logout') }}</button>
         <span class="spacer" />
-        <button class="btn" @click="emit('close')">{{ t('common.cancel') }}</button>
-        <button class="btn primary" :disabled="loading" @click="save">
-          <span v-if="loading" class="spinner" style="width: 12px; height: 12px" />
-          {{ t('common.save') }}
-        </button>
+        <template v-if="tab === 'account'">
+          <button class="btn" @click="emit('close')">{{ t('common.cancel') }}</button>
+          <button class="btn primary" :disabled="loading" @click="save">
+            <span v-if="loading" class="spinner" style="width: 12px; height: 12px" />
+            {{ t('common.save') }}
+          </button>
+        </template>
+        <template v-else>
+          <button class="btn" :disabled="mailTesting" @click="testMail">
+            <span v-if="mailTesting" class="spinner" style="width: 12px; height: 12px" />
+            <Icon v-else name="send" :size="14" /> {{ t('auth.smtpTest') }}
+          </button>
+          <button class="btn primary" :disabled="mailSaving" @click="saveMail">
+            <span v-if="mailSaving" class="spinner" style="width: 12px; height: 12px" />
+            {{ t('auth.smtpSave') }}
+          </button>
+        </template>
       </div>
     </div>
   </div>
@@ -415,6 +537,11 @@ async function signOut() {
 .account-modal { width: min(520px, calc(100vw - 32px)); }
 .account-avatar { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); border: 1px solid var(--brand-line); }
 .account-body { display: flex; flex-direction: column; gap: 7px; }
+.account-tabs { display: flex; gap: 2px; padding: 10px 20px 0; border-bottom: 1px solid var(--line); }
+.account-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: none; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+.account-tab:hover { color: var(--ink); }
+.account-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+.tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
 .account-banner { display: flex; gap: 10px; align-items: center; padding: 11px 12px; border-radius: 11px; background: var(--good-soft); border: 1px solid color-mix(in srgb, var(--good) 24%, transparent); margin-bottom: 8px; }
 .banner-icon { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
 .account-banner b { display: block; font-size: 12.5px; }
@@ -438,7 +565,10 @@ async function signOut() {
 .auth-error { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--bad); background: var(--bad-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--bad) 25%, transparent); }
 .auth-ok { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--good); background: var(--good-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--good) 25%, transparent); }
 .smtp-hint { margin: 4px 0 9px; line-height: 1.5; }
-.mail-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 6px; }
-.mail-grid .field { height: 34px; }
-.mail-actions { display: flex; gap: 8px; margin-top: 10px; }
+.mail-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 10px; padding: 8px 10px; border-radius: 9px; background: var(--good-soft); border: 1px solid color-mix(in srgb, var(--good) 22%, transparent); }
+.mail-saved-hint { margin: 7px 0 0; color: var(--good); line-height: 1.5; }
+.mail-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 10px 8px; }
+.mail-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mail-field .label { margin: 0; }
+.mail-grid .field { height: 34px; min-width: 0; width: 100%; }
 </style>
