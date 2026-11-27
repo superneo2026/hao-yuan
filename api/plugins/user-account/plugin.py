@@ -96,7 +96,7 @@ def _clean_email(value: str) -> str:
 
 
 def _mail_defaults() -> dict[str, Any]:
-    return {"host": "", "port": 465, "username": "", "password": "", "sender": "", "security": "ssl"}
+    return {"provider": "custom", "host": "", "port": 465, "username": "", "password": "", "sender": "", "security": "ssl"}
 
 
 def _read_mail_file() -> dict[str, Any]:
@@ -119,10 +119,25 @@ def _normalize_mail(data: dict[str, Any]) -> dict[str, Any]:
         base["port"] = 465
     security = str(base.get("security") or "ssl").lower()
     base["security"] = security if security in {"ssl", "starttls", "none"} else "ssl"
+    provider = str(base.get("provider") or "custom").lower()
+    base["provider"] = provider if provider in {"custom", "gmail", "qq"} else "custom"
     for key in ("host", "username", "sender"):
         base[key] = str(base.get(key) or "").strip()
     base["password"] = str(base.get("password") or "")
     return base
+
+
+def _write_mail_file(data: dict[str, Any]) -> dict[str, Any]:
+    payload = _normalize_mail(data)
+    MAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp = MAIL_PATH.with_suffix(".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(temp, 0o600)
+    except OSError:
+        pass
+    temp.replace(MAIL_PATH)
+    return payload
 
 
 def mail_settings() -> tuple[dict[str, Any], bool]:
@@ -518,6 +533,20 @@ class RecoveryResetBody(BaseModel):
     new_password: str = ""
 
 
+class MailConfigBody(BaseModel):
+    provider: str = "custom"
+    host: str = ""
+    port: int = 465
+    username: str = ""
+    password: str = ""
+    sender: str = ""
+    security: str = "ssl"
+
+
+class MailTestBody(BaseModel):
+    to: str = ""
+
+
 def _clean_username(value: str) -> str:
     username = (value or "").strip()
     if not 2 <= len(username) <= 32:
@@ -730,6 +759,74 @@ def build_router(store: AuthStore) -> APIRouter:
             "账号信息已更新",
         )
 
+    def authed(request: Request) -> bool:
+        return bool(store.verify_token(token_from_request(request)))
+
+    def mail_public(settings: dict[str, Any], env_managed: bool) -> dict[str, Any]:
+        return {
+            "provider": settings.get("provider") or "custom",
+            "host": settings.get("host") or "",
+            "port": int(settings.get("port") or 465),
+            "username": settings.get("username") or "",
+            "sender": settings.get("sender") or "",
+            "security": settings.get("security") or "ssl",
+            "has_password": bool(settings.get("password")),
+            "configured": mail_ready(settings),
+            "env_managed": env_managed,
+        }
+
+    @router.get("/auth/email")
+    async def auth_email_get(request: Request):
+        if not authed(request):
+            return fail("需要登录", 401)
+        settings, env_managed = mail_settings()
+        return ok(mail_public(settings, env_managed))
+
+    @router.put("/auth/email")
+    async def auth_email_put(body: MailConfigBody, request: Request):
+        if not authed(request):
+            return fail("需要登录", 401)
+        current = _normalize_mail(_read_mail_file())
+        current.update(
+            {
+                "provider": (body.provider or "custom").strip().lower(),
+                "host": (body.host or "").strip(),
+                "port": body.port or 465,
+                "username": (body.username or "").strip(),
+                "sender": (body.sender or "").strip(),
+                "security": (body.security or "ssl").strip().lower(),
+            }
+        )
+        if body.password:
+            current["password"] = body.password
+        _write_mail_file(current)
+        settings, env_managed = mail_settings()
+        return ok(mail_public(settings, env_managed), "邮件设置已保存")
+
+    @router.post("/auth/email/test")
+    async def auth_email_test(body: MailTestBody, request: Request):
+        if not authed(request):
+            return fail("需要登录", 401)
+        settings, _ = mail_settings()
+        if not mail_ready(settings):
+            return fail("请先填写并保存邮件服务设置", 400)
+        to_addr = (body.to or "").strip() or str(store.read().get("recovery_email") or "")
+        try:
+            to_addr = _clean_email(to_addr)
+        except ValueError as exc:
+            return fail(str(exc), 400)
+        try:
+            await asyncio.to_thread(
+                _send_mail,
+                settings,
+                to_addr,
+                "豪源邮件服务测试",
+                "这是一封来自豪源的测试邮件，说明邮件发送服务配置成功。",
+            )
+        except Exception:
+            return fail("测试邮件发送失败，请检查 SMTP 配置", 502)
+        return ok({"to": _mask_email(to_addr)}, "测试邮件已发送")
+
     @router.post("/auth/recovery/request")
     async def auth_recovery_request(body: RecoveryRequestBody):
         data = store.read()
@@ -738,7 +835,7 @@ def build_router(store: AuthStore) -> APIRouter:
         settings, _ = mail_settings()
         if not mail_ready(settings):
             return fail(
-                "邮件服务未启用，请联系部署者配置 SMTP",
+                "邮件服务尚未配置，请登录后在「账号与安全」中设置 SMTP",
                 400,
                 {"reason": "email_not_configured"},
             )

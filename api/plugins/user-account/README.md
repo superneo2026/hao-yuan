@@ -25,46 +25,30 @@
 
 忘记密码时，在登录页点击「忘记密码？」，输入用户名或预留邮箱获取验证码，验证后即可设置新密码。验证码 10 分钟内有效，连续输错 5 次需重新获取，重新发送间隔 60 秒。
 
-**用户只需要提供自己的找回邮箱，不需要、也不应该配置 SMTP。** 邮件发送属于部署者（开发者）负责的服务器基础设施，通过环境变量注入，不写入数据库、不进入网页设置、不提交到 Git。
+用户下载到本地后，可自行在「账号与安全 → 邮件发送服务（SMTP）」中配置，无需开发者介入。为降低配置门槛，界面提供**服务商模板**，选项顺序为：**自定义、Gmail、QQ 邮箱**；选择 Gmail/QQ 会自动填好服务器、端口与加密方式，再填入自己的账号和应用密码即可。
 
-部署者在服务器上配置（以 systemd 为例）：
+| 模板 | 服务器 | 端口/加密 | 说明 |
+| --- | --- | --- | --- |
+| 自定义 | 手动填写 | 手动填写 | 任意 SMTP 服务 |
+| Gmail | `smtp.gmail.com` | `465` / SSL | 需先开启两步验证，并使用「应用专用密码」 |
+| QQ 邮箱 | `smtp.qq.com` | `465` / SSL | 需在 QQ 邮箱设置中开启 SMTP，并使用「授权码」 |
 
-1. 新建受保护的环境文件 `/etc/hao-yuan/smtp.env`（权限 600）：
+保存后可点击「发送测试邮件」验证。配置保存于本机 `api/data/smtp.json`（权限 600，已加入 `.gitignore`），不会进入网页源码或 Git 仓库。
 
-   ```bash
-   sudo install -d -m 700 /etc/hao-yuan
-   sudo tee /etc/hao-yuan/smtp.env >/dev/null <<'EOF'
-   HAOYUAN_SMTP_HOST=smtp.example.com
-   HAOYUAN_SMTP_PORT=465
-   HAOYUAN_SMTP_USER=noreply@example.com
-   HAOYUAN_SMTP_PASSWORD=your-app-password
-   HAOYUAN_SMTP_FROM=noreply@example.com
-   HAOYUAN_SMTP_SECURITY=ssl
-   EOF
-   sudo chmod 600 /etc/hao-yuan/smtp.env
-   ```
+### 可选：部署者用环境变量统一配置
 
-2. 在服务的 systemd unit 中引入该文件：
-
-   ```ini
-   [Service]
-   EnvironmentFile=-/etc/hao-yuan/smtp.env
-   ```
-
-3. `systemctl daemon-reload && systemctl restart haoyuan`。
-
-环境变量说明：
+如果用 systemd 部署且希望统一管理，也可以由部署者通过环境变量提供（优先级高于界面配置），在 unit 中加入 `EnvironmentFile=-/etc/hao-yuan/smtp.env` 并写入：
 
 | 变量 | 说明 |
 | --- | --- |
-| `HAOYUAN_SMTP_HOST` | SMTP 服务器地址，例如 `smtp.example.com` |
+| `HAOYUAN_SMTP_HOST` | SMTP 服务器地址 |
 | `HAOYUAN_SMTP_PORT` | 端口，默认 `465` |
 | `HAOYUAN_SMTP_USER` | SMTP 用户名 |
 | `HAOYUAN_SMTP_PASSWORD` | SMTP 密码或授权码 |
 | `HAOYUAN_SMTP_FROM` | 发件人邮箱 |
 | `HAOYUAN_SMTP_SECURITY` | `ssl`（默认）或 `starttls` 或 `none` |
 
-> 若未配置，用户点击找回密码时会看到「邮件服务未启用，请联系部署者配置 SMTP」。开源仓库不包含任何 SMTP 凭据，请勿把真实账号密码提交到 Git。
+> 若使用环境变量，界面会提示「已通过环境变量配置，页面修改不会生效」。开源仓库不包含任何 SMTP 凭据，请勿把真实账号密码提交到 Git。
 
 ## 数据与重置
 

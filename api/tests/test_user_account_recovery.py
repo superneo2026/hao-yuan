@@ -169,3 +169,57 @@ def test_change_recovery_email(tmp_path, monkeypatch):
         json={"current_password": "wrong", "email": "other@example.com"},
     ).json()
     assert missing_password["code"] == 401
+
+
+def test_mail_config_endpoints_and_provider(tmp_path, monkeypatch):
+    module = _load_plugin()
+    _clear_mail_env(monkeypatch)
+    monkeypatch.setattr(module, "MAIL_PATH", Path(tmp_path) / "smtp.json")
+    client = _client(module, tmp_path)
+
+    assert client.get("/api/auth/email").json()["code"] == 401
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "secret123"}).json()
+    headers = {"Authorization": f"Bearer {login['data']['token']}"}
+
+    saved = client.put(
+        "/api/auth/email",
+        headers=headers,
+        json={
+            "provider": "gmail",
+            "host": "smtp.gmail.com",
+            "port": 465,
+            "username": "me@gmail.com",
+            "sender": "me@gmail.com",
+            "security": "ssl",
+        },
+    ).json()
+    assert saved["code"] == 200
+    assert saved["data"]["provider"] == "gmail"
+    assert saved["data"]["configured"] is True
+    assert saved["data"]["has_password"] is False
+
+    with_password = client.put(
+        "/api/auth/email",
+        headers=headers,
+        json={
+            "provider": "gmail",
+            "host": "smtp.gmail.com",
+            "port": 465,
+            "username": "me@gmail.com",
+            "sender": "me@gmail.com",
+            "security": "ssl",
+            "password": "app-password",
+        },
+    ).json()
+    assert with_password["data"]["has_password"] is True
+
+    config = client.get("/api/auth/email", headers=headers).json()
+    assert config["data"]["provider"] == "gmail"
+    assert config["data"]["host"] == "smtp.gmail.com"
+
+    monkeypatch.setenv("HAOYUAN_SMTP_HOST", "smtp.qq.com")
+    monkeypatch.setenv("HAOYUAN_SMTP_FROM", "x@qq.com")
+    env_cfg = client.get("/api/auth/email", headers=headers).json()
+    assert env_cfg["data"]["env_managed"] is True
+    assert env_cfg["data"]["host"] == "smtp.qq.com"

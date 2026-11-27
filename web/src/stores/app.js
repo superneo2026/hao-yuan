@@ -721,6 +721,18 @@ export async function resetAccountPassword(code, newPassword) {
   return data
 }
 
+export function fetchMailSettings() {
+  return api.authEmailGet()
+}
+
+export function saveMailSettings(body) {
+  return api.authEmailSave(body)
+}
+
+export function sendTestMail(to) {
+  return api.authEmailTest({ to: to || '' })
+}
+
 export async function logoutAccount() {
   try {
     await api.authLogout()
