@@ -25,10 +25,35 @@
 
 忘记密码时，在登录页点击「忘记密码？」，输入用户名或预留邮箱获取验证码，验证后即可设置新密码。验证码 10 分钟内有效，连续输错 5 次需重新获取，重新发送间隔 60 秒。
 
-发送验证码需要先配置 SMTP，有两种方式：
+**用户只需要提供自己的找回邮箱，不需要、也不应该配置 SMTP。** 邮件发送属于部署者（开发者）负责的服务器基础设施，通过环境变量注入，不写入数据库、不进入网页设置、不提交到 Git。
 
-1. **界面配置（推荐）**：登录后在「账号与安全 → 邮件发送服务（SMTP）」填写服务器、端口、账号、密码、发件人和加密方式，保存后可发送测试邮件。配置保存在本机 `api/data/smtp.json`（权限 600，已加入 `.gitignore`）。
-2. **环境变量配置**（优先级高于界面配置）：
+部署者在服务器上配置（以 systemd 为例）：
+
+1. 新建受保护的环境文件 `/etc/hao-yuan/smtp.env`（权限 600）：
+
+   ```bash
+   sudo install -d -m 700 /etc/hao-yuan
+   sudo tee /etc/hao-yuan/smtp.env >/dev/null <<'EOF'
+   HAOYUAN_SMTP_HOST=smtp.example.com
+   HAOYUAN_SMTP_PORT=465
+   HAOYUAN_SMTP_USER=noreply@example.com
+   HAOYUAN_SMTP_PASSWORD=your-app-password
+   HAOYUAN_SMTP_FROM=noreply@example.com
+   HAOYUAN_SMTP_SECURITY=ssl
+   EOF
+   sudo chmod 600 /etc/hao-yuan/smtp.env
+   ```
+
+2. 在服务的 systemd unit 中引入该文件：
+
+   ```ini
+   [Service]
+   EnvironmentFile=-/etc/hao-yuan/smtp.env
+   ```
+
+3. `systemctl daemon-reload && systemctl restart haoyuan`。
+
+环境变量说明：
 
 | 变量 | 说明 |
 | --- | --- |
@@ -39,7 +64,7 @@
 | `HAOYUAN_SMTP_FROM` | 发件人邮箱 |
 | `HAOYUAN_SMTP_SECURITY` | `ssl`（默认）或 `starttls` 或 `none` |
 
-> 开源仓库不包含任何 SMTP 凭据，请勿把真实账号密码提交到 Git。
+> 若未配置，用户点击找回密码时会看到「邮件服务未启用，请联系部署者配置 SMTP」。开源仓库不包含任何 SMTP 凭据，请勿把真实账号密码提交到 Git。
 
 ## 数据与重置
 

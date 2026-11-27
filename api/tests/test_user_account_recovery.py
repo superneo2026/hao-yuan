@@ -28,20 +28,13 @@ def _client(module, tmp_path: Path) -> TestClient:
 
 
 def _configure_mail(module, tmp_path: Path, monkeypatch) -> dict:
-    for name in ("HAOYUAN_SMTP_HOST", "HAOYUAN_SMTP_PORT", "HAOYUAN_SMTP_USER",
-                 "HAOYUAN_SMTP_PASSWORD", "HAOYUAN_SMTP_FROM", "HAOYUAN_SMTP_SECURITY"):
-        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(module, "MAIL_PATH", Path(tmp_path) / "smtp.json")
-    module._write_mail_file(
-        {
-            "host": "smtp.example.com",
-            "port": 465,
-            "username": "noreply@example.com",
-            "password": "smtp-secret",
-            "sender": "noreply@example.com",
-            "security": "ssl",
-        }
-    )
+    monkeypatch.setenv("HAOYUAN_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("HAOYUAN_SMTP_PORT", "465")
+    monkeypatch.setenv("HAOYUAN_SMTP_USER", "noreply@example.com")
+    monkeypatch.setenv("HAOYUAN_SMTP_PASSWORD", "smtp-secret")
+    monkeypatch.setenv("HAOYUAN_SMTP_FROM", "noreply@example.com")
+    monkeypatch.setenv("HAOYUAN_SMTP_SECURITY", "ssl")
     sent: dict[str, str] = {}
 
     def fake_send(settings, to_addr, subject, body):
@@ -52,6 +45,12 @@ def _configure_mail(module, tmp_path: Path, monkeypatch) -> dict:
 
     monkeypatch.setattr(module, "_send_mail", fake_send)
     return sent
+
+
+def _clear_mail_env(monkeypatch) -> None:
+    for name in ("HAOYUAN_SMTP_HOST", "HAOYUAN_SMTP_PORT", "HAOYUAN_SMTP_USER",
+                 "HAOYUAN_SMTP_PASSWORD", "HAOYUAN_SMTP_FROM", "HAOYUAN_SMTP_SECURITY"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_setup_requires_valid_email(tmp_path, monkeypatch):
@@ -79,6 +78,7 @@ def test_setup_requires_valid_email(tmp_path, monkeypatch):
 
 def test_recovery_request_requires_email_service(tmp_path, monkeypatch):
     module = _load_plugin()
+    _clear_mail_env(monkeypatch)
     monkeypatch.setattr(module, "MAIL_PATH", Path(tmp_path) / "smtp.json")
     client = _client(module, tmp_path)
 
@@ -169,28 +169,3 @@ def test_change_recovery_email(tmp_path, monkeypatch):
         json={"current_password": "wrong", "email": "other@example.com"},
     ).json()
     assert missing_password["code"] == 401
-
-
-def test_mail_config_endpoints_require_auth(tmp_path, monkeypatch):
-    module = _load_plugin()
-    monkeypatch.setattr(module, "MAIL_PATH", Path(tmp_path) / "smtp.json")
-    client = _client(module, tmp_path)
-
-    assert client.get("/api/auth/email").json()["code"] == 401
-
-    login = client.post("/api/auth/login", json={"username": "admin", "password": "secret123"}).json()
-    headers = {"Authorization": f"Bearer {login['data']['token']}"}
-
-    saved = client.put(
-        "/api/auth/email",
-        headers=headers,
-        json={"host": "smtp.example.com", "port": 587, "sender": "noreply@example.com", "security": "starttls"},
-    ).json()
-    assert saved["code"] == 200
-    assert saved["data"]["configured"] is True
-    assert saved["data"]["has_password"] is False
-    assert saved["data"]["security"] == "starttls"
-
-    config = client.get("/api/auth/email", headers=headers).json()
-    assert config["code"] == 200
-    assert config["data"]["host"] == "smtp.example.com"

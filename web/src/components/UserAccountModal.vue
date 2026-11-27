@@ -1,14 +1,6 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import {
-  changeAccount,
-  fetchMailSettings,
-  logoutAccount,
-  saveAuthPolicy,
-  saveMailSettings,
-  sendTestMail,
-  state
-} from '../stores/app'
+import { computed, ref } from 'vue'
+import { changeAccount, logoutAccount, saveAuthPolicy, state } from '../stores/app'
 import { t } from '../i18n'
 import Icon from './Icon.vue'
 
@@ -25,94 +17,8 @@ const error = ref('')
 const maxFailures = ref(Number(state.auth.maxFailures) || 5)
 const policySaving = ref(false)
 
-const mail = reactive({
-  host: '',
-  port: 465,
-  username: '',
-  password: '',
-  sender: '',
-  security: 'ssl',
-  hasPassword: false,
-  configured: false,
-  envManaged: false
-})
-const mailSaving = ref(false)
-const mailTesting = ref(false)
-const mailNotice = ref('')
-
 const nameChanged = computed(() => username.value.trim() && username.value.trim() !== state.auth.username)
 const emailChanged = computed(() => Boolean(email.value.trim()))
-
-onMounted(loadMail)
-
-async function loadMail() {
-  try {
-    const data = await fetchMailSettings()
-    Object.assign(mail, {
-      host: data.host || '',
-      port: data.port || 465,
-      username: data.username || '',
-      password: '',
-      sender: data.sender || '',
-      security: data.security || 'ssl',
-      hasPassword: !!data.has_password,
-      configured: !!data.configured,
-      envManaged: !!data.env_managed
-    })
-  } catch {
-    /* ignore mail config load errors */
-  }
-}
-
-async function saveMail() {
-  error.value = ''
-  mailNotice.value = ''
-  if (!mail.host.trim() || !mail.sender.trim()) {
-    error.value = t('auth.emailServiceRequired')
-    return
-  }
-  mailSaving.value = true
-  try {
-    const data = await saveMailSettings({
-      host: mail.host.trim(),
-      port: Number(mail.port) || 465,
-      username: mail.username.trim(),
-      password: mail.password,
-      sender: mail.sender.trim(),
-      security: mail.security
-    })
-    Object.assign(mail, {
-      host: data.host || '',
-      port: data.port || 465,
-      username: data.username || '',
-      password: '',
-      sender: data.sender || '',
-      security: data.security || 'ssl',
-      hasPassword: !!data.has_password,
-      configured: !!data.configured,
-      envManaged: !!data.env_managed
-    })
-    mailNotice.value = t('auth.smtpSaved')
-  } catch (err) {
-    error.value = err.message || t('common.error')
-  } finally {
-    mailSaving.value = false
-  }
-}
-
-async function testMail() {
-  error.value = ''
-  mailNotice.value = ''
-  mailTesting.value = true
-  try {
-    await sendTestMail('')
-    mailNotice.value = t('auth.smtpTestSent')
-  } catch (err) {
-    error.value = err.message || t('common.error')
-  } finally {
-    mailTesting.value = false
-  }
-}
 
 async function save() {
   error.value = ''
@@ -309,50 +215,7 @@ async function signOut() {
           />
         </div>
 
-        <div class="policy-card">
-          <div class="policy-head">
-            <span class="policy-icon"><Icon name="send" :size="16" /></span>
-            <div>
-              <b>{{ t('auth.emailServiceTitle') }}</b>
-              <span>{{ t('auth.emailServiceDesc') }}</span>
-            </div>
-            <span class="badge" :class="mail.configured ? 'good' : 'warn'" style="margin-left: auto">
-              {{ mail.configured ? t('auth.smtpConfigured') : t('auth.smtpNotConfigured') }}
-            </span>
-          </div>
-          <div class="mail-grid">
-            <input v-model="mail.host" class="field" :placeholder="t('auth.smtpHost')" />
-            <input v-model.number="mail.port" class="field" type="number" :placeholder="t('auth.smtpPort')" />
-            <input v-model="mail.sender" class="field" type="email" :placeholder="t('auth.smtpSender')" />
-            <select v-model="mail.security" class="field">
-              <option value="ssl">{{ t('auth.smtpSecuritySsl') }}</option>
-              <option value="starttls">{{ t('auth.smtpSecurityStarttls') }}</option>
-              <option value="none">{{ t('auth.smtpSecurityNone') }}</option>
-            </select>
-            <input v-model="mail.username" class="field" :placeholder="t('auth.smtpUser')" autocomplete="off" />
-            <input
-              v-model="mail.password"
-              class="field"
-              type="password"
-              :placeholder="mail.hasPassword ? t('auth.smtpPasswordKeep') : t('auth.smtpPassword')"
-              autocomplete="new-password"
-            />
-          </div>
-          <p v-if="mail.envManaged" class="tiny faint" style="margin: 8px 0 0">{{ t('auth.smtpEnvManaged') }}</p>
-          <div class="mail-actions">
-            <button class="btn sm primary" type="button" :disabled="mailSaving" @click="saveMail">
-              <span v-if="mailSaving" class="spinner" style="width: 11px; height: 11px" />
-              {{ t('auth.smtpSave') }}
-            </button>
-            <button class="btn sm" type="button" :disabled="mailTesting || !mail.configured" @click="testMail">
-              <span v-if="mailTesting" class="spinner" style="width: 11px; height: 11px" />
-              {{ t('auth.smtpTest') }}
-            </button>
-          </div>
-        </div>
-
         <div v-if="error" class="auth-error"><Icon name="alert" :size="14" /> {{ error }}</div>
-        <div v-else-if="mailNotice" class="auth-ok"><Icon name="check" :size="14" /> {{ mailNotice }}</div>
       </div>
 
       <div class="modal-foot">
@@ -393,8 +256,4 @@ async function signOut() {
 .eye-btn { position: absolute; right: 6px; width: 30px; height: 30px; display: grid; place-items: center; border: none; background: transparent; color: var(--faint); border-radius: 7px; }
 .eye-btn:hover { color: var(--ink); background: var(--surface-3); }
 .auth-error { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--bad); background: var(--bad-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--bad) 25%, transparent); }
-.auth-ok { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: 9px; color: var(--good); background: var(--good-soft); font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--good) 25%, transparent); }
-.mail-grid { display: grid; grid-template-columns: 1fr 88px; gap: 6px; }
-.mail-grid .field { height: 34px; }
-.mail-actions { display: flex; gap: 8px; margin-top: 10px; }
 </style>
