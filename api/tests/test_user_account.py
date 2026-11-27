@@ -21,8 +21,16 @@ def test_user_account_protection_flow(client):
         plugins = client.get("/api/plugins").json()["data"]
         assert any(item["name"] == "user-account" for item in plugins)
 
-        setup = client.post("/api/auth/setup", json={"username": "tester", "password": "secret123"}).json()
+        missing_email = client.post("/api/auth/setup", json={"username": "tester", "password": "secret123"}).json()
+        assert missing_email["code"] == 400
+
+        setup = client.post(
+            "/api/auth/setup",
+            json={"username": "tester", "password": "secret123", "email": "tester@example.com"},
+        ).json()
         assert setup["code"] == 200
+        assert setup["data"]["has_recovery_email"] is True
+        assert setup["data"]["recovery_email"] == "t***r@example.com"
         token = setup["data"]["token"]
         assert token
 

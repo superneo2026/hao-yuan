@@ -219,6 +219,11 @@ export const api = {
   authLogout: () => request('/api/auth/logout', { method: 'POST' }),
   authChange: (body) => request('/api/auth/change', { method: 'POST', body: JSON.stringify(body) }),
   authPolicy: (body) => request('/api/auth/policy', { method: 'PUT', body: JSON.stringify(body) }),
+  authRecoveryRequest: (body) => request('/api/auth/recovery/request', { method: 'POST', body: JSON.stringify(body) }),
+  authRecoveryReset: (body) => request('/api/auth/recovery/reset', { method: 'POST', body: JSON.stringify(body) }),
+  authEmailGet: () => request('/api/auth/email'),
+  authEmailSave: (body) => request('/api/auth/email', { method: 'PUT', body: JSON.stringify(body) }),
+  authEmailTest: (body) => request('/api/auth/email/test', { method: 'POST', body: JSON.stringify(body || {}) }),
 
   settings: () => request('/api/settings'),
   saveGate: (mode, allow) => request('/api/settings/gate', { method: 'PUT', body: JSON.stringify({ mode, allow }) }),

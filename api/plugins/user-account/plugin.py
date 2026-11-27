@@ -1,14 +1,19 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
+import smtplib
+import ssl
 import threading
 import time
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -27,9 +32,18 @@ MAX_FAILURES_LIMIT = 20
 LOCK_SECONDS = 5 * 60
 STATE_PATH = DATA_DIR / "user_account.json"
 CLI_SECRET_PATH = DATA_DIR / "cli-secret"
+MAIL_PATH = DATA_DIR / "smtp.json"
+
+RECOVERY_CODE_TTL = 10 * 60
+RECOVERY_MAX_ATTEMPTS = 5
+RECOVERY_RESEND_SECONDS = 60
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _cli_secret_value: str | None = None
 _cli_secret_lock = threading.Lock()
+
+_recovery_lock = threading.Lock()
+_recovery: dict[str, Any] = {"code": "", "expires": 0, "attempts": 0, "last_sent": 0, "email": ""}
 
 
 def cli_secret() -> str:
@@ -58,6 +72,126 @@ def cli_secret() -> str:
         except OSError:
             _cli_secret_value = ""
         return _cli_secret_value
+
+
+def _mask_email(value: str) -> str:
+    email = (value or "").strip()
+    if not email or "@" not in email:
+        return ""
+    local, domain = email.split("@", 1)
+    if not local:
+        return f"***@{domain}"
+    if len(local) <= 2:
+        masked = local[0] + "***"
+    else:
+        masked = local[0] + "***" + local[-1]
+    return f"{masked}@{domain}"
+
+
+def _clean_email(value: str) -> str:
+    email = (value or "").strip()
+    if not email or len(email) > 254 or not EMAIL_RE.match(email):
+        raise ValueError("请输入有效的邮箱地址")
+    return email
+
+
+def _mail_defaults() -> dict[str, Any]:
+    return {"host": "", "port": 465, "username": "", "password": "", "sender": "", "security": "ssl"}
+
+
+def _read_mail_file() -> dict[str, Any]:
+    if not MAIL_PATH.is_file():
+        return {}
+    try:
+        data = json.loads(MAIL_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _normalize_mail(data: dict[str, Any]) -> dict[str, Any]:
+    base = _mail_defaults()
+    if isinstance(data, dict):
+        base.update({key: data[key] for key in base if key in data})
+    try:
+        base["port"] = int(base.get("port") or 465)
+    except (TypeError, ValueError):
+        base["port"] = 465
+    security = str(base.get("security") or "ssl").lower()
+    base["security"] = security if security in {"ssl", "starttls", "none"} else "ssl"
+    for key in ("host", "username", "sender"):
+        base[key] = str(base.get(key) or "").strip()
+    base["password"] = str(base.get("password") or "")
+    return base
+
+
+def _write_mail_file(data: dict[str, Any]) -> dict[str, Any]:
+    payload = _normalize_mail(data)
+    MAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp = MAIL_PATH.with_suffix(".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(temp, 0o600)
+    except OSError:
+        pass
+    temp.replace(MAIL_PATH)
+    return payload
+
+
+def mail_settings() -> tuple[dict[str, Any], bool]:
+    base = _normalize_mail(_read_mail_file())
+    env_map = {
+        "host": "HAOYUAN_SMTP_HOST",
+        "port": "HAOYUAN_SMTP_PORT",
+        "username": "HAOYUAN_SMTP_USER",
+        "password": "HAOYUAN_SMTP_PASSWORD",
+        "sender": "HAOYUAN_SMTP_FROM",
+        "security": "HAOYUAN_SMTP_SECURITY",
+    }
+    env_managed = False
+    for key, env_name in env_map.items():
+        value = os.getenv(env_name)
+        if value is not None and value.strip() != "":
+            base[key] = value
+            env_managed = True
+    return _normalize_mail(base), env_managed
+
+
+def mail_ready(settings: dict[str, Any]) -> bool:
+    return bool(settings.get("host") and (settings.get("sender") or settings.get("username")))
+
+
+def _send_mail(settings: dict[str, Any], to_addr: str, subject: str, body: str) -> None:
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = settings.get("sender") or settings.get("username")
+    message["To"] = to_addr
+    message.set_content(body)
+    host = settings["host"]
+    port = int(settings.get("port") or 465)
+    timeout = 15
+    if settings.get("security") == "ssl":
+        server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context())
+    else:
+        server = smtplib.SMTP(host, port, timeout=timeout)
+        server.ehlo()
+        if settings.get("security") == "starttls":
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+    try:
+        username = settings.get("username")
+        if username:
+            server.login(username, settings.get("password") or "")
+        server.send_message(message)
+    finally:
+        try:
+            server.quit()
+        except Exception:
+            pass
+
+
+def _generate_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def _now() -> str:
@@ -94,6 +228,7 @@ class AuthStore:
             "iterations": PBKDF2_ITERATIONS,
             "secret": secrets.token_hex(32),
             "max_failures": DEFAULT_MAX_FAILURES,
+            "recovery_email": "",
             "created_at": "",
             "updated_at": "",
         }
@@ -109,6 +244,7 @@ class AuthStore:
         except (TypeError, ValueError):
             max_failures = DEFAULT_MAX_FAILURES
         base["max_failures"] = max(1, min(MAX_FAILURES_LIMIT, max_failures))
+        base["recovery_email"] = str(base.get("recovery_email") or "").strip()
         return base
 
     def read(self) -> dict[str, Any]:
@@ -170,7 +306,7 @@ class AuthStore:
             self.write(data)
         return {"max_failures": value, "lock_seconds": int(LOCK_SECONDS)}
 
-    def setup(self, username: str, password: str) -> dict[str, Any]:
+    def setup(self, username: str, password: str, email: str = "") -> dict[str, Any]:
         with self._lock:
             data = self.read()
             if data.get("configured"):
@@ -185,6 +321,7 @@ class AuthStore:
                     "password_hash": _hash_password(password, salt),
                     "iterations": PBKDF2_ITERATIONS,
                     "secret": data.get("secret") or secrets.token_hex(32),
+                    "recovery_email": email,
                     "created_at": _now(),
                 }
             )
@@ -200,18 +337,37 @@ class AuthStore:
         expected = _hash_password(password, str(data.get("salt", "")), int(data.get("iterations") or PBKDF2_ITERATIONS))
         return hmac.compare_digest(str(data.get("password_hash", "")), expected)
 
-    def change(self, current_password: str, username: str, new_password: str) -> dict[str, Any]:
+    def change(self, current_password: str, username: str, new_password: str, email: str = "") -> dict[str, Any]:
         with self._lock:
             data = self.read()
             if not self.verify(str(data.get("username", "")), current_password):
                 raise ValueError("current password is incorrect")
+            rotate = False
             if username:
                 data["username"] = username
+                rotate = True
             if new_password:
                 salt = secrets.token_hex(16)
                 data["salt"] = salt
                 data["password_hash"] = _hash_password(new_password, salt)
                 data["iterations"] = PBKDF2_ITERATIONS
+                rotate = True
+            if email:
+                data["recovery_email"] = email
+            if rotate:
+                data["secret"] = secrets.token_hex(32)
+            self.write(data)
+            return data
+
+    def reset_password(self, new_password: str) -> dict[str, Any]:
+        with self._lock:
+            data = self.read()
+            if not data.get("configured"):
+                raise ValueError("account not configured")
+            salt = secrets.token_hex(16)
+            data["salt"] = salt
+            data["password_hash"] = _hash_password(new_password, salt)
+            data["iterations"] = PBKDF2_ITERATIONS
             data["secret"] = secrets.token_hex(32)
             self.write(data)
             return data
@@ -347,6 +503,7 @@ class AuthGateMiddleware:
 class SetupBody(BaseModel):
     username: str = ""
     password: str = ""
+    email: str = ""
 
 
 class LoginBody(BaseModel):
@@ -358,10 +515,33 @@ class ChangeBody(BaseModel):
     current_password: str = ""
     username: str = ""
     new_password: str = ""
+    email: str = ""
 
 
 class PolicyBody(BaseModel):
     max_failures: int = DEFAULT_MAX_FAILURES
+
+
+class RecoveryRequestBody(BaseModel):
+    identity: str = ""
+
+
+class RecoveryResetBody(BaseModel):
+    code: str = ""
+    new_password: str = ""
+
+
+class MailConfigBody(BaseModel):
+    host: str = ""
+    port: int = 465
+    username: str = ""
+    password: str = ""
+    sender: str = ""
+    security: str = "ssl"
+
+
+class MailTestBody(BaseModel):
+    to: str = ""
 
 
 def _clean_username(value: str) -> str:
@@ -447,11 +627,19 @@ def build_router(store: AuthStore) -> APIRouter:
     def status_payload(request: Request) -> dict[str, Any]:
         gate = store.gate()
         payload = store.verify_token(token_from_request(request))
+        data = store.read()
+        recovery_email = str(data.get("recovery_email") or "")
+        settings, _ = mail_settings()
+        email_ready = mail_ready(settings)
         return {
             **gate,
             "active": gate["locked"],
             "authenticated": bool(payload) if gate["locked"] else False,
             "username": (payload or {}).get("u", "") if payload else "",
+            "has_recovery_email": bool(recovery_email),
+            "recovery_email": _mask_email(recovery_email),
+            "email_configured": email_ready,
+            "recovery_available": bool(gate["configured"] and recovery_email and email_ready),
         }
 
     @router.get("/auth/status")
@@ -466,9 +654,10 @@ def build_router(store: AuthStore) -> APIRouter:
         try:
             username = _clean_username(body.username)
             password = _clean_password(body.password)
+            email = _clean_email(body.email)
         except ValueError as exc:
             return fail(str(exc), 400)
-        data = store.setup(username, password)
+        data = store.setup(username, password, email)
         token = store.issue_token(str(data["username"]))
         set_session(response, token)
         return ok({**status_payload(request), "token": token, "authenticated": True}, "账号保护已开启")
@@ -546,12 +735,13 @@ def build_router(store: AuthStore) -> APIRouter:
         try:
             username = _clean_username(body.username) if (body.username or "").strip() else ""
             new_password = _clean_password(body.new_password) if body.new_password else ""
+            email = _clean_email(body.email) if (body.email or "").strip() else ""
         except ValueError as exc:
             return fail(str(exc), 400)
-        if not username and not new_password:
-            return fail("请至少修改用户名或密码", 400)
+        if not username and not new_password and not email:
+            return fail("请至少修改用户名、密码或找回邮箱", 400)
         try:
-            data = store.change(body.current_password or "", username, new_password)
+            data = store.change(body.current_password or "", username, new_password, email)
         except ValueError as exc:
             return fail(str(exc), 401)
         token = store.issue_token(str(data["username"]))
@@ -564,6 +754,172 @@ def build_router(store: AuthStore) -> APIRouter:
                 "authenticated": True,
             },
             "账号信息已更新",
+        )
+
+    def authed(request: Request) -> bool:
+        return bool(store.verify_token(token_from_request(request)))
+
+    def mail_public(settings: dict[str, Any], env_managed: bool) -> dict[str, Any]:
+        return {
+            "host": settings.get("host") or "",
+            "port": int(settings.get("port") or 465),
+            "username": settings.get("username") or "",
+            "sender": settings.get("sender") or "",
+            "security": settings.get("security") or "ssl",
+            "has_password": bool(settings.get("password")),
+            "configured": mail_ready(settings),
+            "env_managed": env_managed,
+        }
+
+    @router.get("/auth/email")
+    async def auth_email_get(request: Request):
+        if not authed(request):
+            return fail("需要登录", 401)
+        settings, env_managed = mail_settings()
+        return ok(mail_public(settings, env_managed))
+
+    @router.put("/auth/email")
+    async def auth_email_put(body: MailConfigBody, request: Request):
+        if not authed(request):
+            return fail("需要登录", 401)
+        current = _normalize_mail(_read_mail_file())
+        current.update(
+            {
+                "host": (body.host or "").strip(),
+                "port": body.port or 465,
+                "username": (body.username or "").strip(),
+                "sender": (body.sender or "").strip(),
+                "security": (body.security or "ssl").strip().lower(),
+            }
+        )
+        if body.password:
+            current["password"] = body.password
+        _write_mail_file(current)
+        settings, env_managed = mail_settings()
+        return ok(mail_public(settings, env_managed), "邮件设置已保存")
+
+    @router.post("/auth/email/test")
+    async def auth_email_test(body: MailTestBody, request: Request):
+        if not authed(request):
+            return fail("需要登录", 401)
+        settings, _ = mail_settings()
+        if not mail_ready(settings):
+            return fail("请先填写并保存邮件服务设置", 400)
+        to_addr = (body.to or "").strip() or str(store.read().get("recovery_email") or "")
+        try:
+            to_addr = _clean_email(to_addr)
+        except ValueError as exc:
+            return fail(str(exc), 400)
+        try:
+            await asyncio.to_thread(
+                _send_mail,
+                settings,
+                to_addr,
+                "豪源邮件服务测试",
+                "这是一封来自豪源的测试邮件，说明邮件发送服务配置成功。",
+            )
+        except Exception:
+            return fail("测试邮件发送失败，请检查 SMTP 配置", 502)
+        return ok({"to": _mask_email(to_addr)}, "测试邮件已发送")
+
+    @router.post("/auth/recovery/request")
+    async def auth_recovery_request(body: RecoveryRequestBody):
+        data = store.read()
+        if not data.get("configured"):
+            return fail("尚未设置账号", 400)
+        settings, _ = mail_settings()
+        if not mail_ready(settings):
+            return fail(
+                "邮件发送服务尚未配置，请登录后在「账号与安全」中配置 SMTP",
+                400,
+                {"reason": "email_not_configured"},
+            )
+        recovery_email = str(data.get("recovery_email") or "")
+        if not recovery_email:
+            return fail(
+                "该账号尚未预留找回密码邮箱，请先登录设置",
+                400,
+                {"reason": "no_recovery_email"},
+            )
+        identity = (body.identity or "").strip()
+        if not identity:
+            return fail("请输入用户名或邮箱", 400)
+        matched = identity == str(data.get("username") or "") or identity.lower() == recovery_email.lower()
+        if not matched:
+            return fail("用户名与预留邮箱不匹配", 400, {"reason": "mismatch"})
+        now = time.time()
+        with _recovery_lock:
+            last_sent = float(_recovery.get("last_sent") or 0)
+            if last_sent and now - last_sent < RECOVERY_RESEND_SECONDS:
+                wait = int(RECOVERY_RESEND_SECONDS - (now - last_sent)) + 1
+                return fail(f"请 {wait} 秒后再试", 429, {"retry_after": wait})
+            code = _generate_code()
+            _recovery.update(
+                {
+                    "code": code,
+                    "expires": now + RECOVERY_CODE_TTL,
+                    "attempts": 0,
+                    "last_sent": now,
+                    "email": recovery_email,
+                }
+            )
+        text = (
+            "你正在找回豪源账号的登录密码。\n\n"
+            f"验证码：{code}\n"
+            f"有效期：{RECOVERY_CODE_TTL // 60} 分钟。\n\n"
+            "如非本人操作，请忽略本邮件，并尽快修改密码。"
+        )
+        try:
+            await asyncio.to_thread(_send_mail, settings, recovery_email, "豪源账号找回密码验证码", text)
+        except Exception:
+            with _recovery_lock:
+                _recovery.update({"code": "", "expires": 0, "attempts": 0, "last_sent": 0})
+            return fail("验证码邮件发送失败，请检查邮件服务配置", 502)
+        return ok(
+            {
+                "email": _mask_email(recovery_email),
+                "expires_in": RECOVERY_CODE_TTL,
+                "resend_after": RECOVERY_RESEND_SECONDS,
+            },
+            "验证码已发送",
+        )
+
+    @router.post("/auth/recovery/reset")
+    async def auth_recovery_reset(body: RecoveryResetBody, request: Request, response: Response):
+        try:
+            new_password = _clean_password(body.new_password)
+        except ValueError as exc:
+            return fail(str(exc), 400)
+        code = (body.code or "").strip()
+        if not code:
+            return fail("请输入验证码", 400)
+        now = time.time()
+        with _recovery_lock:
+            if not _recovery.get("code") or not _recovery.get("expires"):
+                return fail("请先获取验证码", 400, {"reason": "expired"})
+            if now > float(_recovery.get("expires") or 0):
+                _recovery.update({"code": "", "expires": 0, "attempts": 0})
+                return fail("验证码已失效，请重新获取", 400, {"reason": "expired"})
+            if int(_recovery.get("attempts") or 0) >= RECOVERY_MAX_ATTEMPTS:
+                return fail("验证码错误次数过多，请重新获取", 429, {"reason": "too_many"})
+            if not hmac.compare_digest(str(_recovery.get("code") or ""), code):
+                _recovery["attempts"] = int(_recovery.get("attempts") or 0) + 1
+                remaining = max(0, RECOVERY_MAX_ATTEMPTS - int(_recovery["attempts"]))
+                if remaining == 0:
+                    _recovery.update({"code": "", "expires": 0, "attempts": 0})
+                    return fail("验证码错误次数过多，请重新获取", 429, {"reason": "too_many"})
+                return fail(f"验证码不正确，还可尝试 {remaining} 次", 401, {"remaining_attempts": remaining})
+            _recovery.update({"code": "", "expires": 0, "attempts": 0, "last_sent": 0})
+        try:
+            data = store.reset_password(new_password)
+        except ValueError as exc:
+            return fail(str(exc), 400)
+        failures.pop(client_key(request), None)
+        token = store.issue_token(str(data["username"]))
+        set_session(response, token)
+        return ok(
+            {**status_payload(request), "token": token, "authenticated": True},
+            "密码已重置，请使用新密码登录",
         )
 
     return router

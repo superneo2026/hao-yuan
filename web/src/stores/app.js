@@ -87,7 +87,7 @@ export const state = reactive({
   usageByModel: [],
   supervisor: null,
   orchestrations: [],
-  auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', maxFailures: 5, lockSeconds: 300, loading: false },
+  auth: { checked: false, enabled: false, configured: false, active: false, authenticated: false, username: '', maxFailures: 5, lockSeconds: 300, recoveryEmail: '', hasRecoveryEmail: false, emailConfigured: false, recoveryAvailable: false, loading: false },
   market: { loading: false, online: false, error: '', centerUrl: '', plugins: [] },
   remote: {
     loading: false,
@@ -639,6 +639,10 @@ function applyAuth(data) {
     username: data.username || '',
     maxFailures: Number(data.max_failures) || 5,
     lockSeconds: Number(data.lock_seconds) || 300,
+    recoveryEmail: data.recovery_email || '',
+    hasRecoveryEmail: !!data.has_recovery_email,
+    emailConfigured: !!data.email_configured,
+    recoveryAvailable: !!data.recovery_available,
     loading: false
   }
 }
@@ -672,10 +676,10 @@ export async function loginAccount(username, password) {
   }
 }
 
-export async function setupAccount(username, password) {
+export async function setupAccount(username, password, email) {
   state.auth.loading = true
   try {
-    const data = await api.authSetup({ username, password })
+    const data = await api.authSetup({ username, password, email })
     if (data.token) setAuthToken(data.token)
     state.authSetupOpen = false
     applyAuth(data)
@@ -700,6 +704,33 @@ export async function saveAuthPolicy(maxFailures) {
   applyAuth(data)
   toast(t('auth.policySaved'), 'good')
   return data
+}
+
+export async function requestPasswordRecovery(identity) {
+  return api.authRecoveryRequest({ identity })
+}
+
+export async function resetAccountPassword(code, newPassword) {
+  const data = await api.authRecoveryReset({ code, new_password: newPassword })
+  if (data.token) setAuthToken(data.token)
+  applyAuth(data)
+  state.authSetupOpen = false
+  state.booted = false
+  await boot()
+  toast(t('auth.recoverSuccess'), 'good')
+  return data
+}
+
+export function fetchMailSettings() {
+  return api.authEmailGet()
+}
+
+export function saveMailSettings(body) {
+  return api.authEmailSave(body)
+}
+
+export function sendTestMail(to) {
+  return api.authEmailTest({ to: to || '' })
 }
 
 export async function logoutAccount() {

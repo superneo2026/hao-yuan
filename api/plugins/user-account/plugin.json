@@ -2,7 +2,7 @@
   "name": "user-account",
   "title": "用户账号管理",
   "version": "1.0.0",
-  "description": "为豪源站点添加账号密码保护。启用并设置账密后，所有页面与 API 必须登录后才能访问，支持随时修改用户名和密码。",
+  "description": "为豪源站点添加账号密码保护。启用并设置账密后，所有页面与 API 必须登录后才能访问；设置时需绑定找回密码邮箱，忘记密码可通过邮箱验证码重置。",
   "author": "HaoYuan",
   "requires": [],
   "default_enabled": true,
