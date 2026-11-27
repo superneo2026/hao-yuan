@@ -138,7 +138,10 @@ haoyuan web
 | `haoyuan config` | 全局配置文件（模型 Key 等），`--open` 直接打开编辑 |
 | `haoyuan login` / `haoyuan logout` | 账号保护开启时登录 / 清除本地令牌 |
 | `haoyuan setup` | 仅预装依赖 |
+| `haoyuan upgrade` | 检查并升级到 npm 最新版 |
 | `haoyuan help` | 显示帮助 |
+
+> 升级前如需手动保险，请先备份 `api/data`（会话、工作区、数据库）。新版 `haoyuan upgrade` 会在停服后自动备份该目录到 `~/.haoyuan/backups/`，升级成功后回填；旧版本自带的升级逻辑没有该备份，升级到本版前请先手动复制一份 `api/data`。
 
 终端内命令：`/models` 查看/选择模型（序号选择，`/model x/y` 直选）、`/new` 新建会话、`/web` 在浏览器打开当前会话、`/cancel` 取消当前任务、`/exit` 退出（Ctrl+C 同样有效）。
 

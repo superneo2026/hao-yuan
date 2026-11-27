@@ -7,6 +7,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
+const { compareVersions } = require("./version");
 
 const ROOT = path.resolve(__dirname, "..");
 let VERSION = "0.0.0";
@@ -27,6 +28,8 @@ const RUNTIME_FILE = path.join(API, "data", "runtime.json");
 const DIST_INDEX = path.join(WEB, "dist", "index.html");
 const TOKEN_FILE = path.join(API, "data", "cli-token");
 const CLI_SECRET_FILE = path.join(API, "data", "cli-secret");
+const DATA_DIR = path.join(API, "data");
+const BACKUP_ROOT = path.join(os.homedir(), ".haoyuan", "backups");
 let TOKEN = (process.env.HAOYUAN_TOKEN || "").trim();
 if (!TOKEN) {
   try {
@@ -351,7 +354,7 @@ async function web(options = {}) {
   const child = spawn(PYTHON, ["main.py"], {
     cwd: API,
     stdio: "inherit",
-    env: process.env,
+    env: { ...process.env, HAOYUAN_VERSION: VERSION },
   });
   child.on("error", (err) => fail(err.message));
   child.on("exit", (code, signal) => {
@@ -387,7 +390,7 @@ async function ensureServer() {
   const child = spawn(PYTHON, ["main.py"], {
     cwd: API,
     stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
+    env: { ...process.env, HAOYUAN_VERSION: VERSION },
   });
   const keep = (chunk) => {
     tail = (tail + chunk.toString()).slice(-4000);
@@ -1122,30 +1125,6 @@ function npmRegistryArgs() {
   return registry ? ["--registry", registry] : [];
 }
 
-function parseVersion(value) {
-  return String(value || "")
-    .trim()
-    .replace(/^v/i, "")
-    .split("-")[0]
-    .split(".")
-    .map((part) => {
-      const n = Number.parseInt(part, 10);
-      return Number.isFinite(n) ? n : 0;
-    });
-}
-
-function compareVersions(a, b) {
-  const pa = parseVersion(a);
-  const pb = parseVersion(b);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i += 1) {
-    const x = pa[i] || 0;
-    const y = pb[i] || 0;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
-}
-
 function npmCapture(args) {
   const full = [...args, ...npmRegistryArgs()];
   const useShell = IS_WIN && /\.(cmd|bat)$/i.test(NPM);
@@ -1158,6 +1137,38 @@ function npmCapture(args) {
     return { ok: false, error: detail || `npm 退出码 ${r.status}` };
   }
   return { ok: true, out: (r.stdout || "").trim() };
+}
+
+function backupStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function backupDataDir() {
+  if (!fs.existsSync(DATA_DIR)) return "";
+  const dest = path.join(BACKUP_ROOT, `api-data-${VERSION}-${backupStamp()}`);
+  try {
+    fs.mkdirSync(BACKUP_ROOT, { recursive: true });
+    fs.cpSync(DATA_DIR, dest, { recursive: true });
+    log(`已备份数据目录: ${dest}`);
+    return dest;
+  } catch (err) {
+    warn(`备份 api/data 失败: ${err.message}`);
+    return "";
+  }
+}
+
+function restoreDataDir(backup) {
+  if (!backup || !fs.existsSync(backup)) return;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.cpSync(backup, DATA_DIR, { recursive: true, force: false, errorOnExist: false });
+    log(`已将备份数据恢复到新版本: ${DATA_DIR}`);
+    log(`如恢复异常，可手动从备份目录复制: ${backup}`);
+  } catch (err) {
+    warn(`数据恢复失败，请手动从备份恢复: ${backup}（${err.message}）`);
+  }
 }
 
 async function upgradeCommand() {
@@ -1184,6 +1195,9 @@ async function upgradeCommand() {
     await new Promise((resolve) => setTimeout(resolve, 800));
   }
 
+  // 升级会替换整个包目录（含 api/data），先停服务再备份，成功后回填，避免会话/工作区数据丢失。
+  const dataBackup = backupDataDir();
+
   log(`开始升级 v${VERSION} → v${latest} ...`);
   const installArgs = ["install", "-g", `haoyuan@${latest}`, ...npmRegistryArgs()];
   let ok = run(NPM, installArgs, { lenient: true, cwd: os.homedir() });
@@ -1193,9 +1207,10 @@ async function upgradeCommand() {
   }
   if (!ok) {
     fail(
-      "升级失败：请完全退出正在运行的豪源（关闭所有 haoyuan 窗口/服务），在用户目录（如 C:\\Users\\你的用户名）下执行 npm install -g haoyuan@latest；权限不足请用管理员终端。"
+      `升级失败：请完全退出正在运行的豪源（关闭所有 haoyuan 窗口/服务），在用户目录（如 C:\\Users\\你的用户名）下执行 npm install -g haoyuan@latest；权限不足请用管理员终端。${dataBackup ? ` 数据备份: ${dataBackup}` : ""}`
     );
   }
+  restoreDataDir(dataBackup);
   log(`升级完成：v${VERSION} → v${latest}`);
   log("请重新运行 haoyuan 以使用新版本。");
 }

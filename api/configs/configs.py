@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 from configs.models import auto_default
 
+
+def _resolve_app_version() -> str:
+    """Prefer the repository's package.json so CLI/API/Web never drift; env is a fallback."""
+    project_dir = Path(__file__).resolve().parent.parent.parent
+    try:
+        data = json.loads((project_dir / "package.json").read_text(encoding="utf-8"))
+        version = str(data.get("version") or "").strip()
+        if version:
+            return version
+    except (OSError, ValueError):
+        pass
+    return os.getenv("HAOYUAN_VERSION", "").strip() or "0.0.0"
+
+
 APP_NAME = "HaoYuan"
-APP_VERSION = "0.1.20261127-5"
+APP_VERSION = _resolve_app_version()
 SERVER_HOST = os.getenv("HAOYUAN_HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("HAOYUAN_PORT", "8030"))
 prefix = "/api"

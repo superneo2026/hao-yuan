@@ -1,6 +1,6 @@
 {
   "name": "haoyuan",
-  "version": "0.1.20261127-5",
+  "version": "0.2.0",
   "description": "豪源 · HaoYuan — 个人指挥 AI 实现多个 AI 员工异步并行工作的 AI 工作室",
   "bin": {
     "haoyuan": "bin/haoyuan.js"
@@ -30,7 +30,8 @@
     "postinstall": "node bin/haoyuan.js postinstall",
     "setup": "node bin/haoyuan.js setup",
     "build": "node bin/haoyuan.js build",
-    "start": "node bin/haoyuan.js start"
+    "start": "node bin/haoyuan.js start",
+    "test": "node --test tests/version.test.js"
   },
   "engines": {
     "node": ">=18"
