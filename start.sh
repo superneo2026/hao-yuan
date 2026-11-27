@@ -51,33 +51,35 @@ install_frontend_deps() {
   if [ -n "${HAOYUAN_NPM_REGISTRY:-}" ]; then
     NPM_ARGS+=(--registry "$HAOYUAN_NPM_REGISTRY")
   fi
-  (cd web && npm "${NPM_ARGS[@]}")
+  (cd web && npm "${NPM_ARGS[@]}" "$@")
 }
 
 if [ "$NEED_WEB" = "1" ]; then
   SKIP_BUILD=0
   if ! frontend_deps_ready; then
-    if [ -d "web/node_modules" ]; then
-      clean_frontend_deps
-    fi
-    REGISTRY="${HAOYUAN_NPM_REGISTRY:-$(npm config get registry 2>/dev/null || echo default)}"
-    echo "[HaoYuan] Installing frontend dependencies (registry: $REGISTRY)..."
-    if ! install_frontend_deps; then
-      if [ -f "web/dist/index.html" ]; then
-        echo "[HaoYuan] npm install failed; continuing with the prebuilt frontend in web/dist."
-        SKIP_BUILD=1
-      else
-        echo "[HaoYuan] npm install failed. Configure an accessible registry (e.g. export HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/) and retry." >&2
-        exit 1
+    if [ -f "web/dist/index.html" ]; then
+      echo "[HaoYuan] Frontend dependencies are incomplete; using the prebuilt frontend in web/dist."
+      SKIP_BUILD=1
+    else
+      if [ -d "web/node_modules" ]; then
+        clean_frontend_deps
       fi
-    elif ! frontend_deps_ready; then
-      # 依赖目录残缺（例如磁盘/网络中断）：清理后再做一次完整安装。
-      clean_frontend_deps
+      REGISTRY="${HAOYUAN_NPM_REGISTRY:-$(npm config get registry 2>/dev/null || echo default)}"
+      echo "[HaoYuan] Installing frontend dependencies (registry: $REGISTRY)..."
       if ! install_frontend_deps; then
-        if [ -f "web/dist/index.html" ]; then
-          echo "[HaoYuan] npm install failed; continuing with the existing web/dist build."
-          SKIP_BUILD=1
-        else
+        echo "[HaoYuan] npm install failed; retrying without package-lock.json..." >&2
+        if [ -d "web/node_modules" ]; then
+          clean_frontend_deps
+        fi
+        if ! install_frontend_deps --no-package-lock; then
+          echo "[HaoYuan] npm install failed. Configure an accessible registry (e.g. export HAOYUAN_NPM_REGISTRY=https://registry.npmjs.org) and retry." >&2
+          exit 1
+        fi
+      fi
+      if ! frontend_deps_ready; then
+        # 依赖目录残缺（例如磁盘/网络中断）：清理后再做一次完整安装。
+        clean_frontend_deps
+        if ! install_frontend_deps --no-package-lock; then
           exit 1
         fi
       fi

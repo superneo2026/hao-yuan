@@ -40,6 +40,10 @@ if not exist "web\node_modules\@vitejs\plugin-vue\package.json" goto repair_web_
 goto build_frontend
 
 :repair_web_deps
+if exist "web\dist\index.html" (
+  echo [HaoYuan] Frontend dependencies are incomplete; using the prebuilt frontend in web\dist.
+  goto use_existing_dist
+)
 if exist "web\node_modules" (
   echo [HaoYuan] Detected incomplete frontend dependencies, cleaning them automatically...
   rmdir /s /q "web\node_modules"
@@ -50,13 +54,18 @@ set "NPM_RETRY=0"
 echo [HaoYuan] Installing frontend dependencies...
 pushd web
 call npm install %NPM_ARGS%
-if errorlevel 1 (
-  popd
-  echo [HaoYuan] npm install failed. Configure an accessible registry, e.g.:
-  echo     set HAOYUAN_NPM_REGISTRY=http://your-intranet/npm/
-  if exist "web\dist\index.html" goto use_existing_dist
-  exit /b 1
-)
+if not errorlevel 1 goto install_web_deps_ok
+echo [HaoYuan] npm install failed; retrying without package-lock.json...
+if exist "node_modules" rmdir /s /q "node_modules"
+call npm install %NPM_ARGS% --no-package-lock
+if not errorlevel 1 goto install_web_deps_ok
+popd
+echo [HaoYuan] npm install failed. Configure an accessible registry, e.g.:
+echo     set HAOYUAN_NPM_REGISTRY=https://registry.npmjs.org
+if exist "web\dist\index.html" goto use_existing_dist
+exit /b 1
+
+:install_web_deps_ok
 popd
 if exist "web\node_modules\vite\package.json" goto build_frontend
 if "%NPM_RETRY%"=="1" goto deps_still_broken

@@ -209,9 +209,13 @@ function installFrontend() {
   if (fs.existsSync(NODE_MODULES)) cleanFrontendDeps();
   log("安装前端依赖 ...");
   let ok = run(NPM, npmArgs(), { cwd: WEB, lenient: true });
+  if (!ok) {
+    warn("前端依赖安装失败，尝试忽略 package-lock.json 重试 ...");
+    ok = run(NPM, [...npmArgs(), "--no-package-lock"], { cwd: WEB, lenient: true });
+  }
   if (ok && !frontendDepsReady()) {
     cleanFrontendDeps();
-    ok = run(NPM, npmArgs(), { cwd: WEB, lenient: true });
+    ok = run(NPM, [...npmArgs(), "--no-package-lock"], { cwd: WEB, lenient: true });
   }
   if (frontendDepsReady()) return true;
   if (fs.existsSync(DIST_INDEX)) {

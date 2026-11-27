@@ -195,7 +195,7 @@ set HAOYUAN_PIP_INDEX_URL=http://your-intranet/pypi/simple
 start.bat
 ```
 
-前端或 Python 依赖残缺（例如上次安装被 `ECONNRESET` 中断）时，`start.sh` / `start.bat` / `haoyuan setup` 会自动检测、清理 `web/node_modules` 并重装，缺少后端包时自动补装；构建失败时也会回退到已有的 `web/dist`。
+前端或 Python 依赖残缺（例如上次安装被 `ECONNRESET` 中断）时，`start.sh` / `start.bat` / `haoyuan setup` 会自动检测、清理 `web/node_modules` 并重装，缺少后端包时自动补装；构建失败时也会回退到已有的 `web/dist`。若镜像源尚未同步锁文件中的某个版本（常见报错 `npm error code ETARGET / No matching version found for vite@x.y.z`），脚本会自动忽略 `package-lock.json` 重新解析镜像中可用的版本；也可通过 `HAOYUAN_NPM_REGISTRY` 切换到已同步的源（如 `https://registry.npmjs.org`）。
 
 `web/package-lock.json` 不再写死外网镜像地址；`web/.npmrc` 的 `replace-registry-host=always` 会确保安装始终走当前 npm 配置的 registry，因此不会被锁文件劫持到不可达的外网。
 

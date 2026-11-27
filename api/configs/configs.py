@@ -6,7 +6,7 @@ from pathlib import Path
 from configs.models import auto_default
 
 APP_NAME = "HaoYuan"
-APP_VERSION = "0.1.20261127-3"
+APP_VERSION = "0.1.20261127-4"
 SERVER_HOST = os.getenv("HAOYUAN_HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("HAOYUAN_PORT", "8030"))
 prefix = "/api"
