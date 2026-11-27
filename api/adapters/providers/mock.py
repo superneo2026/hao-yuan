@@ -68,7 +68,8 @@ class MockProvider:
 
         text = (
             f"已收到：{user_text}\n\n当前使用本地 mock 模型（未配置 API Key）。"
-            "你可以绑定工作区后让我读取、搜索、编辑文件或执行命令；配置 DEEPSEEK_API_KEY 后即可接入真实模型。"
+            "你可以绑定工作区后让我读取、搜索、编辑文件或执行命令；配置 API Key 后即可接入真实模型。\n\n"
+            "请打开 [模型配置页面]({{settings_url}}) 或访问 {{settings_url}} 完成渠道与 Key 配置。"
         )
         async for ev in self._emit_text(text):
             yield ev

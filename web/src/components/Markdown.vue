@@ -3,6 +3,7 @@ import { nextTick, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { i18n, t } from '../i18n'
+import { resolveMessageLinks } from '../utils/links'
 
 const props = defineProps({
   content: { type: String, default: '' }
@@ -11,7 +12,7 @@ const props = defineProps({
 const root = ref(null)
 
 function render(value) {
-  const raw = marked.parse(value || '', { gfm: true, breaks: true, async: false })
+  const raw = marked.parse(resolveMessageLinks(value), { gfm: true, breaks: true, async: false })
   return DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'rel'] })
 }
 

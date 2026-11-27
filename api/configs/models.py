@@ -611,7 +611,7 @@ def update_config(
         if not name or name == "mock":
             continue
         removed_builtins.discard(name)
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        if not re.fullmatch(r"[\w.\-]+", name):
             raise ValueError(f"invalid provider name: {name}")
         models = _unique(item["models"])
         default_model_name = item["default_model"] or (models[0] if models else "")

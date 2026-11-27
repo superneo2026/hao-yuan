@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { currentSession, state, toast } from '../stores/app'
 import { t } from '../i18n'
+import { resolveMessageLinks } from '../utils/links'
 import Icon from './Icon.vue'
 import Markdown from './Markdown.vue'
 import ToolCard from './ToolCard.vue'
@@ -345,7 +346,7 @@ function flashCopied(key) {
 }
 
 async function copy(text, key = '') {
-  const value = text || ''
+  const value = resolveMessageLinks(text || '')
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(value)

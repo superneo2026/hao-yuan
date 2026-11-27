@@ -282,3 +282,24 @@ def test_builtin_provider_removal_and_restore(isolated_config):
     # deepseek 始终保留
     view = models_mod.update_config([], removed=["deepseek"])
     assert "deepseek" in {item["name"] for item in view["providers"]}
+
+
+def test_custom_provider_allows_chinese_name(isolated_config):
+    view = models_mod.update_config(
+        [
+            {
+                "name": "我的渠道",
+                "base_url": "http://llm.intranet/v1",
+                "api_key": "sk-cn",
+                "models": ["qwen-max"],
+                "default_model": "qwen-max",
+            }
+        ]
+    )
+    assert "我的渠道" in {item["name"] for item in view["providers"]}
+    assert models_mod.resolve("我的渠道", "qwen-max") == ("我的渠道", "qwen-max")
+
+    with pytest.raises(ValueError):
+        models_mod.update_config(
+            [{"name": "bad name", "base_url": "http://x/v1", "api_key": "k", "models": ["m"]}]
+        )

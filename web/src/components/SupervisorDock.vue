@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, supervisorChatStream } from '../api/client'
 import { state, toast } from '../stores/app'
 import { t } from '../i18n'
+import { resolveMessageLinks } from '../utils/links'
 import Icon from './Icon.vue'
 import Markdown from './Markdown.vue'
 
@@ -192,7 +193,7 @@ function fallbackCopy(value) {
 }
 
 async function copyMessage(message, index) {
-  const value = message?.content || ''
+  const value = resolveMessageLinks(message?.content || '')
   if (!value) return
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {

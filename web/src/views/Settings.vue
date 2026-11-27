@@ -27,6 +27,7 @@ const savingModel = ref(false)
 const discoveringModels = ref(false)
 const refreshingAllModels = ref(false)
 const modelFilter = ref('')
+const showApiKey = ref(false)
 const configRaw = ref({ path: '', text: '', masked: true })
 const showConfigText = ref(true)
 
@@ -240,6 +241,7 @@ async function refreshAllModels() {
 
 function startAddProvider(template = null) {
   modelFilter.value = ''
+  showApiKey.value = false
   modelDraft.value = {
     name: template?.name || '',
     builtin: !!template?.builtin,
@@ -281,6 +283,7 @@ function toggleAllDraftModels() {
 
 function startEditProvider(provider) {
   modelFilter.value = ''
+  showApiKey.value = false
   modelDraft.value = {
     name: provider.name,
     builtin: provider.builtin,
@@ -301,6 +304,7 @@ function startEditProvider(provider) {
 }
 
 function cancelModelDraft() {
+  showApiKey.value = false
   modelDraft.value = null
 }
 
@@ -315,7 +319,7 @@ async function reloadModelConfig() {
 async function saveProvider() {
   const draft = modelDraft.value
   if (!draft) return
-  if (!/^[A-Za-z0-9._-]+$/.test(draft.name.trim())) {
+  if (!/^[\p{L}\p{N}._-]+$/u.test(draft.name.trim())) {
     toast(t('settings.providerName'), 'bad')
     return
   }
@@ -653,7 +657,7 @@ onMounted(async () => {
           <div class="editor-grid">
             <label>
               <span>{{ t('settings.providerName') }}</span>
-              <input v-model="modelDraft.name" class="field mono" :disabled="modelDraft.builtin" placeholder="my-provider" />
+              <input v-model="modelDraft.name" class="field mono" :disabled="modelDraft.builtin" placeholder="my-provider / 我的渠道" />
             </label>
             <label>
               <span>{{ t('settings.baseUrl') }}</span>
@@ -661,7 +665,12 @@ onMounted(async () => {
             </label>
             <label>
               <span>{{ t('settings.apiKey') }}</span>
-              <input v-model="modelDraft.api_key" class="field mono" type="password" :placeholder="modelDraft.has_key ? t('settings.keyKeep') : 'sk-...'" autocomplete="off" @blur="autoDiscoverNewProvider" />
+              <div class="key-field">
+                <input v-model="modelDraft.api_key" class="field mono" :type="showApiKey ? 'text' : 'password'" :placeholder="modelDraft.has_key ? t('settings.keyKeep') : 'sk-...'" autocomplete="off" @blur="autoDiscoverNewProvider" />
+                <button type="button" class="eye-btn" :title="showApiKey ? t('auth.hidePassword') : t('auth.showPassword')" :aria-label="showApiKey ? t('auth.hidePassword') : t('auth.showPassword')" @click="showApiKey = !showApiKey">
+                  <Icon :name="showApiKey ? 'eye-off' : 'eye'" :size="15" />
+                </button>
+              </div>
             </label>
             <label>
               <span>{{ t('settings.maxOutput') }}</span>
@@ -846,11 +855,14 @@ onMounted(async () => {
 .editor-grid label.wide { grid-column: 1 / -1; }
 .editor-grid textarea { resize: vertical; min-height: 84px; }
 .editor-fetch { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.key-field { position: relative; display: flex; }
+.key-field .field { width: 100%; padding-right: 38px; }
+.key-field .eye-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; display: grid; place-items: center; border: none; background: transparent; color: var(--faint); border-radius: 7px; cursor: pointer; }
+.key-field .eye-btn:hover { color: var(--ink); background: var(--surface-3); }
 .editor-models { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
 .editor-models .label { font-size: 11px; color: var(--muted); }
 button.model-chip { cursor: pointer; font-family: inherit; }
-.editor-flags { display: flex; flex-wrap: wrap; gap: 14px; margin: 9px 0; }
-.check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.editor-flags { display: flex; flex-wrap: wrap; gap: 14px; margin: 9px 0; }.check { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
 .btn.danger { color: var(--bad, #d33); }
 @media (max-width: 720px) { .editor-grid { grid-template-columns: 1fr; } }
 </style>
