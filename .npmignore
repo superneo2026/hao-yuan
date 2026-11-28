@@ -1,5 +1,6 @@
 api/env1/
 api/data/*
+api/gitignore_plugins/
 !api/data/.gitkeep
 **/__pycache__/
 **/*.pyc

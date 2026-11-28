@@ -1,6 +1,6 @@
 {
   "name": "haoyuan",
-  "version": "0.2.20261127-1",
+  "version": "0.1.20261128-1",
   "description": "豪源 · HaoYuan — 个人指挥 AI 实现多个 AI 员工异步并行工作的 AI 工作室",
   "bin": {
     "haoyuan": "bin/haoyuan.js"
@@ -9,6 +9,7 @@
     "bin/",
     "api/**",
     "!api/env1/**",
+    "!api/gitignore_plugins/**",
     "!api/data/**",
     "api/data/.gitkeep",
     "!api/**/__pycache__/**",

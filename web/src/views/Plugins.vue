@@ -5,6 +5,7 @@ import {
   installPluginFromCenter,
   loadMarketplace,
   loadPlugins,
+  movePluginSourceByName,
   requestAccountSetup,
   state,
   toast,
@@ -35,15 +36,61 @@ const centerInput = ref(localStorage.getItem('hy.pluginCenterUrl') || state.mark
 const query = ref('')
 const category = ref('all')
 const busyName = ref('')
+const movingName = ref('')
 const installingName = ref('')
 const uploadOpen = ref(false)
 const uploadSource = ref('tracked')
+const sourceFilter = ref('all')
 const uploading = ref(false)
 const dragOver = ref(false)
 const fileInput = ref(null)
 
 const enabledCount = computed(() => state.plugins.filter((plugin) => plugin.enabled).length)
 const accountPlugin = computed(() => state.plugins.find((plugin) => plugin.name === 'user-account'))
+
+function pluginSource(plugin) {
+  return plugin.source === 'gitignored' ? 'gitignored' : 'tracked'
+}
+
+const sourceCounts = computed(() => {
+  const counts = { all: state.plugins.length, tracked: 0, gitignored: 0 }
+  state.plugins.forEach((plugin) => {
+    counts[pluginSource(plugin)] += 1
+  })
+  return counts
+})
+
+const sourceOptions = computed(() => [
+  {
+    value: 'all',
+    label: t('plugins.sourceFilter.all', {}, '全部'),
+    icon: 'layers',
+    count: sourceCounts.value.all,
+    hint: t('plugins.sourceFilter.allHint', {}, '显示仓库插件和本地插件中的所有插件')
+  },
+  {
+    value: 'tracked',
+    label: t('plugins.source.tracked', {}, '仓库插件'),
+    icon: 'git',
+    count: sourceCounts.value.tracked,
+    hint: t('plugins.source.trackedHint', {}, '位于 api/plugins，会提交到 Git 仓库')
+  },
+  {
+    value: 'gitignored',
+    label: t('plugins.source.gitignored', {}, '本地插件'),
+    icon: 'eye-off',
+    count: sourceCounts.value.gitignored,
+    hint: t('plugins.source.gitignoredHint', {}, '位于 api/gitignore_plugins，不会提交到 Git 仓库')
+  }
+])
+
+const filteredPlugins = computed(() =>
+  state.plugins.filter((plugin) => sourceFilter.value === 'all' || pluginSource(plugin) === sourceFilter.value)
+)
+
+const showAccountStrip = computed(
+  () => accountPlugin.value && (sourceFilter.value === 'all' || pluginSource(accountPlugin.value) === sourceFilter.value)
+)
 
 const categories = computed(() => {
   const set = new Set()
@@ -78,13 +125,13 @@ function pluginIcon(plugin) {
 }
 
 function sourceLabel(plugin) {
-  return plugin.source === 'gitignored'
+  return pluginSource(plugin) === 'gitignored'
     ? t('plugins.source.gitignored', {}, '本地插件')
     : t('plugins.source.tracked', {}, '仓库插件')
 }
 
 function sourceHint(plugin) {
-  return plugin.source === 'gitignored'
+  return pluginSource(plugin) === 'gitignored'
     ? t('plugins.source.gitignoredHint', {}, '保存在 api/gitignore_plugins，不提交到 Git')
     : t('plugins.source.trackedHint', {}, '保存在 api/plugins，会提交到 Git')
 }
@@ -124,6 +171,23 @@ async function refresh() {
     await Promise.all([loadPlugins(), loadMarketplace()])
   } catch (error) {
     toast(error.message, 'bad')
+  }
+}
+
+async function moveSource(plugin) {
+  if (plugin.enabled) {
+    toast(t('plugins.moveDisabled'), 'warn')
+    return
+  }
+  const target = pluginSource(plugin) === 'gitignored' ? 'tracked' : 'gitignored'
+  movingName.value = plugin.name
+  try {
+    await movePluginSourceByName(plugin.name, target)
+    if (sourceFilter.value !== 'all') sourceFilter.value = target
+  } catch (error) {
+    toast(error.message, 'bad')
+  } finally {
+    movingName.value = ''
   }
 }
 
@@ -277,7 +341,30 @@ onMounted(() => {
     </div>
 
     <template v-if="tab === 'installed'">
-      <section v-if="accountPlugin" class="account-strip" :class="accountState">
+      <div class="source-filter">
+        <span class="source-filter-label"><Icon name="layers" :size="14" /> {{ t('plugins.sourceFilter.label') }}</span>
+        <div class="source-chips">
+          <button
+            v-for="(option, index) in sourceOptions"
+            :key="option.value"
+            class="source-chip"
+            :class="{
+              active: sourceFilter === option.value,
+              'tooltip-start': index === 0,
+              'tooltip-end': index === sourceOptions.length - 1
+            }"
+            :aria-pressed="sourceFilter === option.value"
+            @click="sourceFilter = option.value"
+          >
+            <Icon :name="option.icon" :size="13" />
+            {{ option.label }}
+            <span class="chip-count">{{ option.count }}</span>
+            <span class="source-tooltip" role="tooltip">{{ option.hint }}</span>
+          </button>
+        </div>
+      </div>
+
+      <section v-if="showAccountStrip" class="account-strip" :class="accountState">
         <span class="account-strip-icon"><Icon name="shield" :size="20" /></span>
         <div class="account-strip-copy">
           <div class="row" style="gap: 8px">
@@ -294,9 +381,9 @@ onMounted(() => {
         </button>
       </section>
 
-      <div class="plugin-grid">
+      <div v-if="filteredPlugins.length" class="plugin-grid">
         <article
-          v-for="plugin in state.plugins"
+          v-for="plugin in filteredPlugins"
           :key="plugin.name"
           class="plugin-card"
           :class="{ disabled: !plugin.enabled, error: plugin.error }"
@@ -317,10 +404,10 @@ onMounted(() => {
           <div class="plugin-tags">
             <span
               class="badge source-badge"
-              :class="plugin.source === 'gitignored' ? 'warn' : 'brand'"
+              :class="pluginSource(plugin) === 'gitignored' ? 'warn' : 'brand'"
               :title="sourceHint(plugin)"
             >
-              <Icon :name="plugin.source === 'gitignored' ? 'eye-off' : 'git'" :size="11" />
+              <Icon :name="pluginSource(plugin) === 'gitignored' ? 'eye-off' : 'git'" :size="11" />
               {{ sourceLabel(plugin) }}
             </span>
             <span v-for="item in contributions(plugin)" :key="item" class="badge">{{ item }}</span>
@@ -342,6 +429,18 @@ onMounted(() => {
             <button v-if="plugin.name === 'user-account'" class="btn sm" @click="accountAction">
               <Icon name="settings" :size="13" /> {{ t('plugins.settings') }}
             </button>
+            <button
+              v-if="plugin.name !== 'user-account'"
+              class="btn sm source-move-btn"
+              :class="{ 'is-locked': plugin.enabled }"
+              :disabled="movingName === plugin.name || plugin.enabled"
+              :title="plugin.enabled ? t('plugins.moveDisabled') : pluginSource(plugin) === 'gitignored' ? t('plugins.moveToTrackedHint') : t('plugins.moveToGitignoredHint')"
+              @click="moveSource(plugin)"
+            >
+              <span v-if="movingName === plugin.name" class="spinner" style="width: 11px; height: 11px" />
+              <Icon v-else :name="pluginSource(plugin) === 'gitignored' ? 'git' : 'eye-off'" :size="13" />
+              {{ pluginSource(plugin) === 'gitignored' ? t('plugins.moveToTracked') : t('plugins.moveToGitignored') }}
+            </button>
             <span class="spacer" />
             <button
               v-if="!corePlugins.has(plugin.name)"
@@ -357,6 +456,15 @@ onMounted(() => {
           </div>
         </article>
       </div>
+
+      <section v-else class="empty-market card source-empty">
+        <span class="source-empty-icon"><Icon name="puzzle" :size="26" /></span>
+        <b>{{ t('plugins.filterEmptyTitle') }}</b>
+        <span>{{ t('plugins.filterEmptyDesc') }}</span>
+        <button class="btn sm primary" style="margin-top: 8px" @click="openUpload">
+          <Icon name="upload" :size="13" /> {{ t('plugins.upload') }}
+        </button>
+      </section>
 
       <section class="manual-card card">
         <div class="manual-head">
@@ -681,6 +789,68 @@ onMounted(() => {
 .account-strip-copy b { font-size: 14px; letter-spacing: -.01em; }
 .account-strip-copy > span { display: block; color: var(--muted); font-size: 11.5px; }
 
+.source-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; animation: hy-rise .4s .02s var(--ease) both; }
+.source-filter-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; }
+.source-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.source-chip {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  color: var(--muted);
+  font-size: 11.5px;
+  transition: all .16s var(--ease);
+}
+.source-chip:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface); }
+.source-chip.active { color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 6%, transparent); }
+.chip-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: color-mix(in srgb, var(--ink) 7%, transparent); font-size: 10px; font-weight: 700; color: var(--muted); }
+.source-chip.active .chip-count { background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand); }
+.source-tooltip {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  min-width: 190px;
+  max-width: min(280px, calc(100vw - 40px));
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 94%, transparent);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.55;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 14px 30px color-mix(in srgb, #000 22%, transparent);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .16s var(--ease), transform .16s var(--ease), visibility .16s;
+  z-index: 30;
+}
+.source-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: color-mix(in srgb, var(--ink) 94%, transparent);
+}
+.source-chip.tooltip-start .source-tooltip { left: 0; transform: translate(0, 4px); }
+.source-chip.tooltip-start .source-tooltip::after { left: 16px; }
+.source-chip.tooltip-end .source-tooltip { left: auto; right: 0; transform: translate(0, 4px); }
+.source-chip.tooltip-end .source-tooltip::after { left: auto; right: 16px; }
+.source-chip:hover .source-tooltip,
+.source-chip:focus-visible .source-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.source-chip.tooltip-start:hover .source-tooltip,
+.source-chip.tooltip-start:focus-visible .source-tooltip,
+.source-chip.tooltip-end:hover .source-tooltip,
+.source-chip.tooltip-end:focus-visible .source-tooltip { transform: translate(0, 0); }
+.source-empty { padding: 46px 24px; }
+.source-empty-icon { width: 54px; height: 54px; border-radius: 16px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); border: 1px solid var(--brand-line); margin-bottom: 4px; }
 .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-bottom: 22px; animation: hy-rise .5s .08s var(--ease) both; }
 .plugin-card {
   position: relative;
@@ -725,6 +895,10 @@ onMounted(() => {
 .source-badge { display: inline-flex; align-items: center; gap: 4px; }
 .plugin-error { display: flex; gap: 6px; align-items: center; color: var(--bad); font-size: 11px; background: var(--bad-soft); border-radius: 8px; padding: 6px 8px; }
 .plugin-actions { display: flex; align-items: center; gap: 6px; padding-top: 11px; border-top: 1px solid var(--line); }
+.source-move-btn { color: var(--brand); border-color: var(--brand-line); background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.source-move-btn:hover { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.source-move-btn.is-locked { opacity: .55; color: var(--muted); border-color: var(--line); background: transparent; }
+.source-move-btn.is-locked:hover { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
 .delete-btn { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); background: transparent; }
 .delete-btn:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); border-color: color-mix(in srgb, var(--bad) 46%, var(--line)); color: var(--bad); }
 .delete-btn.delete-locked { opacity: .55; color: var(--muted); border-color: var(--line); }

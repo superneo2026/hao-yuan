@@ -212,6 +212,8 @@ export const api = {
     form.append('source', source)
     return request('/api/plugins/upload', { method: 'POST', body: form })
   },
+  movePluginSource: (name, source) =>
+    request(`/api/plugins/${name}/source`, { method: 'POST', body: JSON.stringify({ source }) }),
   uninstallPlugin: (name, purgeData = false) =>
     request(`/api/plugins/${name}?purge_data=${purgeData ? 'true' : 'false'}`, { method: 'DELETE' }),
 

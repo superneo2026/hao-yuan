@@ -45,6 +45,10 @@ class InstallBody(BaseModel):
     download_url: str = ""
 
 
+class SourceBody(BaseModel):
+    source: str = ""
+
+
 def _validated_url(value: str, label: str = "插件中心地址") -> str:
     text = str(value or "").strip()
     parsed = urlsplit(text)
@@ -232,8 +236,14 @@ def _extract_package(data: bytes, target_dir: Path | None = None) -> dict:
         target = destination_root / name
         if target.resolve().parent != destination_root.resolve():
             raise ValueError("插件名称不合法")
-        if target.exists():
-            raise FileExistsError(f"插件 {name} 已安装")
+        for directory in _plugin_dirs():
+            candidate = directory / name
+            if not candidate.is_dir():
+                continue
+            if candidate.resolve() == target.resolve():
+                raise FileExistsError(f"插件 {name} 已安装")
+            location = "仓库插件目录（api/plugins）" if directory.resolve() == PLUGINS_DIR.resolve() else "本地插件目录（api/gitignore_plugins）"
+            raise FileExistsError(f"插件 {name} 已存在于{location}，请先删除旧版本后再上传")
         shutil.move(str(staging_root), str(target))
         staging_root = None
         return {
@@ -391,8 +401,8 @@ async def upload_plugin(file: UploadFile = File(...), source: str = Form("tracke
         return fail("插件包超过大小限制", 400)
     try:
         result = _extract_package(data, target_dir)
-    except FileExistsError:
-        return fail("插件已安装，请先关闭并删除旧版本后再上传", 400)
+    except FileExistsError as exc:
+        return fail(str(exc) or "插件已安装，请先关闭并删除旧版本后再上传", 400)
     except (ValueError, OSError) as exc:
         return fail(f"上传失败: {exc}", 400)
     harness = await get_harness()
@@ -407,6 +417,73 @@ async def upload_plugin(file: UploadFile = File(...), source: str = Form("tracke
             "message": "插件已上传并即时生效。" if state["loaded"] else "插件已上传。",
         },
         "插件上传成功",
+    )
+
+
+@router.post("/plugins/{name}/source")
+async def move_plugin_source(name: str, body: SourceBody):
+    if not NAME_RE.match(name or ""):
+        return fail("插件名称不合法", 400)
+    target_source = body.source
+    target_dir = _upload_target_dir(target_source)
+    if target_dir is None:
+        return fail("目标保存位置不合法", 400)
+    current_dir = None
+    for directory in _plugin_dirs():
+        candidate = directory / name
+        if candidate.is_dir():
+            current_dir = candidate
+            break
+    if current_dir is None:
+        return fail("插件未安装", 404)
+    target = target_dir / name
+    if current_dir.resolve() == target.resolve():
+        return ok(
+            {
+                "name": name,
+                "source": target_source,
+                "changed": False,
+                "restart_required": False,
+            },
+            "插件已在该位置",
+        )
+    if target.exists():
+        return fail("目标位置已存在同名插件", 409)
+    harness = await get_harness()
+    manifest = harness.plugins.manifests.get(name) or {}
+    if manifest.get("always_load"):
+        return fail("常驻插件暂不支持转换来源", 400)
+    if harness.plugins.enabled.get(name, False):
+        return fail("请先关闭插件后再转换来源", 400)
+    routers = harness.plugins.routers_for(name)
+    if harness.plugins.loaded.get(name) or name in harness.plugins.contexts:
+        await harness.plugins.unload_one(name)
+        harness.unmount_plugin_routers(routers)
+        harness.plugins.routers.pop(name, None)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(current_dir), str(target))
+    except OSError as exc:
+        return fail(f"转换来源失败: {exc}", 500)
+    loaded_manifest = harness.plugins.manifests.get(name)
+    if loaded_manifest is None:
+        harness.plugins.discover()
+    else:
+        loaded_manifest["_dir"] = str(target)
+        loaded_manifest["_source"] = target_source
+    harness.plugins.sources[name] = target_source
+    return ok(
+        {
+            "name": name,
+            "source": target_source,
+            "changed": True,
+            "enabled": bool(harness.plugins.enabled.get(name, False)),
+            "loaded": bool(harness.plugins.loaded.get(name, False)),
+            "deleted_path": str(current_dir),
+            "target_path": str(target),
+            "restart_required": False,
+        },
+        "插件来源已转换",
     )
 
 

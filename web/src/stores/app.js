@@ -1411,6 +1411,13 @@ export async function uploadPluginPackage(file, source = 'tracked') {
   return data
 }
 
+export async function movePluginSourceByName(name, source) {
+  const data = await api.movePluginSource(name, source)
+  await Promise.all([loadPlugins(), loadMarketplace()])
+  toast(t('plugins.sourceMoved'), 'good', 6000)
+  return data
+}
+
 export async function uninstallPluginByName(name, purgeData = false) {
   const data = await api.uninstallPlugin(name, purgeData)
   await Promise.all([loadPlugins(), loadMarketplace()])
