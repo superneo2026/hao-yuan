@@ -72,6 +72,7 @@ class PluginManager:
         self.plugin_dirs = (self.plugins_dir, *(Path(directory) for directory in extra_dirs))
         self.db_path = Path(db_path)
         self.manifests: dict[str, dict[str, Any]] = {}
+        self.sources: dict[str, str] = {}
         self.contexts: dict[str, PluginContext] = {}
         self.loaded: dict[str, bool] = {}
         self.errors: dict[str, str] = {}
@@ -106,6 +107,9 @@ class PluginManager:
                     continue
                 manifest["name"] = name
                 manifest["_dir"] = str(manifest_path.parent)
+                source = "tracked" if directory.resolve() == self.plugins_dir.resolve() else "gitignored"
+                manifest["_source"] = source
+                self.sources[name] = source
                 self.manifests[name] = manifest
                 state = states.get(name)
                 self.enabled[name] = (
@@ -284,6 +288,7 @@ class PluginManager:
                     "error": self.errors.get(name, ""),
                     "contributes": manifest.get("contributes", {}),
                     "frontend": manifest.get("frontend", {}),
+                    "source": manifest.get("_source", self.sources.get(name, "tracked")),
                     "purgeable": bool(manifest.get("data_files")),
                 }
             )

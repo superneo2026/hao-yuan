@@ -206,9 +206,10 @@ export const api = {
   togglePlugin: (name, enabled) => request(`/api/plugins/${name}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   marketplace: (center = '') => request(`/api/marketplace/plugins${qs({ center })}`),
   installPlugin: (body) => request('/api/marketplace/install', { method: 'POST', body: JSON.stringify(body) }),
-  uploadPlugin: (file) => {
+  uploadPlugin: (file, source = 'tracked') => {
     const form = new FormData()
     form.append('file', file)
+    form.append('source', source)
     return request('/api/plugins/upload', { method: 'POST', body: form })
   },
   uninstallPlugin: (name, purgeData = false) =>

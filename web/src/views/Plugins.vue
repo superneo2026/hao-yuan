@@ -37,6 +37,7 @@ const category = ref('all')
 const busyName = ref('')
 const installingName = ref('')
 const uploadOpen = ref(false)
+const uploadSource = ref('tracked')
 const uploading = ref(false)
 const dragOver = ref(false)
 const fileInput = ref(null)
@@ -74,6 +75,18 @@ function pluginTitle(plugin) {
 
 function pluginIcon(plugin) {
   return icons[plugin.name] || 'puzzle'
+}
+
+function sourceLabel(plugin) {
+  return plugin.source === 'gitignored'
+    ? t('plugins.source.gitignored', {}, '本地插件')
+    : t('plugins.source.tracked', {}, '仓库插件')
+}
+
+function sourceHint(plugin) {
+  return plugin.source === 'gitignored'
+    ? t('plugins.source.gitignoredHint', {}, '保存在 api/gitignore_plugins，不提交到 Git')
+    : t('plugins.source.trackedHint', {}, '保存在 api/plugins，会提交到 Git')
 }
 
 function contributions(plugin) {
@@ -180,6 +193,11 @@ function chooseFile() {
   fileInput.value?.click()
 }
 
+function openUpload() {
+  uploadSource.value = 'tracked'
+  uploadOpen.value = true
+}
+
 async function handleFile(file) {
   if (!file) return
   if (!file.name.toLowerCase().endsWith('.zip')) {
@@ -188,7 +206,7 @@ async function handleFile(file) {
   }
   uploading.value = true
   try {
-    await uploadPluginPackage(file)
+    await uploadPluginPackage(file, uploadSource.value)
     uploadOpen.value = false
   } catch (error) {
     toast(error.message, 'bad')
@@ -230,7 +248,7 @@ onMounted(() => {
         <button class="btn hero-btn" @click="refresh">
           <Icon name="refresh" :size="15" /> {{ t('common.refresh') }}
         </button>
-        <button v-if="tab === 'installed'" class="btn primary hero-btn" @click="uploadOpen = true">
+        <button v-if="tab === 'installed'" class="btn primary hero-btn" @click="openUpload">
           <Icon name="upload" :size="15" /> {{ t('plugins.upload') }}
         </button>
         <span v-else class="badge warn upload-unsupported">
@@ -297,6 +315,14 @@ onMounted(() => {
           </div>
           <p class="plugin-desc">{{ pluginDescription(plugin.name, plugin.description) }}</p>
           <div class="plugin-tags">
+            <span
+              class="badge source-badge"
+              :class="plugin.source === 'gitignored' ? 'warn' : 'brand'"
+              :title="sourceHint(plugin)"
+            >
+              <Icon :name="plugin.source === 'gitignored' ? 'eye-off' : 'git'" :size="11" />
+              {{ sourceLabel(plugin) }}
+            </span>
             <span v-for="item in contributions(plugin)" :key="item" class="badge">{{ item }}</span>
             <span v-if="corePlugins.has(plugin.name)" class="badge brand">{{ t('plugins.core') }}</span>
             <span v-if="plugin.requires?.length" class="badge">{{ t('plugins.requires', { items: plugin.requires.join(', ') }) }}</span>
@@ -457,6 +483,27 @@ onMounted(() => {
           <button class="icon-btn" :disabled="uploading" @click="uploadOpen = false"><Icon name="close" :size="15" /></button>
         </div>
         <div class="modal-body">
+          <div class="upload-target">
+            <span class="label">{{ t('plugins.saveLocation') }}</span>
+            <div class="target-grid">
+              <label class="target-option" :class="{ active: uploadSource === 'tracked' }">
+                <input v-model="uploadSource" type="radio" value="tracked" :disabled="uploading" />
+                <span class="target-icon"><Icon name="git" :size="16" /></span>
+                <span class="target-copy">
+                  <b>{{ t('plugins.saveTracked') }}</b>
+                  <span>{{ t('plugins.saveTrackedDesc') }}</span>
+                </span>
+              </label>
+              <label class="target-option" :class="{ active: uploadSource === 'gitignored' }">
+                <input v-model="uploadSource" type="radio" value="gitignored" :disabled="uploading" />
+                <span class="target-icon"><Icon name="eye-off" :size="16" /></span>
+                <span class="target-copy">
+                  <b>{{ t('plugins.saveGitignored') }}</b>
+                  <span>{{ t('plugins.saveGitignoredDesc') }}</span>
+                </span>
+              </label>
+            </div>
+          </div>
           <div
             class="drop-zone"
             :class="{ active: dragOver }"
@@ -675,6 +722,7 @@ onMounted(() => {
 .plugin-title h3 { margin: 0; font-size: 14px; letter-spacing: -.015em; }
 .plugin-desc { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; flex: 1; }
 .plugin-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.source-badge { display: inline-flex; align-items: center; gap: 4px; }
 .plugin-error { display: flex; gap: 6px; align-items: center; color: var(--bad); font-size: 11px; background: var(--bad-soft); border-radius: 8px; padding: 6px 8px; }
 .plugin-actions { display: flex; align-items: center; gap: 6px; padding-top: 11px; border-top: 1px solid var(--line); }
 .delete-btn { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); background: transparent; }
@@ -767,6 +815,24 @@ onMounted(() => {
 
 .upload-unsupported { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 6px 14px; border-radius: 11px; white-space: normal; }
 .upload-modal { width: min(560px, calc(100vw - 32px)); }
+.upload-target { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+.target-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.target-option {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color .16s var(--ease), background .16s var(--ease);
+}
+.target-option:hover { border-color: var(--line-strong); }
+.target-option.active { border-color: var(--brand-line); background: var(--brand-soft); }
+.target-option input { margin-top: 3px; width: 14px; height: 14px; flex: 0 0 auto; accent-color: var(--brand); }
+.target-icon { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 9px; display: grid; place-items: center; background: var(--surface); color: var(--brand); border: 1px solid var(--line); }
+.target-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.target-copy b { font-size: 12.5px; }
+.target-copy > span { color: var(--muted); font-size: 10.5px; line-height: 1.45; }
 .upload-head-icon { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); border: 1px solid var(--brand-line); }
 .drop-zone { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 30px 20px; border: 1.5px dashed var(--line-strong); border-radius: 15px; background: var(--surface-2); text-align: center; cursor: pointer; transition: all .16s var(--ease); }
 .drop-zone:hover, .drop-zone.active { border-color: var(--brand); background: var(--brand-soft); }
@@ -811,6 +877,7 @@ onMounted(() => {
   .account-strip { flex-wrap: wrap; padding: 15px; }
   .account-strip .btn { width: 100%; justify-content: center; }
   .manual-card { padding: 16px; }
+  .target-grid { grid-template-columns: 1fr; }
   .category-row { width: 100%; }
   .market-toolbar { align-items: stretch; }
 }

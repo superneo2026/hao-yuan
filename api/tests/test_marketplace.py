@@ -35,6 +35,34 @@ def test_upload_endpoint_installs_package(client, tmp_path, monkeypatch):
     assert (tmp_path / "plugins" / "upload-demo" / "plugin.json").is_file()
 
 
+def test_upload_endpoint_can_target_gitignored_directory(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(marketplace, "PLUGINS_DIR", tmp_path / "plugins")
+    monkeypatch.setattr(marketplace, "GITIGNORE_PLUGINS_DIR", tmp_path / "gitignore_plugins")
+    data = _package({"plugin.json": _manifest("ignored-demo"), "plugin.py": "def register(ctx):\n    pass\n"})
+    response = client.post(
+        "/api/plugins/upload",
+        files={"file": ("ignored-demo.zip", data, "application/zip")},
+        data={"source": "gitignored"},
+    )
+    body = response.json()
+    assert body["code"] == 200, body
+    assert body["data"]["source"] == "gitignored"
+    assert (tmp_path / "gitignore_plugins" / "ignored-demo" / "plugin.json").is_file()
+    assert not (tmp_path / "plugins" / "ignored-demo").exists()
+
+
+def test_upload_endpoint_rejects_unknown_source(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(marketplace, "PLUGINS_DIR", tmp_path / "plugins")
+    monkeypatch.setattr(marketplace, "GITIGNORE_PLUGINS_DIR", tmp_path / "gitignore_plugins")
+    data = _package({"plugin.json": _manifest("bad-source"), "plugin.py": "def register(ctx):\n    pass\n"})
+    response = client.post(
+        "/api/plugins/upload",
+        files={"file": ("bad-source.zip", data, "application/zip")},
+        data={"source": "elsewhere"},
+    )
+    assert response.json()["code"] != 200
+
+
 def test_extract_package_installs_valid_plugin(tmp_path, monkeypatch):
     monkeypatch.setattr(marketplace, "PLUGINS_DIR", tmp_path / "plugins")
     data = _package({"plugin.json": _manifest(), "plugin.py": "def register(ctx):\n    pass\n"})

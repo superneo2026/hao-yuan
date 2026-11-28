@@ -1402,8 +1402,8 @@ export async function installPluginFromCenter(plugin) {
   return data
 }
 
-export async function uploadPluginPackage(file) {
-  const data = await api.uploadPlugin(file)
+export async function uploadPluginPackage(file, source = 'tracked') {
+  const data = await api.uploadPlugin(file, source)
   await Promise.all([loadPlugins(), loadMarketplace()])
   await checkAuth()
   await loadRemoteManagement()

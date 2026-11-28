@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 import httpx
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 from pydantic import BaseModel
 
 from configs.configs import (
@@ -152,7 +152,8 @@ def _is_unsafe_info(info: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(mode)
 
 
-def _extract_package(data: bytes) -> dict:
+def _extract_package(data: bytes, target_dir: Path | None = None) -> dict:
+    destination_root = Path(target_dir) if target_dir is not None else PLUGINS_DIR
     if not data:
         raise ValueError("插件包为空")
     if len(data) > PLUGIN_PACKAGE_MAX_BYTES:
@@ -170,7 +171,8 @@ def _extract_package(data: bytes) -> dict:
 
     names = [info.filename.replace("\\", "/") for info in infos if not info.is_dir()]
     prefix = _zip_prefix(names)
-    staging_root = Path(tempfile.mkdtemp(prefix=".haoyuan-plugin-", dir=str(PLUGINS_DIR.parent)))
+    destination_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix=".haoyuan-plugin-", dir=str(destination_root.parent)))
     try:
         written_files = 0
         written_bytes = 0
@@ -226,9 +228,9 @@ def _extract_package(data: bytes) -> dict:
             if not isinstance(value, str) or not value.strip() or len(value) > limit:
                 raise ValueError(f"plugin.json 缺少或包含不合法的字段: {key}")
 
-        PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-        target = PLUGINS_DIR / name
-        if target.resolve().parent != PLUGINS_DIR.resolve():
+        destination_root.mkdir(parents=True, exist_ok=True)
+        target = destination_root / name
+        if target.resolve().parent != destination_root.resolve():
             raise ValueError("插件名称不合法")
         if target.exists():
             raise FileExistsError(f"插件 {name} 已安装")
@@ -366,8 +368,19 @@ async def install_plugin(body: InstallBody):
         return fail(f"安装失败: {exc}", 400)
 
 
+def _upload_target_dir(source: str) -> Path | None:
+    if source == "gitignored":
+        return GITIGNORE_PLUGINS_DIR
+    if source == "tracked":
+        return PLUGINS_DIR
+    return None
+
+
 @router.post("/plugins/upload")
-async def upload_plugin(file: UploadFile = File(...)):
+async def upload_plugin(file: UploadFile = File(...), source: str = Form("tracked")):
+    target_dir = _upload_target_dir(source)
+    if target_dir is None:
+        return fail("插件保存位置不合法", 400)
     filename = (file.filename or "").lower()
     if not filename.endswith(".zip"):
         return fail("请上传 .zip 格式的插件包", 400)
@@ -377,7 +390,7 @@ async def upload_plugin(file: UploadFile = File(...)):
     if len(data) > PLUGIN_PACKAGE_MAX_BYTES:
         return fail("插件包超过大小限制", 400)
     try:
-        result = _extract_package(data)
+        result = _extract_package(data, target_dir)
     except FileExistsError:
         return fail("插件已安装，请先关闭并删除旧版本后再上传", 400)
     except (ValueError, OSError) as exc:
@@ -388,6 +401,7 @@ async def upload_plugin(file: UploadFile = File(...)):
     return ok(
         {
             **result,
+            "source": source,
             **state,
             "restart_required": False,
             "message": "插件已上传并即时生效。" if state["loaded"] else "插件已上传。",
