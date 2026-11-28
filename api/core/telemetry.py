@@ -1,7 +1,8 @@
 # hao-yuan/api/core/telemetry.py
 """匿名使用统计心跳（透明、可关闭）。
 
-- 上报内容只有：本地随机生成的 install_id（UUID）、机器标识哈希 device_id（用于同一台机器多个实例去重）、客户端版本、操作系统类型
+- 上报内容只有：本地随机生成的 install_id（UUID）、机器标识哈希 device_id（用于同一台机器多个实例去重）、
+  进程级随机 process_id（用于区分同一目录/同一设备上同时运行的多个豪源进程）、pid、客户端版本、操作系统类型
 - 不包含：用户名、邮箱、文件内容、路径、对话内容等任何个人数据
 - 服务端会记录来源 IP（用于区分设备/排查来源，保留 90 天）与 IP 单向哈希
 - 关闭方式：设置环境变量 HAOYUAN_TELEMETRY=0（或 off/false/no）
@@ -13,8 +14,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import platform
 import secrets
+import time
 import uuid
 from pathlib import Path
 
@@ -31,6 +34,11 @@ STATE_PATH = DATA_DIR / "telemetry.json"
 CENTER_URL_PATH = DATA_DIR / "plugin_center_url.txt"
 
 _task: asyncio.Task | None = None
+
+# 进程级随机标识：只在内存中生成，不落盘、不加锁。同一目录多开会得到不同的
+# process_id，服务端据此把同一 install_id（同一 data 目录）下的多个进程分别计数。
+_PROCESS_ID = secrets.token_hex(8)
+_STARTED_AT = int(time.time())
 
 
 def enabled() -> bool:
@@ -139,6 +147,9 @@ def _payload() -> bytes:
     body = {
         "install_id": _load_install_id(),
         "device_id": _device_id(),
+        "process_id": _PROCESS_ID,
+        "pid": os.getpid(),
+        "started_at": _STARTED_AT,
         "interval": INTERVAL_SEC,
         "version": APP_VERSION,
         "platform": f"{platform.system()} {platform.release()}",
@@ -174,7 +185,8 @@ def start() -> None:
     _task = asyncio.create_task(_loop())
     print(
         "[Telemetry] anonymous usage heartbeat enabled "
-        f"(install_id={_load_install_id()[:8]}…, device_id={_device_id()[:8]}…) → {center_url()}{HEARTBEAT_PATH}；"
+        f"(install_id={_load_install_id()[:8]}…, device_id={_device_id()[:8]}…, process_id={_PROCESS_ID}, pid={os.getpid()}) "
+        f"→ {center_url()}{HEARTBEAT_PATH}；"
         "匿名统计说明见插件中心 /api/plugin-center/privacy",
         flush=True,
     )
@@ -186,7 +198,13 @@ async def _send_offline() -> None:
         return
     try:
         body = json.dumps(
-            {"install_id": _load_install_id(), "device_id": _device_id()},
+            {
+                "install_id": _load_install_id(),
+                "device_id": _device_id(),
+                "process_id": _PROCESS_ID,
+                "pid": os.getpid(),
+                "started_at": _STARTED_AT,
+            },
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
