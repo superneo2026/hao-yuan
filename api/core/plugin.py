@@ -197,6 +197,11 @@ class PluginManager:
                 self.loaded[name] = False
                 continue
             self._load_manifest(manifest, states)
+        # 安装全局中间件的插件（例如账号访问门禁）即使被关闭也必须加载，
+        # 否则它的路由与中间件不会注册；是否真正生效由插件自己的状态决定。
+        for name, manifest in self.manifests.items():
+            if manifest.get("always_load") and not self.loaded.get(name):
+                self._load_manifest(manifest, states)
 
     async def _run_startup(self, name: str) -> None:
         context = self.contexts.get(name)
@@ -279,6 +284,7 @@ class PluginManager:
                     "error": self.errors.get(name, ""),
                     "contributes": manifest.get("contributes", {}),
                     "frontend": manifest.get("frontend", {}),
+                    "purgeable": bool(manifest.get("data_files")),
                 }
             )
         return out

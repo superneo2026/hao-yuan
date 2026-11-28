@@ -138,6 +138,7 @@ async function install(item) {
 
 const pendingRemove = ref(null)
 const removing = ref(false)
+const purgeData = ref(false)
 
 function remove(plugin) {
   if (plugin.enabled) {
@@ -145,6 +146,7 @@ function remove(plugin) {
     return
   }
   pendingRemove.value = plugin
+  purgeData.value = false
 }
 
 async function confirmRemove() {
@@ -152,7 +154,7 @@ async function confirmRemove() {
   if (!plugin || removing.value) return
   removing.value = true
   try {
-    await uninstallPluginByName(plugin.name)
+    await uninstallPluginByName(plugin.name, purgeData.value)
     pendingRemove.value = null
   } catch (error) {
     toast(error.message, 'bad')
@@ -498,6 +500,13 @@ onMounted(() => {
             <li><Icon name="trash" :size="13" /> {{ t('plugins.uninstallPoint1') }}</li>
             <li><Icon name="alert" :size="13" /> {{ t('plugins.uninstallPoint2') }}</li>
           </ul>
+          <label v-if="pendingRemove.purgeable" class="purge-option">
+            <input v-model="purgeData" type="checkbox" :disabled="removing" />
+            <div>
+              <b>{{ t('plugins.uninstallPurge') }}</b>
+              <span>{{ t('plugins.uninstallPurgeHint') }}</span>
+            </div>
+          </label>
         </div>
         <div class="modal-foot">
           <button class="btn" :disabled="removing" @click="pendingRemove = null">{{ t('common.cancel') }}</button>
@@ -775,6 +784,10 @@ onMounted(() => {
 .confirm-list li { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .confirm-list li .icon { flex: 0 0 auto; margin-top: 2px; color: var(--bad); }
 .confirm-list li:last-child .icon { color: var(--warn); }
+.purge-option { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); cursor: pointer; }
+.purge-option input { margin-top: 2px; width: 15px; height: 15px; flex: 0 0 auto; }
+.purge-option b { display: block; font-size: 12.5px; }
+.purge-option span { display: block; font-size: 11px; color: var(--muted); line-height: 1.5; }
 
 @keyframes hy-rise {
   from { opacity: 0; transform: translateY(12px); }

@@ -988,6 +988,12 @@ def build_router(store: AuthStore) -> APIRouter:
 def register(ctx) -> None:
     store = AuthStore(STATE_PATH)
     store.ensure()
+    # 以插件管理器中的启用状态为准，避免出现「开关显示开启、门禁却没生效」。
+    try:
+        enabled = bool(ctx.harness.plugins.enabled.get(ctx.name, True))
+    except Exception:
+        enabled = True
+    store.set_enabled(enabled)
     cli_secret()
     ctx.add_router(build_router(store))
     ctx.add_middleware(AuthGateMiddleware, state_path=str(STATE_PATH))

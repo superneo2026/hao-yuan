@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 from configs.configs import (
+    DATA_DIR,
     GITIGNORE_PLUGINS_DIR,
     PLUGIN_CATALOG_MAX_BYTES,
     PLUGIN_CENTER_URL,
@@ -396,7 +397,7 @@ async def upload_plugin(file: UploadFile = File(...)):
 
 
 @router.delete("/plugins/{name}")
-async def uninstall_plugin(name: str):
+async def uninstall_plugin(name: str, purge_data: bool = False):
     if not NAME_RE.match(name or ""):
         return fail("插件名称不合法", 400)
     if name in CORE_PLUGINS:
@@ -412,6 +413,15 @@ async def uninstall_plugin(name: str):
     harness = await get_harness()
     if harness.plugins.enabled.get(name, False):
         return fail("请先关闭插件后再删除", 400)
+    manifest: dict = {}
+    manifest_path = target / "plugin.json"
+    if manifest_path.is_file():
+        try:
+            loaded_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_manifest, dict):
+                manifest = loaded_manifest
+        except (OSError, ValueError):
+            manifest = {}
     routers = harness.plugins.routers_for(name)
     await harness.plugins.unload_one(name)
     harness.unmount_plugin_routers(routers)
@@ -426,7 +436,30 @@ async def uninstall_plugin(name: str):
     harness.plugins.loaded.pop(name, None)
     harness.plugins.contexts.pop(name, None)
     await harness.call_hook("plugin.toggled", name, False)
+    purged: list[str] = []
+    if purge_data:
+        data_root = DATA_DIR.resolve()
+        for item in manifest.get("data_files") or []:
+            if not isinstance(item, str):
+                continue
+            filename = item.strip()
+            if not filename or "/" in filename or "\\" in filename or filename in {".", ".."}:
+                continue
+            path = (data_root / filename).resolve()
+            if path.parent != data_root or not path.is_file():
+                continue
+            try:
+                path.unlink()
+                purged.append(filename)
+            except OSError:
+                continue
     return ok(
-        {"name": name, "installed": False, "deleted_path": str(target), "restart_required": False},
-        "插件及其源码已删除",
+        {
+            "name": name,
+            "installed": False,
+            "deleted_path": str(target),
+            "purged_data": purged,
+            "restart_required": False,
+        },
+        "插件及其源码已删除" + ("，配置已清除" if purged else ""),
     )

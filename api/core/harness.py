@@ -163,6 +163,11 @@ class Harness:
         if name == "user-account":
             # Account protection lives in a global middleware that is installed at
             # boot; its on/off switch is handled by the plugin's own state file.
+            # Ensure the router is (re)mounted after a reinstall from the center.
+            if enabled and not self.plugins.loaded.get(name):
+                loaded = await self.plugins.load_one(name)
+                if loaded:
+                    self.mount_plugin_routers(self.plugins.routers_for(name))
             return True
         if enabled:
             loaded = await self.plugins.load_one(name)

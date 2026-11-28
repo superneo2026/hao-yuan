@@ -1411,8 +1411,8 @@ export async function uploadPluginPackage(file) {
   return data
 }
 
-export async function uninstallPluginByName(name) {
-  const data = await api.uninstallPlugin(name)
+export async function uninstallPluginByName(name, purgeData = false) {
+  const data = await api.uninstallPlugin(name, purgeData)
   await Promise.all([loadPlugins(), loadMarketplace()])
   await checkAuth()
   await loadRemoteManagement()

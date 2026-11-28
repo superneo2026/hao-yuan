@@ -6,6 +6,8 @@
   "author": "HaoYuan",
   "requires": [],
   "default_enabled": true,
+  "always_load": true,
+  "data_files": ["user_account.json", "smtp.json", "cli-secret"],
   "backend": "plugin.py",
   "contributes": {
     "routes": 6,

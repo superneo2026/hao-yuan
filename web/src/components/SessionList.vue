@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { state, selectSession, hideSession, purgeSession } from '../stores/app'
 import { formatRelativeTime, kindLabel, sessionTitle, t } from '../i18n'
@@ -7,6 +7,10 @@ import Icon from './Icon.vue'
 
 const emit = defineEmits(['new'])
 const router = useRouter()
+
+const pageSize = 20
+const currentPage = ref(1)
+const pageInput = ref('1')
 
 const kindIcon = {
   auto: 'sparkles',
@@ -46,6 +50,87 @@ const groups = computed(() => {
   ].filter((group) => group.items.length)
 })
 
+const orderedEntries = computed(() =>
+  groups.value.flatMap((group) =>
+    group.items.map((item) => ({ group: group.key, labelKey: group.labelKey, item }))
+  )
+)
+const totalCount = computed(() => orderedEntries.value.length)
+const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)))
+
+const pageItems = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return orderedEntries.value.slice(start, start + pageSize)
+})
+
+const pageGroups = computed(() => {
+  const result = []
+  for (const entry of pageItems.value) {
+    let group = result[result.length - 1]
+    if (!group || group.key !== entry.group) {
+      group = { key: entry.group, labelKey: entry.labelKey, items: [] }
+      result.push(group)
+    }
+    group.items.push(entry.item)
+  }
+  return result
+})
+
+const pageNumbers = computed(() => {
+  const total = totalPages.value
+  const current = currentPage.value
+  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1)
+  const wanted = new Set([1, total, current, current - 1, current + 1, current - 2, current + 2])
+  const sorted = [...wanted].filter((page) => page >= 1 && page <= total).sort((a, b) => a - b)
+  const result = []
+  let previous = 0
+  for (const page of sorted) {
+    if (previous && page - previous > 1) result.push('…')
+    result.push(page)
+    previous = page
+  }
+  return result
+})
+
+function setPage(page, syncInput = true) {
+  const next = Math.min(Math.max(1, Math.floor(Number(page)) || 1), totalPages.value)
+  currentPage.value = next
+  if (syncInput) pageInput.value = String(next)
+}
+
+function jumpToPage() {
+  const value = Number(pageInput.value)
+  if (!Number.isFinite(value)) {
+    pageInput.value = String(currentPage.value)
+    return
+  }
+  setPage(value)
+}
+
+watch(
+  () => state.currentId,
+  (id) => {
+    const index = orderedEntries.value.findIndex((entry) => entry.item.id === id)
+    if (index >= 0) setPage(Math.floor(index / pageSize) + 1)
+  },
+  { immediate: true }
+)
+
+watch(totalCount, () => {
+  if (currentPage.value === 1) {
+    const index = orderedEntries.value.findIndex((entry) => entry.item.id === state.currentId)
+    if (index >= pageSize) setPage(Math.floor(index / pageSize) + 1)
+  }
+})
+
+watch(totalPages, (total) => {
+  if (currentPage.value > total) setPage(total)
+})
+
+watch(currentPage, (page) => {
+  pageInput.value = String(page)
+})
+
 function open(session) {
   if (session.hidden) {
     import('../api/client').then(({ api }) => api.unhideSession(session.id)).catch(() => {})
@@ -81,7 +166,7 @@ async function hide(session) {
       <Icon name="message" :size="18" />
       <span>{{ t('session.noSessions') }}</span>
     </div>
-    <div v-for="group in groups" :key="group.key" class="session-group">
+    <div v-for="group in pageGroups" :key="group.key" class="session-group">
       <div class="session-group-label">{{ t(group.labelKey) }}</div>
       <button
         v-for="session in group.items"
@@ -114,6 +199,36 @@ async function hide(session) {
         </span>
       </button>
     </div>
+
+    <div v-if="totalPages > 1" class="session-pager">
+      <div class="session-pages">
+        <button class="page-btn" type="button" :disabled="currentPage <= 1" :title="t('session.prevPage')" @click="setPage(currentPage - 1)">
+          <Icon name="chevron-left" :size="12" />
+        </button>
+        <template v-for="(page, index) in pageNumbers" :key="`${page}-${index}`">
+          <span v-if="page === '…'" class="page-ellipsis">…</span>
+          <button v-else class="page-btn" type="button" :class="{ active: page === currentPage }" @click="setPage(page)">
+            {{ page }}
+          </button>
+        </template>
+        <button class="page-btn" type="button" :disabled="currentPage >= totalPages" :title="t('session.nextPage')" @click="setPage(currentPage + 1)">
+          <Icon name="chevron-right" :size="12" />
+        </button>
+      </div>
+      <div class="session-jump">
+        <span>{{ t('session.pageOf', { page: currentPage, total: totalPages }) }}</span>
+        <input
+          v-model="pageInput"
+          class="session-jump-input"
+          type="number"
+          min="1"
+          :max="totalPages"
+          :placeholder="t('session.jumpPlaceholder')"
+          @keyup.enter="jumpToPage"
+        />
+        <button class="page-btn" type="button" @click="jumpToPage">{{ t('session.jump') }}</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -140,5 +255,15 @@ async function hide(session) {
 .plan-mini { color: var(--brand); }
 .session-actions { display: none; gap: 2px; margin-top: -2px; }
 .session-item:hover .session-actions { display: flex; }
+.session-pager { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 2px; }
+.session-pages { display: flex; align-items: center; justify-content: center; gap: 3px; flex-wrap: wrap; }
+.page-btn { min-width: 24px; height: 24px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all .15s var(--ease); }
+.page-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
+.page-btn.active { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); font-weight: 650; }
+.page-btn:disabled { opacity: .4; cursor: default; }
+.page-ellipsis { color: var(--faint); font-size: 11px; padding: 0 2px; }
+.session-jump { display: flex; align-items: center; justify-content: center; gap: 5px; color: var(--faint); font-size: 10.5px; }
+.session-jump-input { width: 46px; height: 24px; padding: 0 4px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 11px; text-align: center; }
+.session-jump-input::-webkit-outer-spin-button, .session-jump-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .session-empty { display: flex; align-items: center; gap: 8px; padding: 12px 10px; color: var(--faint); font-size: 12.5px; }
 </style>

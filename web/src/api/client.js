@@ -211,7 +211,8 @@ export const api = {
     form.append('file', file)
     return request('/api/plugins/upload', { method: 'POST', body: form })
   },
-  uninstallPlugin: (name) => request(`/api/plugins/${name}`, { method: 'DELETE' }),
+  uninstallPlugin: (name, purgeData = false) =>
+    request(`/api/plugins/${name}?purge_data=${purgeData ? 'true' : 'false'}`, { method: 'DELETE' }),
 
   authStatus: () => request('/api/auth/status'),
   authSetup: (body) => request('/api/auth/setup', { method: 'POST', body: JSON.stringify(body) }),
